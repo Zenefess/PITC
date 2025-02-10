@@ -18,7 +18,7 @@ Command-line options
  Mx : Set amount of memory to utilise during test.
  
       Memory will be evenly split amonsgt all utilised cores. Value is in MebiBytes; eg. M1024      
- Ox : Output results to file. !!! UNAVAILABLE !!!
+ Ox : Output results to file.
  
       Requires valid filename; eg. Oresults.txt      
  Sx : Set core synchronisation options. The first three options (P,R,S) can be stacked with the last (T); eg. Spt
