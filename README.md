@@ -15,7 +15,7 @@ Command-line options
  Lx : Set interface language.
  
       Recognises ISO 639 language codes; eg. Leng
- Mx : Set amount of memory to utilise during test.
+ Mx : Set amount of memory to utilise during test. !!! Currently not yet implemented !!!
  
       Memory will be evenly split amonsgt all utilised cores. Value is in MebiBytes; eg. M1024      
  Ox : Output results to file.
