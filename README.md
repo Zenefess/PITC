@@ -1,7 +1,10 @@
-# Pulsed Integrity Tests for CPUs v1.0a
+# Pulsed Integrity Tests for CPUs v1.0alpha
 
 
 This software is primarily for testing the idle stability of CPUs.
+
+
+The in-progress features will be made available with v1.0's release.
 
 
 Command-line options
