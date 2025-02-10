@@ -6,10 +6,10 @@ This software is primarily for testing the idle stability of CPUs.
 
 Command-line options
 --------------------
- B  : Run the benchmark. !!! INCOMPLETE !!!
+ B  : Run the benchmark. !!! Currently incomplete !!!
  
       Utilises the ALU, largest vector unit, and level 3 cache of all (virtual) cores in the system, and divides 1024MB of memory among them.      
- Ix : Set intruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av !!! CACHES NOT IMPLEMENTED !!!
+ Ix : Set intruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av !!! Caches not yet implemented !!!
  
       Caches; 1==Level 1, 2==Level 2, 3==Level 3  |  Processing; A==ALU, F==FPU, S==SSE4.1, V==AVX2, X==AVX512      
  Lx : Set interface language.
