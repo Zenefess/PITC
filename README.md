@@ -1,5 +1,4 @@
-# PITC
-Pulsed Integrity Tests for CPUs v1.0a   ---   Copyright (c) David William Bull
+# Pulsed Integrity Tests for CPUs v1.0a
 
 
 This software is primarily for testing the idle stability of CPUs.
