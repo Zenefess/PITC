@@ -1,6 +1,6 @@
 /************************************************************
  * File: instructions.h                 Created: 2025/02/10 *
- *                                    Last mod.: 2025/02/10 *
+ *                                    Last mod.: 2025/02/12 *
  *                                                          *
  * Desc:                                                    *
  *                                                          *
@@ -8,7 +8,7 @@
  ************************************************************/
 #pragma once
 
-al64 cwchar wstrInstructions_ENG[] =
+al64 cwchar wstrInstructions_EN_UK[] =
 L"\nPulsed Integrity Tests for CPUs v1.0a   ---   Copyright (c) David William Bull\n"
  "\nCommand-line options   ---   Example: pitc.exe I3x M256 Spt Tcd8.0t3600 Us"
  "\n--------------------"
@@ -19,9 +19,9 @@ L"\nPulsed Integrity Tests for CPUs v1.0a   ---   Copyright (c) David William Bu
  "\n Lx : Set interface language."
  "\n      Recognises ISO 639 language codes; eg. Leng"
  "\n Mx : Set amount of memory to utilise during test. !!! NOT YET IMPLEMENTED !!!"
- "\n      Memory will be evenly split amonsgt all utilised cores. Value is in MebiBytes; eg. M1024"
- "\n Ox : Output results to file."
- "\n      Requires valid filename; eg. Oresults.txt"
+ "\n      Memory will be evenly split amongst all utilised cores. Value is in MebiBytes; eg. M1024"
+ "\n Ox : Results file output options. A filename can be stacked with any of the remaining options; eg. O[results.txt]16"
+ "\n      []=Filename, A=Non-UTF ASCII, 8=UTF-8, 16=UTF-16"
  "\n Sx : Set core synchronisation options. The first three options (P,R,S) can be stacked with the last (T); eg. Spt"
  "\n      P==Parallel, R==Round-robin, S==Staggered, T==Time synchronised"
  "\n Tx : Set timing options. One of the first three options (C,F,T) can be stacked with any of the remaining (D,T,[,]); eg. Tfd1.0t12.5[100]2400"

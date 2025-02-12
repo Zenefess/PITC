@@ -1,10 +1,11 @@
 /************************************************************
  * File: CPU.cpp                        Created: 2025/01/21 *
- *                                    Last mod.: 2025/02/10 *
+ *                                    Last mod.: 2025/02/12 *
  *                                                          *
  * Desc: Pulsed integrity tests for CPUs.                   *
  *                                                          *
  * To do: *) Add pulse sweep functionality                  *
+ *        *) Add R-R and STA scheduling
  *        *) Add utilisation of caches                      *
  *        *) Add memory processing                          *
  *        *) Expand core handling to >64 cores              *
@@ -26,28 +27,18 @@ static void MaxPerSMT(void) {
 }
 
 // Evaluate integrity of results
-static cchptrc Evaluate(csi16 thread, cui8 index, ui8 size) {
-   bool success = true;
+static cui8 Evaluate(csi16 thread, cui8 index, ui8 size) {
+   ui8 success = 0;
 
-   do if(value[1][thread].raw[index + --size] != value[2][thread].raw[index + size]) success = false;
+   do if(value[1][thread].raw[index + --size] != value[2][thread].raw[index + size]) success = 1;
    while(size);
 
-   return success ? strPass[0] : strPass[1];
-}
-
-// Evaluate integrity of results
-static cwchptrc EvaluateW(csi16 thread, cui8 index, ui8 size) {
-   bool success = true;
-
-   do if(value[1][thread].raw[index + --size] != value[2][thread].raw[index + size]) success = false;
-   while(size);
-
-   return success ? wstrPass[0] : wstrPass[1];
+   return success;
 }
 
 // Generates output values
 static void GenerateValues(ptr dataPtr) {
-   const THREAD_CFG *const tcfg = (THREAD_CFG *)dataPtr;
+   const THREAD_CFGptrc tcfg = (THREAD_CFGptrc)dataPtr;
 
    cui64   coreNum    = (cui64(tcfg->threadByte) << 3) + tcfg->threadBit;
    cui8    threadBit  = 1u << tcfg->threadBit;
@@ -79,7 +70,7 @@ static void GenerateValues(ptr dataPtr) {
       JobFPU(value[2][coreNum].fpu);
       JobALU(value[2][coreNum].alu);
 
-      if(EvaluateW((si16)coreNum, 0, 16) == wstrPass[1]) {
+      if(Evaluate((si16)coreNum, 0, 16) == 1) {
          if(!coreNum) value[1][0].raw[0] = value[2][0].raw[0] = 0x0AAAAAAAAAAAAAAAA;
          break;
       }
@@ -96,16 +87,19 @@ static void GenerateValues(ptr dataPtr) {
 
 // Main body of program
 csi32 wmain(csi32 argc, cwchptrc argv[]) {
-   al64 declare1d64z(SYSTEM_LOGICAL_PROCESSOR_INFORMATION, sysLPI, MAX_THREADS * 2);
+   al64 declare1d64z(wchar, wstrOutput, 32768);
+        declare1d64z(SYSTEM_LOGICAL_PROCESSOR_INFORMATION, sysLPI, MAX_THREADS * 2);
         ptr   outFile;
         ui64  mask;
-        DWORD bytesProc = -1;
-        int   c = 1;
+        DWORD bytesProc   = -1;
+        int   c           = 1;
+        int   d;
+        si16  threadCount = 0;
         si16  i;
         ui8   j;
         ui8   procGroup   = 0;
-        si16  threadCount = 0;
         ui8   lang        = 0;
+        ui8   outUTF      = 0;
 
    GetLogicalProcessorInformation(sysLPI, &(bytesProc = sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION) * MAX_THREADS * 2));
    for(i = 0; (si32&)bytesProc > 0; ++i, bytesProc -= sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION)) { ///--- Modify to account for >64 virtual cores !!!
@@ -159,143 +153,158 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    if(argc > 1) {
       for(i = 1; i < argc; ++i) {
          switch(argv[i][0]) {
-         case 'b': // Run benchmark
-         case 'B':
+         case L'b': // Run benchmark
+         case L'B':
             cfg.allocMem  = 256;
             cfg.procSync  = 0x012;
             cfg.procUnits = (cfg.sys.cpuAVX512 ? 0x091 : cfg.sys.cpuAVX2 ? 0x089 : 0x085);
             break;
-         case 'i': // Set instruction usage options
-         case 'I':
+         case L'i': // Set instruction usage options
+         case L'I':
             cfg.procUnits = 0;
-            for(j = 1; argv[i][j] && argv[i][j] != 32; ++j) {
+            for(j = 1; argv[i][j] && argv[i][j] != L' '; ++j) {
                switch(argv[i][j]) {
-               case '1': // Process dataset for L1 cache
+               case L'1': // Process dataset for L1 cache
                   cfg.procUnits |= 0x020;
                   break;
-               case '2': // Process dataset for L2 cache
+               case L'2': // Process dataset for L2 cache
                   cfg.procUnits |= 0x040;
                   break;
-               case '3': // Process dataset for L3 cache
+               case L'3': // Process dataset for L3 cache
                   cfg.procUnits |= 0x080;
                   break;
-               case 'a': // Execute ALU codepath
-               case 'A':
+               case L'a': // Execute ALU codepath
+               case L'A':
                   cfg.procUnits |= 0x01;
                   break;
-               case 'f': // Execute FPU codepath
-               case 'F':
+               case L'f': // Execute FPU codepath
+               case L'F':
                   cfg.procUnits |= 0x02;
                   break;
-               case 's': // Execute SSE codepath
-               case 'S':
+               case L's': // Execute SSE codepath
+               case L'S':
                   cfg.procUnits |= 0x04;
                   break;
-               case 'v': // Execute AVX2 codepath
-               case 'V':
+               case L'v': // Execute AVX2 codepath
+               case L'V':
                   cfg.procUnits |= 0x08;
                   break;
-               case 'x': // Execute AVX512 codepath
-               case 'X':
+               case L'x': // Execute AVX512 codepath
+               case L'X':
                   cfg.procUnits |= 0x010;
                   break;
                }
             }
             break;
-         case 'l': // Set language
-         case 'L':
-            while(argv[i][c] && argv[i][c] != ' ' && c < 1024) ++c;
+         case L'l': // Set language
+         case L'L':
+            for(c = 1; argv[i][c] && argv[i][c] != L' ' && c < 1024; ++c);
             lstrcpynW(wstrLang, &argv[i][1], c);
             if(lstrcmpiW(wstrLang, L"0"))       lang = 0;
             if(lstrcmpiW(wstrLang, L"AUS"))     lang = 0;
             if(lstrcmpiW(wstrLang, L"ENG"))     lang = 0;
             if(lstrcmpiW(wstrLang, L"English")) lang = 0;
             break;
-         case 'm': // Set amount of memory (in MB) to utilise during test
-         case 'M':
+         case L'm': // Set amount of memory (in MB) to utilise during test
+         case L'M':
             cfg.allocMem = wcstol(&argv[i][1], 0, 10);
             break;
-         case 'o': // Output results to file   ---   !!! TO DO !!!
-         case 'O':
-            while(argv[i][c] && argv[i][c] != ' ' && c < 1024) ++c;
-            if(!lstrcpynW(wstrOut, &argv[i][1], c)) {
-               wprintf(L"\n\nUnable to create file \"%s\".\n\n", wstrOut);
-               return -32;
-            };
+         case L'o': // Output results to file
+         case L'O':
+            for(c = 1; argv[i][c] && argv[i][c] != ' '; ++c) {
+               switch(argv[i][c]) {
+               case L'1':
+                  if(argv[i][++c] == L'6') outUTF = 2;
+                  break;
+               case L'8':
+                  outUTF = 1;
+                  break;
+               case L'a':
+               case L'A':
+                  outUTF = 0;
+                  break;
+               case L'[':
+                  for(d = ++c; argv[i][c] && argv[i][c] != L']' && c < 1024; ++c);
+                  if(!lstrcpynW(wstrOut, &argv[i][d], c++ - 1)) {
+                     wprintf(L"\n\nUnable to create file \"%s\".\n\n", wstrOut);
+                     return -32;
+                  }
+               }
+            }
             break;
-         case 's': // Set core synchronisation options
-         case 'S':
+         case L's': // Set core synchronisation options
+         case L'S':
             cfg.procSync = 0;
-            for(j = 1; argv[i][j] && argv[i][j] != 32; ++j) {
+            for(j = 1; argv[i][j] && argv[i][j] != L' '; ++j) {
                switch(argv[i][j]) {
-               case 'p': // Parallel thread execution
-               case 'P':
+               case L'p': // Parallel thread execution
+               case L'P':
                   cfg.procSync |= 0x02;
                   break;
-               case 'r': // Round-robin thread execution
-               case 'R':
+               case L'r': // Round-robin thread execution
+               case L'R':
                   cfg.procSync |= 0x01;
                   break;
-               case 's': // Staggered thread execution
-               case 'S':
+               case L's': // Staggered thread execution
+               case L'S':
                   cfg.procSync |= 0x04;
                   break;
-               case 't': // Time-synchronised execution
-               case 'T':
+               case L't': // Time-synchronised execution
+               case L'T':
                   cfg.procSync |= 0x08;
                   break;
                }
             }
             break;
-         case 't': // Set timing options
-         case 'T':
-            for(j = 1; argv[i][j] && argv[i][j] != 32; ++j) {
+         case L't': // Set timing options
+         case L'T':
+            for(j = 1; argv[i][j] && argv[i][j] != L' '; ++j) {
                wchptr stopChar;
                switch(argv[i][j]) {
-               case '[': // Fixed pulse on-time
+               case L'[': // Fixed pulse on-time
                   cfg.onTime = ui32(wcstol(&argv[i][j + 1], &stopChar, 10));
                   j += ui8(stopChar - &argv[i][j] - 1);
                   break;
-               case ']': // Fixed pulse off-time
+               case L']': // Fixed pulse off-time
                   cfg.offTime = ui32(wcstol(&argv[i][j + 1], &stopChar, 10));
                   j += ui8(stopChar - &argv[i][j] - 1);
                   break;
-               case 'c': // Constant thread execution
-               case 'C':
+               case L'c': // Constant thread execution
+               case L'C':
                   cfg.procSync |= 0x010;
                   break;
-               case 'd': // Set start-up delay
-               case 'D':
+               case L'd': // Set start-up delay
+               case L'D':
                   cfg.delayTime = ui32(wcstod(&argv[i][j + 1], &stopChar) * 1000.0);
                   j += ui8(stopChar - &argv[i][j] - 1);
                   break;
-               case 'f': // Fixed pulse-width thread execution
-               case 'F':
+               case L'f': // Fixed pulse-width thread execution
+               case L'F':
                   cfg.procSync |= 0x020;
                   break;
-               case 's': // Sweeping pulse-width thread execution
-               case 'S':
+               case L's': // Sweeping pulse-width thread execution
+               case L'S':
                   cfg.procSync |= 0x040;
                   break;
-               case 't': // Test duration
-               case 'T':
+               case L't': // Test duration
+               case L'T':
                   cfg.tics = si64((fl64)timer.siFrequency * wcstod(&argv[i][j + 1], &stopChar));
                   j += ui8(stopChar - &argv[i][j] - 1);
                   break;
                }
             }
             break;
-         case 'u': // Set core usage options
-         case 'U':
-            for(j = 1; argv[i][j] && argv[i][j] != 32; ++j) {
+         case L'u': // Set core usage options
+         case L'U':
+            for(j = 1; argv[i][j] && argv[i][j] != L' '; ++j) {
                switch(argv[i][j]) {
-               case 'c': // Binary sequence map of physical cores to utilise (eg. x..x.xxx)
-               case 'C':
-                  for(++j; argv[i][j] && argv[i][j] != 32; ++j) {
+               case L'c': // Binary sequence map of physical cores to utilise (eg. x..x.xxx)
+               case L'C':
+                  for(++j; argv[i][j] && argv[i][j] != L' '; ++j) {
                      switch(argv[i][j]) {
-                     case '.': // Physical core not to be utilised
-                     case ',':
-                     case '_':
+                     case L'.': // Physical core not to be utilised
+                     case L',':
+                     case L'_':
                         cfg.coreMap[(j - 1) >> 3] &= ~(0x03ull << (j << 1)); ///--- Modify to account for non-SMT CPUs !!!
                         break;
                      default:  // Physical core to be utilised
@@ -304,17 +313,17 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                      }
                   }
                   break;
-               case 's': // Generate threads for every virtual core (ie. SMT)
-               case 'S':
+               case L's': // Generate threads for every virtual core (ie. SMT)
+               case L'S':
                   cfg.SMT = true;
                   break;
-               case 't': // Binary sequence map of virtual cores to utilise (eg. xx..x.x...xx.xxx)
-               case 'T':
-                  for(++j; argv[i][j] && argv[i][j] != 32; ++j) {
+               case L't': // Binary sequence map of virtual cores to utilise (eg. xx..x.x...xx.xxx)
+               case L'T':
+                  for(++j; argv[i][j] && argv[i][j] != L' '; ++j) {
                      switch(argv[i][j]) {
-                     case '.': // Virtual core not to be utilised
-                     case ',':
-                     case '_':
+                     case L'.': // Virtual core not to be utilised
+                     case L',':
+                     case L'_':
                         cfg.coreMap[(j - 1) >> 3] &= ~(0x01ull << j);
                         break;
                      default:  // Virtual core to be utilised
@@ -327,7 +336,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             }
             if(!cfg.SMT) OnePerSMT(); else MaxPerSMT();
             break;
-         case '~': // Write new "cpu.values" file
+         case L'~': // Write new "cpu.values" file
             union { ui64 _64; ui32 _32[2]; } randNum;
 
             for(i = 0; i < MAX_THREADS; ++i) {
@@ -373,39 +382,39 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             CloseHandle(outFile);
 
             return 1;
-         case '-': // Configuration presets
+         case L'-': // Configuration presets
             cfg.allocMem  = 1024;
             cfg.procUnits = (cfg.sys.cpuAVX512 ? 0x091 : cfg.sys.cpuAVX2 ? 0x089 : 0x085);
             switch(argv[i][1]) {
-            case '1': // Constant stress; one thread per physical core
+            case L'1': // Constant stress; one thread per physical core
                cfg.procSync = 0x012;
                OnePerSMT();
                break;
-            case '2': // Constant stress on all virtual cores
+            case L'2': // Constant stress on all virtual cores
                cfg.procSync = 0x012;
                MaxPerSMT();
                break;
-            case '3': // Fixed-width round-robin pulsed stress; one thread per physical core
+            case L'3': // Fixed-width round-robin pulsed stress; one thread per physical core
                cfg.procSync = 0x021;
                OnePerSMT();
                break;
-            case '4': // Synchronised fixed-width pulsed stress; one thread per physical core
+            case L'4': // Synchronised fixed-width pulsed stress; one thread per physical core
                cfg.procSync = 0x02A;
                OnePerSMT();
                break;
-            case '5': // Synchronised fixed-width pulsed stress on all virtual cores
+            case L'5': // Synchronised fixed-width pulsed stress on all virtual cores
                cfg.procSync = 0x02A;
                MaxPerSMT();
                break;
-            case '6': // Synchronised sweeping-width pulsed stress; one thread per physical core
+            case L'6': // Synchronised sweeping-width pulsed stress; one thread per physical core
                cfg.procSync = 0x04A;
                OnePerSMT();
                break;
-            case '7': // Synchronised staggered fixed-width pulsed stress; one thread per physical core
+            case L'7': // Synchronised staggered fixed-width pulsed stress; one thread per physical core
                cfg.procSync = 0x02C;
                OnePerSMT();
                break;
-            case '8': // Synchronised staggered fixed-width pulsed stress on all virtual cores
+            case L'8': // Synchronised staggered fixed-width pulsed stress on all virtual cores
                cfg.procSync = 0x02C;
                MaxPerSMT();
                break;
@@ -441,20 +450,37 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
 
    timer.Update();
 
-   // Display configuration properties
-   wprintf(L"Start-up delay: %dms\t\tMaximum duration: %5.1fs\tPulse on-time: %4dms\t\tUnits:", cfg.delayTime, fl64(cfg.tics) / fl64(timer.siFrequency), cfg.onTime);
+   if(wstrOut[0]) { // Prepare results output file
+      outFile = CreateFileW(wstrOut, GENERIC_WRITE, FILE_SHARE_WRITE, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+      if(outFile == INVALID_HANDLE_VALUE) {
+         wprintf(L"\n\nCannot create \"%s\" file.\n\n", wstrOut);
+         return -64;
+      }
+      switch(outUTF) {
+      case 1: // UTF-8
+         WriteFile(outFile, outUTF8header, 3, &bytesProc, 0);
+         break;
+      case 2: // UTF-16
+         WriteFile(outFile, &outUTF16header, 2, &bytesProc, 0);
+      }
+   }
+
+   // Output configuration properties
+   c = swprintf(wstrOutput, L"Start-up delay: %dms\t\tMaximum duration: %5.1fs\tPulse on-time: %4dms\t\tUnits:", cfg.delayTime, (fl64(cfg.tics) / fl64(timer.siFrequency)), cfg.onTime);
    for(j = 0; j < 8; ++j)
-      if(cfg.procUnits & (0x01ull << j)) wprintf(L" %s", wstrUnitsCPU[j]);
-   wprintf(L"\nThread count: %d\t\tMemory block size: %3lldMB\tPulse off-time: %3dms\t\tSync: ", threadCount, memBlockSize >> 10, cfg.offTime);
+      if(cfg.procUnits & (0x01ull << j)) c += swprintf(&wstrOutput[c], L" %s", wstrUnitsCPU[j]);
+   c += swprintf(&wstrOutput[c], L"\nThread count: %-8d\t\tMemory block size: %3lldMB\tPulse off-time: %3dms\t\tSync: ", threadCount, memBlockSize >> 10, cfg.offTime);
    for(j = 0; j < 8; ++j)
-      if(cfg.procSync & (0x01ull << j)) wprintf(L" %s", wstrSyncCPU[j]);
-   wprintf(L"\n\nThread bitmap: ");
+      if(cfg.procSync & (0x01ull << j)) c += swprintf(&wstrOutput[c], L" %s", wstrSyncCPU[j]);
+   c += swprintf(&wstrOutput[c], L"\n\nThread bitmap: ");
    for(j = 0; j < cfg.sys.groupCount; ++j) {
       for(mask = 1, i = 0; mask && i < threadCount; mask <<= 1, ++i)
-         printf("%c", (mask & cfg.coreMap[j] ? '!' : '.'));
-      printf("\n               ");
+         c += swprintf(&wstrOutput[c], L"%c", (mask & cfg.coreMap[j] ? '!' : '.'));
+      c += swprintf(&wstrOutput[c], L"\n               ");
    }
-   printf("\n");
+   d = c -= 15;
+   wprintf(wstrOutput);
+   wprintf(L"\n");
 
    j = 0;
    switch(cfg.procSync >> 4) {
@@ -492,95 +518,64 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    }
    while(ThreadsRunning) Sleep(100);
 
-   printf("\n");
+   wprintf(L"\n");
 
    // Write outputs to console (and/or file?)
-   declare1d16(char, strTemp, 32768);
-   for(c = 0, j = 1; j < 255 && j < argc - 1; ++j) { // Format command-line options
-      if(argv[j][0] == 'o' || argv[j][0] == 'O') continue;
-      c += int(wcstombs(&strTemp[c + 8192], argv[j], 8192));
-      c += sprintf(&strTemp[c + 8192], "  ");
-   }
-   c += sprintf(&strTemp[c + 8190], "\n");
-
-   for(c = (wstrOut[0] ? sprintf(strTemp, &strTemp[8192]) : 0), j = 0; j < 5; ++j) {
+   for(j = 0; j < 5; ++j) {
       mask = 0x01ull << j;
       if(~cfg.procUnits & mask) continue;
 
-      wprintf(L"\n Thread | ProcUnit | Correct values   ");
-      switch(cfg.procUnits & mask) { default: i = 1; break; case 4: i = 5; break; case 8: i = 13; break; case 16: i = 29; } while(--i) printf("    ");
-      wprintf(L"| Result\n--------+----------+--");
-      switch(cfg.procUnits & mask) { default: i = 5; break; case 4: i = 9; break; case 8: i = 17; break; case 16: i = 33; } while(--i) printf("----");
-      printf("+--");
-      switch(cfg.procUnits & mask) { default: i = 5; break; case 4: i = 9; break; case 8: i = 17; break; case 16: i = 33; } while(--i) printf("----");
-      printf(".");
+      c += swprintf(&wstrOutput[c], L"\n Thread | ProcUnit | Correct values   ");
+      switch(cfg.procUnits & mask) { default: i = 1; break; case 4: i = 5; break; case 8: i = 13; break; case 16: i = 29; } while(--i) c += swprintf(&wstrOutput[c], L"    ");
+      c += swprintf(&wstrOutput[c], L"| Result\n--------+----------+--");
+      switch(cfg.procUnits & mask) { default: i = 5; break; case 4: i = 9; break; case 8: i = 17; break; case 16: i = 33; } while(--i) c += swprintf(&wstrOutput[c], L"----");
+      c += swprintf(&wstrOutput[c], L"+--");
+      switch(cfg.procUnits & mask) { default: i = 5; break; case 4: i = 9; break; case 8: i = 17; break; case 16: i = 33; } while(--i) c += swprintf(&wstrOutput[c], L"----");
+      c += swprintf(&wstrOutput[c], L".");
       for(i = 0; i < threadCount; ++i) {
          switch(threadData[i].procUnits & mask) {
          default:
-            wprintf(L"\n  #%3.1d  |  %s 64  | %16.16llX | %16.16llX | %s", i, wstrUnitsCPU[j], value[2][i].raw[15], value[1][i].raw[15], EvaluateW(i, 15 - j, 1));
+            c += swprintf(&wstrOutput[c], L"\n  #%3.1d  |  %s 64  | %16.16llX | %16.16llX | %s", i, wstrUnitsCPU[j], value[2][i].raw[15], value[1][i].raw[15], wstrPass[Evaluate(i, 15 - j, 1)]);
             break;
          case 4:
-            if(threadData[i].procUnits & 0x04) wprintf(L"\n  #%3.1d  | SSE  128 | %16.16llX%16.16llX | %16.16llX%16.16llX | %s",
-               i, value[2][i].raw[12], value[2][i].raw[13], value[1][i].raw[12], value[1][i].raw[13], EvaluateW(i, 12, 2));
+            if(threadData[i].procUnits & 0x04) c += swprintf(&wstrOutput[c], L"\n  #%3.1d  | SSE  128 | %16.16llX%16.16llX | %16.16llX%16.16llX | %s",
+               i, value[2][i].raw[12], value[2][i].raw[13], value[1][i].raw[12], value[1][i].raw[13], wstrPass[Evaluate(i, 12, 2)]);
             break;
          case 8:
-            if(threadData[i].procUnits & 0x08) wprintf(L"\n  #%3.1d  | AVX  256 | %16.16llX%16.16llX%16.16llX%16.16llX | %16.16llX%16.16llX%16.16llX%16.16llX | %s",
-               i, value[2][i].raw[8], value[2][i].raw[9], value[2][i].raw[10], value[2][i].raw[11], value[1][i].raw[8], value[1][i].raw[9], value[1][i].raw[10], value[1][i].raw[11], EvaluateW(i, 8, 4));
+            if(threadData[i].procUnits & 0x08) c += swprintf(&wstrOutput[c], L"\n  #%3.1d  | AVX  256 | %16.16llX%16.16llX%16.16llX%16.16llX | %16.16llX%16.16llX%16.16llX%16.16llX | %s",
+               i, value[2][i].raw[8], value[2][i].raw[9], value[2][i].raw[10], value[2][i].raw[11], value[1][i].raw[8], value[1][i].raw[9], value[1][i].raw[10], value[1][i].raw[11], wstrPass[Evaluate(i, 8, 4)]);
             break;
          case 10:
-            if(threadData[i].procUnits & 0x10) wprintf(L"\n  #%3.1d  | AVX  512 | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX | %s",
+            if(threadData[i].procUnits & 0x10) c += swprintf(&wstrOutput[c], L"\n  #%3.1d  | AVX  512 | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX | %s",
                i, value[2][i].raw[0], value[2][i].raw[1], value[2][i].raw[2], value[2][i].raw[3], value[2][i].raw[4], value[2][i].raw[5], value[2][i].raw[6], value[2][i].raw[7],
-               value[1][i].raw[0], value[1][i].raw[1], value[1][i].raw[2], value[1][i].raw[3], value[1][i].raw[4], value[1][i].raw[5], value[1][i].raw[6], value[1][i].raw[7], EvaluateW(i, 0, 8));
+               value[1][i].raw[0], value[1][i].raw[1], value[1][i].raw[2], value[1][i].raw[3], value[1][i].raw[4], value[1][i].raw[5], value[1][i].raw[6], value[1][i].raw[7], wstrPass[Evaluate(i, 0, 8)]);
          }
       }
-      printf("\n");
-
-      if(wstrOut[0]) { // Format results for file output
-         c += sprintf(&strTemp[c], "\n Thread | ProcUnit | Correct values   ");
-         switch(cfg.procUnits & mask) { default: i = 1; break; case 4: i = 5; break; case 8: i = 13; break; case 16: i = 29; } while(--i) c += sprintf(&strTemp[c], "    ");
-         c += sprintf(&strTemp[c], "| Result\n--------+----------+--");
-         switch(cfg.procUnits & mask) { default: i = 5; break; case 4: i = 9; break; case 8: i = 17; break; case 16: i = 33; } while(--i) c += sprintf(&strTemp[c], "----");
-         c += sprintf(&strTemp[c], "+--");
-         switch(cfg.procUnits & mask) { default: i = 5; break; case 4: i = 9; break; case 8: i = 17; break; case 16: i = 33; } while(--i) c += sprintf(&strTemp[c], "----");
-         c += sprintf(&strTemp[c], ".");
-         for(i = 0; i < threadCount; ++i) {
-            switch(threadData[i].procUnits & mask) {
-            case 1:
-               c += sprintf(&strTemp[c], "\n  #%3.1d  |  ALU 64  | %16.16llX | %16.16llX | %s", i, value[2][i].raw[15], value[1][i].raw[15], Evaluate(i, 15 - j, 1));
-               break;
-            case 4:
-               if(threadData[i].procUnits & 0x04) c += sprintf(&strTemp[c], "\n  #%3.1d  | SSE  128 | %16.16llX%16.16llX | %16.16llX%16.16llX | %s",
-                  i, value[2][i].raw[12], value[2][i].raw[13], value[1][i].raw[12], value[1][i].raw[13], Evaluate(i, 12, 2));
-               break;
-            case 8:
-               if(threadData[i].procUnits & 0x08) c += sprintf(&strTemp[c], "\n  #%3.1d  | AVX  256 | %16.16llX%16.16llX%16.16llX%16.16llX | %16.16llX%16.16llX%16.16llX%16.16llX | %s",
-                  i, value[2][i].raw[8], value[2][i].raw[9], value[2][i].raw[10], value[2][i].raw[11], value[1][i].raw[8], value[1][i].raw[9], value[1][i].raw[10], value[1][i].raw[11], Evaluate(i, 8, 4));
-               break;
-            case 10:
-               if(threadData[i].procUnits & 0x10) c += sprintf(&strTemp[c], "\n  #%3.1d  | AVX  512 | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX | %s",
-                  i, value[2][i].raw[0], value[2][i].raw[1], value[2][i].raw[2], value[2][i].raw[3], value[2][i].raw[4], value[2][i].raw[5], value[2][i].raw[6], value[2][i].raw[7],
-                  value[1][i].raw[0], value[1][i].raw[1], value[1][i].raw[2], value[1][i].raw[3], value[1][i].raw[4], value[1][i].raw[5], value[1][i].raw[6], value[1][i].raw[7], Evaluate(i, 0, 8));
-            }
-         }
-         c += sprintf(&strTemp[c], "\n");
-      }
+      c+= swprintf(&wstrOutput[c], L"\n");
    }
-   printf("\n");
+   c += swprintf(&wstrOutput[c], L"\n");
+   wprintf(&wstrOutput[d]);
 
    if(wstrOut[0]) {
-      outFile = CreateFileW(wstrOut, GENERIC_WRITE, FILE_SHARE_WRITE, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
-      if(outFile == INVALID_HANDLE_VALUE) {
-         wprintf(L"\n\nCannot create \"%s\" file.\n\n", wstrOut);
-         return -64;
+      if(outUTF == 2) { // UTF-16 encoding
+         if(!WriteFile(outFile, wstrOutput, c, &bytesProc, 0)) {
+            wprintf(L"\n\nFailed to write results to \"%s\" file.\n\n", wstrOut);
+            CloseHandle(outFile);
+            return -65;
+         }
+      } else { // 8-bit encodings
+         setlocale(LC_ALL, "");
+         
+         wcstombs((chptr)&wstrOutput[c], wstrOutput, c);
+         if(!WriteFile(outFile, (chptr)&wstrOutput[c], c, &bytesProc, 0)) {
+            wprintf(L"\n\nFailed to write results to \"%s\" file.\n\n", wstrOut);
+            CloseHandle(outFile);
+            return -65;
+         }
       }
-      if(!WriteFile(outFile, strTemp, c, &bytesProc, 0)) {
-         wprintf(L"\n\nFailed to write results to \"%s\" file.\n\n", wstrOut);
-         return -65;
-      } else
-         wprintf(L"\n\nSuccessfully wrote results to \"%s\" file.\n\n", wstrOut);
+      wprintf(L"\n\nSuccessfully wrote results to \"%s\" file.\n\n", wstrOut);
       CloseHandle(outFile);
    }
-   mfree1(strTemp);
 
    return 0;
 }
