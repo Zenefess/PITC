@@ -11,7 +11,7 @@ Command-line options
       Utilises the ALU and largest vector unit of all (virtual) cores in the system, level 3 cache, and 8MB memory per thread.
  Ix : Set intruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av !!! Cache use not yet implemented !!!
  
-      Caches; 1==Level 1, 2==Level 2, 3==Level 3  |  Processing; A==ALU, F==FPU, S==SSE4.1, V==AVX2, X==AVX512
+      Caches: 1==Level 1, 2==Level 2, 3==Level 3  |  Processing: A==ALU, F==FPU, S==SSE4.1, V==AVX2, X==AVX512
  Lx : Set interface language.
  
       Recognises ISO 639 language codes; eg. Leng
@@ -50,4 +50,4 @@ Command-line options
       8==Synchronised staggered fixed-width pulsed stress on all virtual cores
 
 
-Example: "pitc.exe I3x M256 Spt Tcd8.0t3600 Us"
+Example: "pitc.exe I3x Mc8 Spt Tcd8.0t3600 Us"
