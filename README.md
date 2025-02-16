@@ -29,7 +29,7 @@ Command-line options
       C==Constant, F==Fixed-length pulses, S==Sweeping-length pulses
       Global options: Dx==Set start-up delay, Tx==Set test duration                             |  Replace 'x' with a decimal value; eg. d10.0
       Fixed-length pulse options (in milliseconds): [x==Active duration, ]x==Inactive duration  |  Replace 'x' with a whole number; eg. [250
- Ux : Set core usage options. One of the first two options (C,T) can be stacked with the last (S); eg. Uc!.!!...!s
+ Ux : Set core usage options. One of the first two options (C,T) can be stacked with the one of the remaining (S, O); eg. Uc!.!!...!s
  
       C==Binary sequence map of physical cores to utilise, T==Binary sequence map of virtual cores to utilise
          Format for core utilisation map is: ','/'.'/'_'==Core disabled, Any other character==Core enabled
