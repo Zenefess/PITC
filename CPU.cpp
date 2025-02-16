@@ -1,13 +1,11 @@
 /************************************************************
  * File: CPU.cpp                        Created: 2025/01/21 *
- *                                    Last mod.: 2025/02/12 *
+ *                                    Last mod.: 2025/02/16 *
  *                                                          *
  * Desc: Pulsed integrity tests for CPUs.                   *
  *                                                          *
- * To do: *) Add pulse sweep functionality                  *
- *        *) Add R-R and STA scheduling
+ * To do: *) Add R-R and STA scheduling                     *
  *        *) Add utilisation of caches                      *
- *        *) Add memory processing                          *
  *        *) Expand core handling to >64 cores              *
  *                                                          *
  * MIT license             Copyright (c) David William Bull *
@@ -17,23 +15,40 @@
 #pragma warning(disable:4996)
 
 // Force 1 thread per SMT core
-static void OnePerSMT(void) {
-   for(ui8 i = 0; i < cfg.sys.groupCount; ++i) cfg.coreMap[i] &= ~((cfg.coreMap[i] & cfg.sys.coreMap[1][i]) << 1);
+static void SetSMTLoading(void) {
+   ui8 i = 0, j, k;
+
+   if(!cfg.SMTLoad) return;
+
+   switch(cfg.SMTLoad) {
+   case 3: // Use all virtual cores
+      for(ui8 i = 0; i < cfg.sys.groupCount; ++i)
+         for(j = 0; j < cfg.sys.SMT; ++j)
+            cfg.coreMap[i] |= (cfg.coreMap[i] << j) & cfg.sys.coreMap[1][i];
+      break;
+   default: // Use one virtual core
+      ui64  mask;
+      cui64 shift = cfg.SMTLoad == 2 ? ui64(cfg.sys.SMT - 1) : 0;
+      cui64 mask0 = mask = 0x01ull << shift;
+      while(i < cfg.sys.groupCount) {
+         for(j = 1; j < cfg.sys.coreCount[1]; ++j) mask = (mask << cfg.sys.SMT) + mask0;
+         for(k = 0; k < 64 && cfg.sys.coreMap[1][i] >> k == 0; ++k);
+         cfg.coreMap[i++] &= (mask <<= k);
+      }
+   }
 }
 
-// Force maximum threads per SMT core
-static void MaxPerSMT(void) {
-   for(ui8 i = 0; i < cfg.sys.groupCount; ++i) cfg.coreMap[i] |= (cfg.coreMap[i] & cfg.sys.coreMap[1][i]) << 1;
-}
+// Evaluate integrity of results.
+// unit==Processing unit (0=AVX512, 1=AVX2, 2=SSE4.1, 3=FPU, 4=ALU, -1=All)
+static cui8 Evaluate(csi16 thread, csi8 unit) {
+   ui8  index = unit == -1 ? 0  : 16 - (1 << (4 - unit));
+   cui8 end   = unit == -1 ? 16 : (1 << max(0, 3 - unit)) + index;
 
-// Evaluate integrity of results
-static cui8 Evaluate(csi16 thread, cui8 index, ui8 size) {
-   ui8 success = 0;
+   while(index < end)
+      if(value[3][thread].raw[index] != value[2][thread].raw[index++])
+         break;
 
-   do if(value[1][thread].raw[index + --size] != value[2][thread].raw[index + size]) success = 1;
-   while(size);
-
-   return success;
+   return index >= end ? 0 : 1;
 }
 
 // Generates output values
@@ -45,20 +60,19 @@ static void GenerateValues(ptr dataPtr) {
    RESULTS resultCopy = value[2][coreNum];
    ui16    i;
 
-   value[2][coreNum] = value[1][coreNum];
+   value[2][coreNum] = value[3][coreNum];
 
-   JobSSE((fl64x2 &)value[1][coreNum]._fl64[0]);
-   JobSSE((fl64x2 &)value[1][coreNum]._fl64[2]);
-   JobSSE((fl64x2 &)value[1][coreNum]._fl64[4]);
-   JobSSE((fl64x2 &)value[1][coreNum]._fl64[6]);
-   JobSSE((fl64x2 &)value[1][coreNum]._fl64[8]);
-   JobSSE((fl64x2 &)value[1][coreNum]._fl64[10]);
-   JobSSE(value[1][coreNum].sse);
-   JobFPU(value[1][coreNum].fpu);
-   JobALU(value[1][coreNum].alu);
+   JobSSE((fl64x2 &)value[3][coreNum]._fl64[0]);
+   JobSSE((fl64x2 &)value[3][coreNum]._fl64[2]);
+   JobSSE((fl64x2 &)value[3][coreNum]._fl64[4]);
+   JobSSE((fl64x2 &)value[3][coreNum]._fl64[6]);
+   JobSSE((fl64x2 &)value[3][coreNum]._fl64[8]);
+   JobSSE((fl64x2 &)value[3][coreNum]._fl64[10]);
+   JobSSE(value[3][coreNum].sse);
+   JobFPU(value[3][coreNum].fpu);
+   JobALU(value[3][coreNum].alu);
 
    // Test computatational integrity
-
    for(i = 0, resultCopy = value[2][coreNum]; i < 65535; ++i) {
       JobSSE((fl64x2&)value[2][coreNum]._fl64[0]);
       JobSSE((fl64x2&)value[2][coreNum]._fl64[2]);
@@ -70,8 +84,8 @@ static void GenerateValues(ptr dataPtr) {
       JobFPU(value[2][coreNum].fpu);
       JobALU(value[2][coreNum].alu);
 
-      if(Evaluate((si16)coreNum, 0, 16) == 1) {
-         if(!coreNum) value[1][0].raw[0] = value[2][0].raw[0] = 0x0AAAAAAAAAAAAAAAA;
+      if(Evaluate((si16)coreNum, -1) == 1) {
+         if(!coreNum) value[3][0].raw[0] = value[2][0].raw[0] = 0x0AAAAAAAAAAAAAAAA;
          break;
       }
 
@@ -91,15 +105,14 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
         declare1d64z(SYSTEM_LOGICAL_PROCESSOR_INFORMATION, sysLPI, MAX_THREADS * 2);
         ptr   outFile;
         ui64  mask;
-        DWORD bytesProc   = -1;
-        int   c           = 1;
-        int   d;
-        si16  threadCount = 0;
+        DWORD bytesProc = -1;
+        int   c = 1, d;
+        si16  threadCount[3] = { 0, 0, 0 }; // 0=Non-SMT, 1=SMT, 2=Total
         si16  i;
-        ui8   j;
-        ui8   procGroup   = 0;
-        ui8   lang        = 0;
-        ui8   outUTF      = 0;
+        ui8   j, k;
+        ui8   procGroup = 0;
+        ui8   lang      = 0;
+        ui8   outUTF    = 0;
 
    GetLogicalProcessorInformation(sysLPI, &(bytesProc = sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION) * MAX_THREADS * 2));
    for(i = 0; (si32&)bytesProc > 0; ++i, bytesProc -= sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION)) { ///--- Modify to account for >64 virtual cores !!!
@@ -153,10 +166,11 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    if(argc > 1) {
       for(i = 1; i < argc; ++i) {
          switch(argv[i][0]) {
-         case L'b': // Run benchmark
+         case L'b': // Run benchmark: Constant computation, ALU + largest vector unit, all virtual cores utilised, L3 cache, 8MB memory per virtual core
          case L'B':
-            cfg.allocMem  = 256;
-            cfg.procSync  = 0x012;
+            cfg.memConfig   = 1;
+            cfg.allocMem[0] = si64(cfg.sys.coreCount[1] * si16(cfg.sys.SMT) + cfg.sys.coreCount[0]) * 8192;
+            cfg.procSync    = 0x012;
             cfg.procUnits = (cfg.sys.cpuAVX512 ? 0x091 : cfg.sys.cpuAVX2 ? 0x089 : 0x085);
             break;
          case L'i': // Set instruction usage options
@@ -207,7 +221,35 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             break;
          case L'm': // Set amount of memory (in MB) to utilise during test
          case L'M':
-            cfg.allocMem = wcstol(&argv[i][1], 0, 10);
+            cfg.memConfig = 0;
+            for(j = 1; argv[i][j] && argv[i][j] != L' '; ++j) {
+               wchptr stopChar;
+               switch(argv[i][j]) {
+               case L'c': // For each virtual core
+               case L'C':
+                  cfg.memConfig   = 1;
+                  cfg.allocMem[0] = si64(wcstol(&argv[i][j + 1], &stopChar, 10)) << 20;
+                  j += ui8(stopChar - &argv[i][j] - 1);
+                  break;
+               case L'n': // For each non-SMT core
+               case L'N':
+                  cfg.memConfig   = 2;
+                  cfg.allocMem[0] = si64(wcstol(&argv[i][j + 1], &stopChar, 10)) << 20;
+                  j += ui8(stopChar - &argv[i][j] - 1);
+                  break;
+               case L's': // For each SMT virtual core
+               case L'S':
+                  cfg.memConfig   = 2;
+                  cfg.allocMem[1] = si64(wcstol(&argv[i][j + 1], &stopChar, 10)) << 20;
+                  j += ui8(stopChar - &argv[i][j] - 1);
+                  break;
+               case L't': // Equally split amongst all utilised virtual cores
+               case L'T':
+                  cfg.memConfig   = 0;
+                  cfg.allocMem[0] = si64(wcstol(&argv[i][j + 1], &stopChar, 10)) << 20;
+                  j += ui8(stopChar - &argv[i][j] - 1);
+               }
+            }
             break;
          case L'o': // Output results to file
          case L'O':
@@ -234,7 +276,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             break;
          case L's': // Set core synchronisation options
          case L'S':
-            cfg.procSync = 0;
+            cfg.procSync &= 0x0F0;
             for(j = 1; argv[i][j] && argv[i][j] != L' '; ++j) {
                switch(argv[i][j]) {
                case L'p': // Parallel thread execution
@@ -258,6 +300,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             break;
          case L't': // Set timing options
          case L'T':
+            cfg.procSync &= 0x0F;
             for(j = 1; argv[i][j] && argv[i][j] != L' '; ++j) {
                wchptr stopChar;
                switch(argv[i][j]) {
@@ -313,9 +356,17 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                      }
                   }
                   break;
-               case L's': // Generate threads for every virtual core (ie. SMT)
+               case L'e': // Only utilise the first virtual core of each active physical core
+               case L'E':
+                  cfg.SMTLoad = 1;
+                  break;
+               case L'o': // Only utilise the last virtual core of each active physical core
+               case L'O':
+                  cfg.SMTLoad = 2;
+                  break;
+               case L's': // Generate threads for every virtual core
                case L'S':
-                  cfg.SMT = true;
+                  cfg.SMTLoad = 3;
                   break;
                case L't': // Binary sequence map of virtual cores to utilise (eg. xx..x.x...xx.xxx)
                case L'T':
@@ -334,9 +385,8 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                   break;
                }
             }
-            if(!cfg.SMT) OnePerSMT(); else MaxPerSMT();
             break;
-         case L'~': // Write new "cpu.values" file
+         case L'W': // Write new "cpu.values" file
             union { ui64 _64; ui32 _32[2]; } randNum;
 
             for(i = 0; i < MAX_THREADS; ++i) {
@@ -358,7 +408,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             while(ThreadsRunning) Sleep(100);
 
             // Test for computational error
-            if(value[1][0].raw[0] == 0x0AAAAAAAAAAAAAAAA && value[2][0].raw[0] == 0x0AAAAAAAAAAAAAAAA) {
+            if(value[3][0].raw[0] == 0x0AAAAAAAAAAAAAAAA && value[2][0].raw[0] == 0x0AAAAAAAAAAAAAAAA) {
                printf("\n\nComputational error(s) detected. Results not written.\n\n");
                return -16;
             }
@@ -372,7 +422,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                printf("\n\nFailed to write all input entries to \"cpu.values\" file.\n\n");
                return -18;
             }
-            if(!WriteFile(outFile, value[1], RESULTS_BUF_SIZE, &bytesProc, 0)) {
+            if(!WriteFile(outFile, value[3], RESULTS_BUF_SIZE, &bytesProc, 0)) {
                printf("\n\nFailed to write all output entries to \"cpu.values\" file.\n\n");
                return -19;
             }
@@ -383,40 +433,41 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
 
             return 1;
          case L'-': // Configuration presets
-            cfg.allocMem  = 1024;
-            cfg.procUnits = (cfg.sys.cpuAVX512 ? 0x091 : cfg.sys.cpuAVX2 ? 0x089 : 0x085);
+            cfg.memConfig   = 1;
+            cfg.allocMem[0] = 8388608;
+            cfg.procUnits   = (cfg.sys.cpuAVX512 ? 0x091 : cfg.sys.cpuAVX2 ? 0x089 : 0x085);
             switch(argv[i][1]) {
             case L'1': // Constant stress; one thread per physical core
                cfg.procSync = 0x012;
-               OnePerSMT();
+               cfg.SMTLoad  = 2;
                break;
             case L'2': // Constant stress on all virtual cores
                cfg.procSync = 0x012;
-               MaxPerSMT();
+               cfg.SMTLoad  = 3;
                break;
             case L'3': // Fixed-width round-robin pulsed stress; one thread per physical core
                cfg.procSync = 0x021;
-               OnePerSMT();
+               cfg.SMTLoad  = 2;
                break;
             case L'4': // Synchronised fixed-width pulsed stress; one thread per physical core
                cfg.procSync = 0x02A;
-               OnePerSMT();
+               cfg.SMTLoad  = 2;
                break;
             case L'5': // Synchronised fixed-width pulsed stress on all virtual cores
                cfg.procSync = 0x02A;
-               MaxPerSMT();
+               cfg.SMTLoad  = 3;
                break;
             case L'6': // Synchronised sweeping-width pulsed stress; one thread per physical core
                cfg.procSync = 0x04A;
-               OnePerSMT();
+               cfg.SMTLoad  = 2;
                break;
             case L'7': // Synchronised staggered fixed-width pulsed stress; one thread per physical core
                cfg.procSync = 0x02C;
-               OnePerSMT();
+               cfg.SMTLoad  = 2;
                break;
             case L'8': // Synchronised staggered fixed-width pulsed stress on all virtual cores
                cfg.procSync = 0x02C;
-               MaxPerSMT();
+               cfg.SMTLoad  = 3;
                break;
             }
             break;
@@ -425,7 +476,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    } else { // Display instructions
     wprintf(wstrInstructions[lang]);
 
-    return 16;
+    return 2;
    }
 
    outFile = CreateFileW(L"cpu.values", GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, 0);
@@ -442,15 +493,21 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       printf("\n\nInsufficient output entries in \"cpu.values\" file.\n\n");
       return -3;
    }
+   memcpy_s(value[3], RESULTS_BUF_SIZE, value[2], RESULTS_BUF_SIZE);
    CloseHandle(outFile);
 
-   for(j = 0; j < cfg.sys.groupCount; ++j) threadCount += (si16)PopulationCount64(cfg.coreMap[j]);
-
-   cui64 memBlockSize = (cfg.allocMem << 10) / (cui64)threadCount;
+   // Count virtual cores to be used
+   SetSMTLoading();
+   for(j = 0; j < cfg.sys.groupCount; ++j) {
+      threadCount[0] += (si16)PopulationCount64(cfg.sys.coreMap[0][j] & cfg.coreMap[j]);
+      threadCount[1] += (si16)PopulationCount64(cfg.sys.coreMap[1][j] & cfg.coreMap[j]);
+   }
+   threadCount[2] = threadCount[0] + threadCount[1];
 
    timer.Update();
 
-   if(wstrOut[0]) { // Prepare results output file
+   // Prepare results output file
+   if(wstrOut[0]) {
       outFile = CreateFileW(wstrOut, GENERIC_WRITE, FILE_SHARE_WRITE, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
       if(outFile == INVALID_HANDLE_VALUE) {
          wprintf(L"\n\nCannot create \"%s\" file.\n\n", wstrOut);
@@ -465,63 +522,160 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       }
    }
 
+   ///--- REWRITE ---///
+   // Memory allocation and pointer configuration
+   switch(cfg.memConfig) {
+   case 0: // Total memory
+      memArray.blockSize[0] = memArray.blockSize[1] = cfg.allocMem[0] / (cui64)threadCount[2];
+      break;
+   case 1: // Memory per core
+      memArray.blockSize[0] = memArray.blockSize[1] = cfg.allocMem[0];
+      cfg.allocMem[0] *= (cui64)threadCount[2];
+      break;
+   case 2: // Separate non-SMT/SMT
+      memArray.blockSize[0] = cfg.allocMem[0];
+      memArray.blockSize[1] = cfg.allocMem[1];
+      cfg.allocMem[0] = memArray.blockSize[0] * cfg.sys.coreCount[0] + (memArray.blockSize[1] * cfg.sys.coreCount[1] * cfg.sys.SMT);
+   }
+
+   if(memArray.blockSize[0]) {
+      ui64 os, bos;
+      ui8  l, m;
+
+      memArray.p = malloc64(cfg.allocMem[0]);
+      switch(cfg.procUnits & 0x01F) {
+      case 1:
+         memArray.records[0] = ui32(memArray.blockSize[0] / 8);
+         memArray.records[1] = ui32(memArray.blockSize[1] / 8);
+         memArray.alu[0]     = (si64ptrc)memArray.p;
+         break;
+      case 2:
+         memArray.records[0] = ui32(memArray.blockSize[0] / 8);
+         memArray.records[1] = ui32(memArray.blockSize[1] / 8);
+         memArray.fpu        = (fl64ptrc)memArray.p;
+         break;
+      case 3:
+         memArray.records[0] = ui32(memArray.blockSize[0] / 16);
+         memArray.records[1] = ui32(memArray.blockSize[1] / 16);
+         memArray.fpu        = (fl64ptrc)memArray.p;
+         memArray.alu[0]     = (si64ptrc)memArray.p + (memArray.records[0] * threadCount[0]);
+         memArray.alu[1]     = memArray.alu[0] + (memArray.records[1] * threadCount[1]);
+         break;
+      case 4: case 6:
+         memArray.records[0] = ui32(memArray.blockSize[0] / 16);
+         memArray.records[1] = ui32(memArray.blockSize[1] / 16);
+         memArray.sse        = (fl64x2ptrc)memArray.p;
+         break;
+      case 5: case 7:
+         memArray.records[0] = ui32(memArray.blockSize[0] / 24);
+         memArray.records[1] = ui32(memArray.blockSize[1] / 24);
+         memArray.sse        = (fl64x2ptrc)memArray.p;
+         memArray.alu[0]     = (si64ptrc)memArray.p + (memArray.records[0] * 2 * threadCount[0]);
+         memArray.alu[1]     = memArray.alu[0] + (memArray.records[1] * 2 * threadCount[1]);
+         break;
+      case 8: case 10: case 12: case 14:
+         memArray.records[0] = ui32(memArray.blockSize[0] / 32);
+         memArray.records[1] = ui32(memArray.blockSize[1] / 32);
+         memArray.avx        = (fl64x4ptrc)memArray.p;
+         break;
+      case 9: case 11: case 13: case 15:
+         memArray.records[0] = ui32(memArray.blockSize[0] / 40);
+         memArray.records[1] = ui32(memArray.blockSize[1] / 40);
+         memArray.avx        = (fl64x4ptrc)memArray.p;
+         memArray.alu[0]     = (si64ptrc)memArray.p + (memArray.records[0] * 4 * threadCount[0]);
+         memArray.alu[1]     = memArray.alu[0] + (memArray.records[1] * 4 * threadCount[1]);
+         break;
+      case 16: case 18: case 20: case 22: case 24: case 26: case 28: case 30:
+         memArray.records[0] = ui32(memArray.blockSize[0] / 64);
+         memArray.records[1] = ui32(memArray.blockSize[1] / 64);
+         memArray.avx512     = (fl64x8ptrc)memArray.p;
+         break;
+      case 17: case 19: case 21: case 23: case 25: case 27: case 29: case 31:
+         memArray.records[0] = ui32(memArray.blockSize[0] / 72);
+         memArray.records[1] = ui32(memArray.blockSize[1] / 72);
+         memArray.avx512     = (fl64x8ptrc)memArray.p;
+         memArray.alu[0]     = (si64ptrc)memArray.p + (memArray.records[0] * 8 * threadCount[0]);
+         memArray.alu[1]     = memArray.alu[0] + (memArray.records[1] * 8 * threadCount[1]);
+      }
+
+      for(k = 0, m = 0; m < 2; ++m)
+         for(l = 0, bos = 0; l < threadCount[m]; ++k, ++l, bos += memArray.records[m]) {
+            value[1][k].p0 = &memArray.avx512[bos];
+            value[1][k].p1 = &memArray.avx[bos];
+            value[1][k].p2 = &memArray.sse[bos];
+            value[1][k].p3 = &memArray.fpu[bos];
+            value[1][k].p4 = &memArray.alu[m][bos];
+            for(os = 0; os < memArray.records[m]; ++os) {
+               if(cfg.procUnits & 0x010) value[1][k].p0[os] = value[0][k].avx512;
+               if(cfg.procUnits & 0x08)  value[1][k].p1[os] = value[0][k].avx;
+               if(cfg.procUnits & 0x04)  value[1][k].p2[os] = value[0][k].sse;
+               if(cfg.procUnits & 0x02)  value[1][k].p3[os] = value[0][k].fpu;
+               if(cfg.procUnits & 0x01)  value[1][k].p4[os] = value[0][k].alu;
+            }
+         }
+   }
+   ///--- REWRITE ---///
+
    // Output configuration properties
-   c = swprintf(wstrOutput, L"Start-up delay: %dms\t\tMaximum duration: %5.1fs\tPulse on-time: %4dms\t\tUnits:", cfg.delayTime, (fl64(cfg.tics) / fl64(timer.siFrequency)), cfg.onTime);
-   for(j = 0; j < 8; ++j)
-      if(cfg.procUnits & (0x01ull << j)) c += swprintf(&wstrOutput[c], L" %s", wstrUnitsCPU[j]);
-   c += swprintf(&wstrOutput[c], L"\nThread count: %-8d\t\tMemory block size: %3lldMB\tPulse off-time: %3dms\t\tSync: ", threadCount, memBlockSize >> 10, cfg.offTime);
-   for(j = 0; j < 8; ++j)
-      if(cfg.procSync & (0x01ull << j)) c += swprintf(&wstrOutput[c], L" %s", wstrSyncCPU[j]);
+   c = swprintf(wstrOutput, L"Units:");
+   for(i = 0; i < 8; ++i)
+      if(cfg.procUnits & (0x01ull << i)) c += swprintf(&wstrOutput[c], L" %s", wstrUnitsCPU[i]);
+   c += swprintf(&wstrOutput[c], L"\t\tStart-up delay: %7dms\t    Thread count: %d", cfg.delayTime, threadCount[2]);
+   switch(cfg.procSync >> 4) {
+   default:
+      c += swprintf(&wstrOutput[c], L"\t\t");
+      break;
+   case 2:
+      c += swprintf(&wstrOutput[c], L"Pulse on-time: %4dms", cfg.onTime);
+      break;
+   case 4:
+      c += swprintf(&wstrOutput[c], L"Cycle time: %dms", cfg.onTime);
+   }
+   c += swprintf(&wstrOutput[c], L"\nSync: ");
+   for(i = 0; i < 8; ++i)
+      if(cfg.procSync & (0x01ull << i)) c += swprintf(&wstrOutput[c], L" %s", wstrSyncCPU[i]);
+   c += swprintf(&wstrOutput[c], L"\tMaximum duration: %5.1fs\tMemory allocated: %lldMB", (fl64(cfg.tics) / fl64(timer.siFrequency)), (cfg.allocMem[0] + cfg.allocMem[1]) >> 20);
+   if(cfg.procSync >> 4 == 2) c += swprintf(&wstrOutput[c], L"Pulse off-time: %3dms", cfg.offTime);
    c += swprintf(&wstrOutput[c], L"\n\nThread bitmap: ");
-   for(j = 0; j < cfg.sys.groupCount; ++j) {
-      for(mask = 1, i = 0; mask && i < threadCount; mask <<= 1, ++i)
-         c += swprintf(&wstrOutput[c], L"%c", (mask & cfg.coreMap[j] ? '!' : '.'));
+   for(i = 0; i < cfg.sys.groupCount; ++i) {
+      for(mask = 1, d = threadCount[2]; mask && d; mask <<= 1, --d)
+         c += swprintf(&wstrOutput[c], L"%c", (mask & cfg.coreMap[i] ? '!' : '.'));
       c += swprintf(&wstrOutput[c], L"\n               ");
    }
    d = c -= 15;
    wprintf(wstrOutput);
    wprintf(L"\n");
 
-   j = 0;
-   switch(cfg.procSync >> 4) {
-   case 1: // Constant computation
-      j = 0; break;
-   case 2: // Fixed pulses
-      j = 2; break;
-   case 4: // Sweeping pulses
-      j = 4; break;
-   case 8: // RESERVED
-      j = 6; break;
-   }
-   if(cfg.procSync & 0x08) ++j; // Synchronised
+   BitScanForward(&bytesProc, cfg.procSync >> 4);
+   k = (ui8)bytesProc;
 
    // Spawn child processes
-   for(i = 0, mask = 1; i < threadCount; ++i) {
-      threadData[i].maxDuration   = cfg.tics;
-      threadData[i].startTime     = cfg.delayTime * timer.siFrequency / 1000 + timer.siCurrentTics;
-      threadData[i].endTime       = threadData[i].startTime + threadData[i].maxDuration;
-      threadData[i].activeTime    = cfg.onTime;
-      threadData[i].inactiveTime  = cfg.offTime;
-      threadData[i].packetSizeRAM = memBlockSize;
-      threadData[i].procUnits     = cfg.procUnits;
-      threadData[i].procSync      = cfg.procSync;
-      threadData[i].threadByte    = i >> 3;
-      threadData[i].threadBit     = i & 0x07;
+   for(c = 0, j = 0; j < 2; ++j)
+      for(i = 0, mask = 1; i < threadCount[j]; ++c, ++i, mask <<= 1) {
+         threadData[c].maxDuration   = cfg.tics;
+         threadData[c].startTime     = cfg.delayTime * timer.siFrequency / 1000 + timer.siCurrentTics;
+         threadData[c].endTime       = threadData[c].startTime + threadData[c].maxDuration;
+         threadData[c].activeTime    = cfg.onTime;
+         threadData[c].inactiveTime  = cfg.offTime;
+         threadData[c].packetSizeRAM = memArray.blockSize[j];
+         threadData[c].recordCount   = memArray.records[j];
+         threadData[c].procUnits     = cfg.procUnits;
+         threadData[c].procSync      = cfg.procSync;
+         threadData[c].threadByte    = c >> 3;
+         threadData[c].threadBit     = c & 0x07;
 
-      threadBits[i >> 6] |= 1uLL << (i & 0x03F);
+         threadBits[c >> 6] |= 1uLL << (c & 0x03F);
 
-      ptrc handle = (ptr)_beginthread(MethodCPU[j], 0, &threadData[i]);
+         ptrc handle = (ptr)_beginthread(MethodCPU[k], 0, &threadData[c]);
 
-      while(mask & ~cfg.coreMap[procGroup]) mask <<= 1; ///--- Modify to account for >64 virtual cores !!!
-      SetThreadAffinityMask(handle, mask);
-      mask <<= 1;
-   }
+         while(mask & ~cfg.coreMap[procGroup]) mask <<= 1; ///--- Modify to account for >64 virtual cores !!!
+         SetThreadAffinityMask(handle, mask);
+      }
    while(ThreadsRunning) Sleep(100);
 
+   // Output results
    wprintf(L"\n");
-
-   // Write outputs to console (and/or file?)
-   for(j = 0; j < 5; ++j) {
+   for(j = 0; j < 5; ++j) { // Cycle through each processing unit
       mask = 0x01ull << j;
       if(~cfg.procUnits & mask) continue;
 
@@ -532,30 +686,31 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       c += swprintf(&wstrOutput[c], L"+--");
       switch(cfg.procUnits & mask) { default: i = 5; break; case 4: i = 9; break; case 8: i = 17; break; case 16: i = 33; } while(--i) c += swprintf(&wstrOutput[c], L"----");
       c += swprintf(&wstrOutput[c], L".");
-      for(i = 0; i < threadCount; ++i) {
-         switch(threadData[i].procUnits & mask) {
+      for(i = 0; i < threadCount[2]; ++i) {
+         switch(cui8 bit = threadData[i].procUnits & mask) {
          default:
-            c += swprintf(&wstrOutput[c], L"\n  #%3.1d  |  %s 64  | %16.16llX | %16.16llX | %s", i, wstrUnitsCPU[j], value[2][i].raw[15], value[1][i].raw[15], wstrPass[Evaluate(i, 15 - j, 1)]);
+            c += swprintf(&wstrOutput[c], L"\n  #%3.1d  |  %s 64  | %16.16llX | %16.16llX | %s", i, wstrUnitsCPU[j], value[2][i].raw[16 - bit], value[3][i].raw[16 - bit], wstrPass[Evaluate(i, 5 - bit)]);
             break;
          case 4:
-            if(threadData[i].procUnits & 0x04) c += swprintf(&wstrOutput[c], L"\n  #%3.1d  | SSE  128 | %16.16llX%16.16llX | %16.16llX%16.16llX | %s",
-               i, value[2][i].raw[12], value[2][i].raw[13], value[1][i].raw[12], value[1][i].raw[13], wstrPass[Evaluate(i, 12, 2)]);
+            c += swprintf(&wstrOutput[c], L"\n  #%3.1d  | SSE  128 | %16.16llX%16.16llX | %16.16llX%16.16llX | %s",
+               i, value[2][i].raw[12], value[2][i].raw[13], value[3][i].raw[12], value[3][i].raw[13], wstrPass[Evaluate(i, 2)]);
             break;
          case 8:
-            if(threadData[i].procUnits & 0x08) c += swprintf(&wstrOutput[c], L"\n  #%3.1d  | AVX  256 | %16.16llX%16.16llX%16.16llX%16.16llX | %16.16llX%16.16llX%16.16llX%16.16llX | %s",
-               i, value[2][i].raw[8], value[2][i].raw[9], value[2][i].raw[10], value[2][i].raw[11], value[1][i].raw[8], value[1][i].raw[9], value[1][i].raw[10], value[1][i].raw[11], wstrPass[Evaluate(i, 8, 4)]);
+            c += swprintf(&wstrOutput[c], L"\n  #%3.1d  | AVX  256 | %16.16llX%16.16llX%16.16llX%16.16llX | %16.16llX%16.16llX%16.16llX%16.16llX | %s",
+               i, value[2][i].raw[8], value[2][i].raw[9], value[2][i].raw[10], value[2][i].raw[11], value[3][i].raw[8], value[3][i].raw[9], value[3][i].raw[10], value[3][i].raw[11], wstrPass[Evaluate(i, 1)]);
             break;
          case 10:
-            if(threadData[i].procUnits & 0x10) c += swprintf(&wstrOutput[c], L"\n  #%3.1d  | AVX  512 | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX | %s",
+            c += swprintf(&wstrOutput[c], L"\n  #%3.1d  | AVX  512 | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX | %s",
                i, value[2][i].raw[0], value[2][i].raw[1], value[2][i].raw[2], value[2][i].raw[3], value[2][i].raw[4], value[2][i].raw[5], value[2][i].raw[6], value[2][i].raw[7],
-               value[1][i].raw[0], value[1][i].raw[1], value[1][i].raw[2], value[1][i].raw[3], value[1][i].raw[4], value[1][i].raw[5], value[1][i].raw[6], value[1][i].raw[7], wstrPass[Evaluate(i, 0, 8)]);
+               value[3][i].raw[0], value[3][i].raw[1], value[3][i].raw[2], value[3][i].raw[3], value[3][i].raw[4], value[3][i].raw[5], value[3][i].raw[6], value[3][i].raw[7], wstrPass[Evaluate(i, 0)]);
          }
       }
       c+= swprintf(&wstrOutput[c], L"\n");
    }
    c += swprintf(&wstrOutput[c], L"\n");
-   wprintf(&wstrOutput[d]);
 
+   // Write outputs to console and/or file
+   wprintf(&wstrOutput[d]);
    if(wstrOut[0]) {
       if(outUTF == 2) { // UTF-16 encoding
          if(!WriteFile(outFile, wstrOutput, c, &bytesProc, 0)) {
@@ -565,7 +720,6 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          }
       } else { // 8-bit encodings
          setlocale(LC_ALL, "");
-         
          wcstombs((chptr)&wstrOutput[c], wstrOutput, c);
          if(!WriteFile(outFile, (chptr)&wstrOutput[c], c, &bytesProc, 0)) {
             wprintf(L"\n\nFailed to write results to \"%s\" file.\n\n", wstrOut);

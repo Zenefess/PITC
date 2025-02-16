@@ -16,7 +16,7 @@
  ****************************************************************/
 #pragma once
 
-#include <immintrin.h>
+#include <intrin.h>
 
 #define _COMMON_TYPES_
 
