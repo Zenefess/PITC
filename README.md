@@ -15,7 +15,7 @@ Command-line options
  Lx : Set interface language.
  
       Recognises ISO 639 language codes; eg. Leng
- Mx : Set amount of memory to utilise during test. Memory will be evenly split amongst all utilised cores. Values are in MebiBytes; eg. Mt128
+ Mx : Set amount of memory to utilise during test. Values are in MebiBytes; eg. Mt128
  
       C==Per virtual core, N==Per non-SMT core, S==Per SMT virtual core, T=Total split amongst all virtual cores
  Ox : Results file output options. A filename can be stacked with any of the remaining options; eg. O[results.txt]16
