@@ -1,32 +1,29 @@
-# Pulsed Integrity Tests for CPUs v1.0alpha
+# Pulsed Integrity Tests for CPUs v1.0RC1
 
 
-This software is primarily for testing the idle stability of CPUs.
-
-
-The in-progress features will be made available with v1.0's release.
+This software is primarily for testing the idle stability of CPUs. Run the executable without parameters to display instructions.
 
 
 Command-line options
 --------------------
- B  : Run the benchmark. !!! Currently incomplete !!!
+ B  : Run the benchmark. !!! Cache use not yet implemented !!!
  
-      Utilises the ALU, largest vector unit, and level 3 cache of all (virtual) cores in the system, and divides 1024MB of memory amongst them.
- Ix : Set intruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av !!! Caches not yet implemented !!!
+      Utilises the ALU and largest vector unit of all (virtual) cores in the system, level 3 cache, and 8MB memory per thread.
+ Ix : Set intruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av !!! Cache use not yet implemented !!!
  
       Caches; 1==Level 1, 2==Level 2, 3==Level 3  |  Processing; A==ALU, F==FPU, S==SSE4.1, V==AVX2, X==AVX512
  Lx : Set interface language.
  
       Recognises ISO 639 language codes; eg. Leng
- Mx : Set amount of memory to utilise during test. !!! Currently not yet implemented !!!
+ Mx : Set amount of memory to utilise during test. Memory will be evenly split amongst all utilised cores. Values are in MebiBytes; eg. Mt128
  
-      Memory will be evenly split amonsgt all utilised cores. Value is in MebiBytes; eg. M1024
+      C==Per virtual core, N==Per non-SMT core, S==Per SMT virtual core, T=Total split amongst all virtual cores
  Ox : Results file output options. A filename can be stacked with any of the remaining options; eg. O[results.txt]16
  
       []=Filename, A=Non-UTF ASCII, 8=UTF-8, 16=UTF-16
  Sx : Set core synchronisation options. The first three options (P,R,S) can be stacked with the last (T); eg. Spt
  
-      P==Parallel, R==Round-robin, S==Staggered, T==Time synchronised
+      P==Parallel, R==Round-robin, S==Staggered, T==Time synchronised !!! Round-robin and Staggered not yet implemented !!!
  Tx : Set timing options. One of the first three options (C,F,T) can be stacked with any of the remaining (D,T,[,]); eg. Tfd1.0t12.5[100]2400
  
       C==Constant, F==Fixed-length pulses, S==Sweeping-length pulses
@@ -36,10 +33,11 @@ Command-line options
  
       C==Binary sequence map of physical cores to utilise, T==Binary sequence map of virtual cores to utilise
          Format for core utilisation map is: ','/'.'/'_'==Core disabled, Any other character==Core enabled
-      S==Symmetric Multi-Threading; generate threads for every virtual core of each utilised physical core.
- ~  : Write new "cpu.values" file.
+      S==Symmetric Multi-Threading; forces utilisation of every virtual core of each active physical core
+      E==Only utilise the first virtual core of each active physical core, O==Only utilise the last virtual core of each active physical core
+ W  : Write new "cpu.values" file.
  
-      The integrity of the results will be checked for 65,536 iterations, only creating the file if all checks pass.
+      File will only be created if the integrity of the results pass 65,536 iterations.
  -x : Configuration presets.
  
       1==Constant stress; one thread per physical core
