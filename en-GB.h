@@ -24,7 +24,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0   ---   Copyright (c) David William Bul
  "\n-10 : Failed to write results file\n"
  "\nCommand-line options   ---   Example: pitc.exe I3x Mc8 Spt Tcd8.0t3600 Ua"
  "\n--------------------"
- "\n B  : Run the benchmark. Options after 'B' ovverride defaults; eg. pitc.exe B Iaf mt1024 !!! CACHE USE NOT YET IMPLEMENTED !!!"
+ "\n B  : Run the benchmark. Options after 'B' override defaults; eg. pitc.exe B Iaf mt1024 !!! CACHE USE NOT YET IMPLEMENTED !!!"
  "\n      Utilises the ALU and largest vector unit of all (virtual) cores in the system, level 3 cache, and 8MB memory per thread for 60 seconds."
  "\n Ix : Set intruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av !!! CACHE USE NOT YET IMPLEMENTED !!!"
  "\n      Caches: 1==Level 1, 2==Level 2, 3==Level 3  |  Processing: A==ALU, F==FPU, S==SSE4.1, V==AVX2, X==AVX512"
