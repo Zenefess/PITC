@@ -6,7 +6,7 @@ This software is primarily for testing the idle stability of CPUs, but also prov
 
 Command-line options
 --------------------
- B  : Run the benchmark. Options after 'B' ovverride defaults; eg. pitc.exe B Iaf mt1024 !!! Cache use not yet implemented !!!
+ B  : Run the benchmark. Options after 'B' override defaults; eg. pitc.exe B Iaf mt1024 !!! Cache use not yet implemented !!!
  
       Utilises the ALU and largest vector unit of all (virtual) cores in the system, level 3 cache, and 8MB memory per thread for 60 seconds.
  Ix : Set intruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av !!! Cache use not yet implemented !!!
