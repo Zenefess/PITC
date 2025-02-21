@@ -1,6 +1,6 @@
 /************************************************************
  * File: memory management.h            Created: 2008/12/08 *
- *                                Last modified: 2025/01/21 *
+ *                                Last modified: 2025/02/19 *
  *                                                          *
  * Notes: 2024/05/02: Added support for data tracking.      *
  *                                                          *
@@ -176,22 +176,22 @@ extern SYSTEM_DATA sysData;
 
 // Allocates RAM at 64-byte boundary, then sets the entire array to zero
 #define zalloc1d64(dataType, dim) \
-   (dataType *)salloc(RoundUpToNearest64(sizeof(dataType) * (dim)), 64u, null128)
+   (dataType *)salloc(RoundUpToNearest64(sizeof(dataType) * (dim)), 64u, null256)
 
 // Allocates RAM at 64-byte boundary, then sets the entire array to zero
 #define zalloc2d64(dataType, dim1, dim2) \
-   (dataType (*)[dim2])salloc(RoundUpToNearest64(sizeof(dataType) * ((dim1) * (dim2))), 64u, null128)
+   (dataType (*)[dim2])salloc(RoundUpToNearest64(sizeof(dataType) * ((dim1) * (dim2))), 64u, null256)
 #else
 // Allocates RAM at 64-byte boundary, then sets the entire array to zero
 #define zalloc64(byteCount) salloc(byteCount, 64, null128)
 
 // Allocates RAM at 64-byte boundary, then sets the entire array to zero
 #define zalloc1d64(dataType, dim) \
-   (dataType *)salloc(RoundUpToNearest64(sizeof(dataType) * (dim)), 64u, null512)
+   (dataType *)salloc(RoundUpToNearest64(sizeof(dataType) * (dim)), 64u, null128)
 
 // Allocates RAM at 64-byte boundary, then sets the entire array to zero
 #define zalloc2d64(dataType, dim1, dim2) \
-   (dataType (*)[dim2])salloc(RoundUpToNearest64(sizeof(dataType) * ((dim1) * (dim2))), 64u, null512)
+   (dataType (*)[dim2])salloc(RoundUpToNearest64(sizeof(dataType) * ((dim1) * (dim2))), 64u, null128)
 #endif
 #endif
 

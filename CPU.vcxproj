@@ -179,8 +179,11 @@
     <ClCompile Include="CPU.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="CPU job cycles.h" />
+    <ClInclude Include="CPU methods.h" />
     <ClInclude Include="CPU.h" />
-    <ClInclude Include="instructions.h" />
+    <ClInclude Include="en-GB.h" />
+    <ClInclude Include="translations.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

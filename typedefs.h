@@ -11,6 +11,8 @@
  *        2024/05/11: Added all (~2) void pointer combinations  *
  *        2024/05/13: Moved ui24 data type to separate file     *
  *        2024/05/18: Added AVX512 vector types                 *
+ *        2025/02/10: Added threadfunc type                     * 
+ *        2025/02/19: Added ptr to const ptr to const types     *
  *                                                              *
  * MIT license                 Copyright (c) David William Bull *
  ****************************************************************/
@@ -280,6 +282,34 @@ typedef const          char     *cchptr;
 typedef const          char    **cchptrptr;
 typedef const          wchar_t  *cwchptr;
 typedef const          wchar_t **cwchptrptr;
+
+// Pointers to constant pointers to constant types
+typedef unsigned  __int8 const * const * cui8ptrcptr;
+typedef unsigned __int16 const * const * cui16ptrcptr;
+typedef unsigned __int32 const * const * cui32ptrcptr;
+typedef unsigned __int64 const * const * cui64ptrcptr;
+typedef          __m128i const * const * cui128ptrcptr;
+typedef          __m256i const * const * cui256ptrcptr;
+typedef          __m512i const * const * cui512ptrcptr;
+typedef   signed  __int8 const * const * csi8ptrcptr;
+typedef   signed __int16 const * const * csi16ptrcptr;
+typedef   signed __int32 const * const * csi32ptrcptr;
+typedef   signed __int64 const * const * csi64ptrcptr;
+typedef          __m128i const * const * csi128ptrcptr;
+typedef          __m256i const * const * csi256ptrcptr;
+typedef          __m512i const * const * csi512ptrcptr;
+typedef       __bfloat16 const * const * cfl16ptrcptr;
+typedef            float const * const * cfl32ptrcptr;
+typedef           double const * const * cfl64ptrcptr;
+typedef      long double const * const * cfl80ptrcptr;
+typedef           __m128 const * const * cfl32x4ptrcptr;
+typedef           __m256 const * const * cfl32x8ptrcptr;
+typedef           __m512 const * const * cfl32x16ptrcptr;
+typedef          __m128d const * const * cfl64x2ptrcptr;
+typedef          __m256d const * const * cfl64x4ptrcptr;
+typedef          __m512d const * const * cfl64x8ptrcptr;
+typedef             char const * const * cchptrcptr;
+typedef          wchar_t const * const * cwchptrcptr;
 
 // Constant pointers to types
 typedef unsigned  __int8  * const ui8ptrc;

@@ -1,6 +1,6 @@
 /************************************************************
  * File: Common functions.h             Created: 2023/02/02 *
- *                                    Last mod.: 2025/01/26 *
+ *                                    Last mod.: 2025/02/17 *
  *                                                          *
  * Desc:                                                    *
  *                                                          *
@@ -42,13 +42,21 @@ static cfl32x4 negOnes32x4f = _mm_set_ps1(-1.0f);
 static cui128  null128      = _mm_setzero_si128();
 static cui128  ones32x4     = _mm_set1_epi32(1u);
 static cui128  max128       = _mm_set1_epi32(-1);
-
+#ifdef __AVX__
 static cfl32x8 null256f     = _mm256_setzero_ps();
 static cfl32x8 ones32x8f    = _mm256_set1_ps(1.0f);
 static cfl32x8 negOnes32x8f = _mm256_set1_ps(-1.0f);
 static cui256  null256      = _mm256_setzero_si256();
 static cui256  ones32x8     = _mm256_set1_epi32(1u);
 static cui256  max256       = _mm256_set1_epi32(-1);
+#else
+static cfl32x8 null256f     = {};
+static cfl32x8 ones32x8f    = { .m256_f32 = { 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 } };
+static cfl32x8 negOnes32x8f = { .m256_f32 = { -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0 } };
+static cui256  null256      = {};
+static cui256  ones32x8     = { .m256i_u32 = { 1, 1, 1, 1, 1, 1, 1, 1 } };
+static cui256  max256       = { .m256i_i32 = { -1, -1, -1, -1, -1, -1, -1, -1 } };
+#endif
 #ifdef __AVX512__
 static cfl32x16 null512f      = _mm512_setzero_ps();
 static cfl32x16 ones32x16f    = _mm512_set1_ps(1.0f);
@@ -56,7 +64,21 @@ static cfl32x16 negOnes32x16f = _mm512_set1_ps(-1.0f);
 static cui512   null512       = _mm512_setzero_si512();
 static cui512   ones32x16     = _mm512_set1_epi32(1u);
 static cui512   max512        = _mm512_set1_epi32(-1);
+#else
+static cfl32x16 null512f      = {};
+static cfl32x16 ones32x16f    = { .m512_f32 = { 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 } };
+static cfl32x16 negOnes32x16f = { .m512_f32 = { -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0 } };
+static cui512   null512       = {};
+static cui512   ones32x16     = { .m512i_u32 = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } };
+static cui512   max512        = { .m512i_i32 = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 } };
 #endif
+
+///--- Unloop macros
+#define UNLOOPx2(code)  code code
+#define UNLOOPx4(code)  code code code code
+#define UNLOOPx8(code)  code code code code code code code code
+#define UNLOOPx16(code) code code code code code code code code code code code code code code code code
+///--- Unloop macros
 
 ///--- Intrinsics macros
 #ifndef _mm_abs_pd
