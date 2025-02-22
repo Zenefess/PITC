@@ -1,6 +1,6 @@
 /************************************************************
  * File: CPU.h                          Created: 2025/01/25 *
- *                                    Last mod.: 2025/02/20 *
+ *                                    Last mod.: 2025/02/22 *
  *                                                          *
  * Desc:                                                    *
  *                                                          *
@@ -238,9 +238,10 @@ static void GenerateValues(ptr dataPtr) {
    for(resultCopy = value[2][coreNum]; coreNum < range; ++coreNum) {
       value[2][coreNum] = value[3][coreNum];
 
-      if(cfg.sys.cpuAVX512)
+      if(cfg.sys.cpuAVX512) {
          JobAVX512(value[3][coreNum].avx512);
-      else if(cfg.sys.cpuAVX2) {
+         JobAVX2(value[3][coreNum].avx);
+      } else if(cfg.sys.cpuAVX2) {
          JobAVX2((fl64x4&)value[3][coreNum]._fl64[0]);
          JobAVX2((fl64x4&)value[3][coreNum]._fl64[4]);
          JobAVX2(value[3][coreNum].avx);
@@ -258,9 +259,10 @@ static void GenerateValues(ptr dataPtr) {
 
       // Test computatational integrity
       for(resultCopy = value[2][coreNum]; i < 65535; ++i) {
-         if(cfg.sys.cpuAVX512)
+         if(cfg.sys.cpuAVX512) {
             JobAVX512(value[2][coreNum].avx512);
-         else if(cfg.sys.cpuAVX2) {
+            JobAVX2(value[2][coreNum].avx);
+         } else if(cfg.sys.cpuAVX2) {
             JobAVX2((fl64x4&)value[2][coreNum]._fl64[0]);
             JobAVX2((fl64x4&)value[2][coreNum]._fl64[4]);
             JobAVX2(value[2][coreNum].avx);
