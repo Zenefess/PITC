@@ -1,4 +1,4 @@
-# Pulsed Integrity Tests for CPUs v1.0
+# Pulsed Integrity Tests for CPUs v1.0.2
 
 
 This software is primarily for testing the idle stability of CPUs, but also provides a range of options for more traditional stress testing. Run the executable without parameters to display instructions.
@@ -46,10 +46,12 @@ Command-line options
       3==Fixed-width round-robin pulsed stress; one thread per physical core. 10 minute duration
       4==Synchronised fixed-width pulsed stress; one thread per physical core. 10 minute duration
       5==Synchronised fixed-width pulsed stress on all virtual cores. 30 minute duration
-      6==Synchronised sweeping-width pulsed stress; one thread per physical core. 30 minute duration
-      7==Synchronised sweeping-width pulsed stresson all virtual cores; 30 minute duration. 30 minute duration
+      6==Sweeping-width pulsed stress; one thread per physical core. 30 minute duration
+      7==Synchronised sweeping-width pulsed stress on all virtual cores. 30 minute duration
       8==Synchronised staggered fixed-width pulsed stress; one thread per physical core. 1 hour duration
-      9==Synchronised staggered fixed-width pulsed stress on all virtual cores. 4 hour duration
+      9==Staggered fixed-width pulsed stress on all virtual cores. 4 hour duration
+      0==Synchronised fixed-width pulsed stress on all virtual cores, using ALU & SSE code-paths with 2MB memory per core. 1 hour duration
 
 
 Example: "pitc.exe I3x Mc8 Spt Tcd8.0t3600 Ua"
+![PITC benchmark v1 0 2](https://github.com/user-attachments/assets/543ed696-ed0f-4ac8-8328-887109a0c2dc)
