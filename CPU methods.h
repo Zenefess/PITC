@@ -1,6 +1,6 @@
 /************************************************************
  * File: CPU.h                          Created: 2025/02/17 *
- *                                    Last mod.: 2025/02/20 *
+ *                                    Last mod.: 2025/04/17 *
  *                                                          *
  * Desc:                                                    *
  *                                                          *
@@ -26,9 +26,9 @@ void ComputationPulse(ptrc dataPtr) {
    si64    startTics  = tcfg->startTics;
    si64    cycleTics  = tcfg->cycleTics;
    si64    nextTic    = sweepSync ? 0 : tcfg->activeTics;
-   si64    i, j;
-   ui32    sleepDelay = tcfg->inactiveTime;
+   si64    i, j       = 0;
    si64    oldTics    = 0;
+   ui32    sleepDelay = tcfg->inactiveTime;
 
    if(tcfg->procSync & 0x010) // Constant computation
       nextTic = tcfg->endTics;
@@ -57,20 +57,20 @@ void ComputationPulse(ptrc dataPtr) {
    } while(startTics > timer.siCurrentTics);
 
    // Force minimum of one cycle for the sake of sweeping-pulse width
-   if(JobCycle[recCount ? 1 : 0][jobProc](coreNum, 0, threadByte)) goto fail;
-
-   // Main loop
-   for(i = j = 0; timer.siCurrentTics < tcfg->endTics; i = (i >= recCount - 4 ? 0 : i + 4), ++j) {
-      timer.Update();
-      if(!coreNum && timer.siCurrentTics - oldTics > timer.siFrequency) { printf("."); oldTics = timer.siCurrentTics; }
-      if(timer.siCurrentTics < nextTic) {
-         if(JobCycle[recCount ? 1 : 0][jobProc](coreNum, i, threadByte)) break;
-      } else {
-         Sleep(sweepSync ? DWORD(cycleTime - ((timer.siCurrentTics - tcfg->startTics) * cycleTime / (tcfg->endTics - tcfg->startTics))) + offset[0] : sleepDelay + offset[0]);
-         nextTic += cycleTics + offset[1];
+//   if(JobCycle[recCount ? 1 : 0][jobProc](coreNum, 0, threadByte)) goto fail;
+   if(!JobCycle[recCount ? 1 : 0][jobProc](coreNum, 0, threadByte))
+      // Main loop
+      for(i = j = 0; timer.siCurrentTics < tcfg->endTics; i = (i >= recCount - 4 ? 0 : i + 4), ++j) {
+         timer.Update();
+         if(!coreNum && timer.siCurrentTics - oldTics > timer.siFrequency) { printf("."); oldTics = timer.siCurrentTics; }
+         if(timer.siCurrentTics < nextTic) {
+            if(JobCycle[recCount ? 1 : 0][jobProc](coreNum, i, threadByte)) break;
+         } else {
+            Sleep(sweepSync ? DWORD(cycleTime - ((timer.siCurrentTics - tcfg->startTics) * cycleTime / (tcfg->endTics - tcfg->startTics))) + offset[0] : sleepDelay + offset[0]);
+            nextTic += cycleTics + offset[1];
+         }
       }
-   }
-fail:
+//fail:
    if(tcfg->procSync & 0x080) resArray.iter[coreNum] = j;
 
    _InterlockedAnd8(threadByte, ~cui8(1u << tcfg->threadBit));

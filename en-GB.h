@@ -1,6 +1,6 @@
 /************************************************************
  * File: en-GB.h                        Created: 2025/02/10 *
- *                                    Last mod.: 2025/02/21 *
+ *                                    Last mod.: 2025/04/17 *
  *                                                          *
  * Desc:                                                    *
  *                                                          *
@@ -9,7 +9,7 @@
 #pragma once
 
 al64 cwchptrc wstrInstructions_English =
-L"\nPulsed Integrity Tests for CPUs v1.0   ---   Copyright (c) David William Bull\n"
+L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William Bull\n"
  "\nReturn values"
  "\n-------------"
  "\n-1  : File containing correct values not found                                  0 : Successul completion of stability test"
@@ -48,16 +48,17 @@ L"\nPulsed Integrity Tests for CPUs v1.0   ---   Copyright (c) David William Bul
  "\n      E==Only utilise the first virtual core of each active physical core, O==Only utilise the last virtual core of each active physical core"
  "\n W  : Write new \"cpu.values\" file."
  "\n      File will only be created if the integrity of the results pass 65,536 iterations."
- "\n -x : Configuration presets."
+ "\n -x : Configuration presets. By default will use the ALU & the largest vector unit, and 8MB memory per core."
  "\n      1==Constant stress; one thread per physical core. 10 minute duration"
  "\n      2==Constant stress on all virtual cores. 30 minute duration"
  "\n      3==Fixed-width round-robin pulsed stress; one thread per physical core. 10 minute duration"
  "\n      4==Synchronised fixed-width pulsed stress; one thread per physical core. 10 minute duration"
  "\n      5==Synchronised fixed-width pulsed stress on all virtual cores. 30 minute duration"
- "\n      6==Synchronised sweeping-width pulsed stress; one thread per physical core. 30 minute duration"
- "\n      7==Synchronised sweeping-width pulsed stresson all virtual cores; 30 minute duration. 30 minute duration"
+ "\n      6==Sweeping-width pulsed stress; one thread per physical core. 30 minute duration"
+ "\n      7==Synchronised sweeping-width pulsed stress on all virtual cores. 30 minute duration"
  "\n      8==Synchronised staggered fixed-width pulsed stress; one thread per physical core. 1 hour duration"
- "\n      9==Synchronised staggered fixed-width pulsed stress on all virtual cores. 4 hour duration\n\n";
+ "\n      9==Staggered fixed-width pulsed stress on all virtual cores. 4 hour duration"
+ "\n      0==Synchronised fixed-width pulsed stress on all virtual cores, using ALU & SSE code-paths with 2MB memory per core. 1 hour duration\n\n";
 
 cwchptrc wstrMessage_English[15] = {
    L"\nSuccessfully wrote results to \"%s\" file.\n\n",
@@ -88,7 +89,7 @@ cwchptrc wstrInterface_English[13] = {
    L"\n\nThread bitmap: ",
    L"\n Thread | ProcUnit | Correct values   ",
    L"| Result\n--------+----------+--",
-   L"\nPITC benchmark score: %lld",
+   L"\nPITC benchmark score: %lld KUPS (Kibi-units per second)",
    L"\nERROR! Core: %2.1lld  Expected: ",
    L"Output:"
 };

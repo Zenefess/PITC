@@ -44,7 +44,7 @@ al32 struct GLOBAL_CFG { // 96 bytes
    ui32 offTime     = 900;      // Sleep duration (in ms)
    ui32 delayTime   = 2000;     // Start-up delay duration (in ms)
    ui8  procUnits   = 0x04;     // 0==ALU, 1==FPU, 2==SSE4.1, 3==AVX, 4==AVX512, 5==L1 cache, 6==L2 cache, 7==L3 cache
-   ui8  procSync    = 0x02A;    // 8==Round-robin, 9==Parallel 10==Staggered, 11==Synchronised, 12==Constant, 13==Fixed pulse, 14==Sweeping pulse, 15==Benchmark
+   ui8  procSync    = 0x02A;    // 0==Round-robin, 1==Parallel 2==Staggered, 3==Synchronised, 4==Constant, 5==Fixed pulse, 6==Sweeping pulse, 7==Benchmark
    ui8  SMTLoad     = 0;        // Only utilise the specified virtual core(s) of each active physical core; 0=Unchanged, 1=First, 2=Last, 3=All
    ui8  memConfig   = 0;        // 0=Total equally split, 1=Per core, 2=non-SMT/SMT split
 

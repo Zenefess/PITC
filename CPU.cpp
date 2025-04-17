@@ -1,6 +1,6 @@
 /************************************************************
  * File: CPU.cpp                        Created: 2025/01/21 *
- *                                    Last mod.: 2025/02/20 *
+ *                                    Last mod.: 2025/04/16 *
  *                                                          *
  * Desc: Pulsed integrity tests for CPUs.                   *
  *                                                          *
@@ -79,7 +79,10 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    static bool (&ThreadsRunning)(void) = cfg.sys.cpuAVX512 ? ThreadsRunningAVX512 : cfg.sys.cpuAVX2 ? ThreadsRunningAVX : ThreadsRunningSSE;
 
    /// Defaults ///
-   cfg.tics = timer.siFrequency * 900; // 15 minute duration
+   cfg.tics        = timer.siFrequency * 900; // 15 minute duration
+   cfg.procSync    = 0x012;
+   cfg.procUnits   = 0x03;
+   cfg.allocMem[0] = 0;
    /// Defaults ///
 
    if(argc > 1) {
@@ -197,7 +200,6 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                case L'[':
                   for(d = ++c; argv[i][c] && argv[i][c] != L']' && c < 1024; ++c);
                   if(!lstrcpynW(wstrOut, &argv[i][d], c++ - 1)) {
-//                     wprintf(L"\n\nUnable to create file \"%s\".\n\n", wstrOut);
                      wprintf(wstrMessage[9], wstrOut);
                      return -8;
                   }
@@ -367,7 +369,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          case L'-': // Configuration presets
             cfg.memConfig   = 1;
             cfg.allocMem[0] = 8388608;
-            cfg.procUnits   = (cfg.sys.cpuAVX512 ? 0x091 : cfg.sys.cpuAVX2 ? 0x089 : 0x085);
+            cfg.procUnits   = (cfg.sys.cpuAVX512 ? 0x011 : cfg.sys.cpuAVX2 ? 0x09 : 0x05);
             switch(argv[i][1]) {
             case L'1': // Constant stress; one thread per physical core. 10 minute duration
                cfg.procSync = 0x012;
@@ -383,36 +385,57 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                cfg.procSync = 0x021;
                cfg.SMTLoad  = 2;
                cfg.tics     = timer.siFrequency * 600;
+               cfg.onTime   = 200;
+               cfg.offTime  = 0;
                break;
             case L'4': // Synchronised fixed-width pulsed stress; one thread per physical core. 10 minute duration
                cfg.procSync = 0x02A;
                cfg.SMTLoad  = 2;
                cfg.tics     = timer.siFrequency * 600;
+               cfg.onTime   = 250;
+               cfg.offTime  = 1750;
                break;
             case L'5': // Synchronised fixed-width pulsed stress on all virtual cores. 30 minute duration
                cfg.procSync = 0x02A;
                cfg.SMTLoad  = 3;
                cfg.tics     = timer.siFrequency * 1800;
+               cfg.onTime   = 250;
+               cfg.offTime  = 1750;
                break;
-            case L'6': // Synchronised sweeping-width pulsed stress; one thread per physical core. 30 minute duration
-               cfg.procSync = 0x04A;
+            case L'6': // Sweeping-width pulsed stress; one thread per physical core. 30 minute duration
+               cfg.procSync = 0x042;
                cfg.SMTLoad  = 2;
                cfg.tics     = timer.siFrequency * 1800;
+               cfg.onTime   = 2000;
                break;
             case L'7': // Synchronised sweeping-width pulsed stress on all virtual cores. 30 minute duration. 10 minute duration
                cfg.procSync = 0x04A;
-               cfg.SMTLoad = 2;
+               cfg.SMTLoad  = 3;
                cfg.tics     = timer.siFrequency * 1800;
+               cfg.onTime   = 2500;
                break;
-            case L'8': // Synchronised staggered fixed-width pulsed stress; one thread per physical core. 1 hour duration
-               cfg.procSync = 0x02C;
+            case L'8': // Staggered fixed-width pulsed stress; one thread per physical core. 1 hour duration
+               cfg.procSync = 0x024;
                cfg.SMTLoad  = 2;
                cfg.tics     = timer.siFrequency * 3600;
+               cfg.onTime   = 900;
+               cfg.offTime  = 100;
                break;
             case L'9': // Synchronised staggered fixed-width pulsed stress on all virtual cores. 4 hour duration
                cfg.procSync = 0x02C;
                cfg.SMTLoad  = 3;
                cfg.tics     = timer.siFrequency * 14400;
+               cfg.onTime   = 900;
+               cfg.offTime  = 100;
+               break;
+            case L'0': // Synchronised fixed-width pulsed stress on all virtual cores, using ALU & SSE code-paths with 2MB memory per core. 1 hour duration
+               cfg.allocMem[0] = 2097152;
+               cfg.procUnits   = 0x05;
+               cfg.procSync    = 0x02A;
+               cfg.SMTLoad     = 3;
+               cfg.tics        = timer.siFrequency * 3600;
+               cfg.onTime      = 4000;
+               cfg.offTime     = 4000;
             }
          }
       }
@@ -423,18 +446,9 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    }
 
    // Requested vector unit checks
-   if(cfg.procUnits & 0x04 && !cfg.sys.cpuSSE4_1) {
-      wprintf(wstrMessage[12]);
-      return -11;
-   }
-   if(cfg.procUnits & 0x08 && !cfg.sys.cpuAVX2) {
-      wprintf(wstrMessage[13]);
-      return -11;
-   }
-   if(cfg.procUnits & 0x010 && !cfg.sys.cpuAVX512) {
-      wprintf(wstrMessage[14]);
-      return -11;
-   }
+   if(cfg.procUnits & 0x04  && !cfg.sys.cpuSSE4_1) { wprintf(wstrMessage[12]); return -11; }
+   if(cfg.procUnits & 0x08  && !cfg.sys.cpuAVX2)   { wprintf(wstrMessage[13]); return -11; }
+   if(cfg.procUnits & 0x010 && !cfg.sys.cpuAVX512) { wprintf(wstrMessage[14]); return -11; }
 
    outFile = CreateFileW(L"cpu.values", GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, 0);
    if(outFile == INVALID_HANDLE_VALUE) {
@@ -563,7 +577,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    for(i = 0, j = 0; i < 8; ++i) if(cfg.procSync & (0x01ull << i)) { c += swprintf(&wstrOutput[c], L" %s", wstrSyncCPU[i]); ++j; }
    for(; j < 3; j++) c += swprintf(&wstrOutput[c], L"    ");
    c += swprintf(&wstrOutput[c], wstrInterface[5], threadCount[2], (fl64(cfg.tics) / fl64(timer.siFrequency)));
-   if(cfg.procSync == 0x020) c += swprintf(&wstrOutput[c], wstrInterface[6], cfg.offTime);
+   if(cfg.procSync & 0x020) c += swprintf(&wstrOutput[c], wstrInterface[6], cfg.offTime);
    c += swprintf(&wstrOutput[c], wstrInterface[7]);
    for(i = 0; i < cfg.sys.groupCount; ++i) {
       for(mask = 1, d = cfg.sys.coreCount[1] * cfg.sys.SMT + cfg.sys.coreCount[0]; mask && d; mask <<= 1, --d)
@@ -636,7 +650,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    if(cfg.procSync & 0x080) { // Print benchmark results
       si64 accum = 0;
       for(i = 0; i < threadCount[2]; ++i) accum += resArray.iter[i];
-      c += swprintf(&wstrOutput[c], wstrInterface[10], accum / (cfg.tics / timer.siFrequency) >> 10);
+      c += swprintf(&wstrOutput[c], wstrInterface[10], accum * max(si64((cfg.procUnits & 0x01F) >> 1), 1) / (cfg.tics / timer.siFrequency) >> 10);
    }
    c += swprintf(&wstrOutput[c], L"\n");
 
