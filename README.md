@@ -54,4 +54,7 @@ Command-line options
 
 
 Example: "pitc.exe I3x Mc8 Spt Tcd8.0t3600 Ua"
+
+
+Screenshot of the benchmark result of an AMD Ryzen 9 5950X:
 ![PITC benchmark v1 0 2](https://github.com/user-attachments/assets/543ed696-ed0f-4ac8-8328-887109a0c2dc)
