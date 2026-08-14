@@ -232,7 +232,6 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             break;
          case L't': // Set timing options
          case L'T':
-            cfg.procSync &= 0x08F;
             for(j = 1; argv[i][j] && argv[i][j] != L' '; ++j) {
                wchptr stopChar;
                switch(argv[i][j]) {
@@ -246,7 +245,8 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                   break;
                case L'c': // Constant thread execution
                case L'C':
-                  cfg.procSync |= 0x010;
+                  cfg.procSync &= 0x08F; // Bits 4-6 are mutually exclusive, and are only replaced by an
+                  cfg.procSync |= 0x010; // argument that names a mode: 'C', 'F' or 'S'
                   break;
                case L'd': // Set start-up delay
                case L'D':
@@ -255,10 +255,12 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                   break;
                case L'f': // Fixed pulse-width thread execution
                case L'F':
+                  cfg.procSync &= 0x08F;
                   cfg.procSync |= 0x020;
                   break;
                case L's': // Sweeping pulse-width thread execution
                case L'S':
+                  cfg.procSync &= 0x08F;
                   cfg.procSync |= 0x040;
                   cfg.offTime   = 0;
                   break;
@@ -449,6 +451,15 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    if(cfg.procUnits & 0x04  && !cfg.sys.cpuSSE4_1) { wprintf(wstrMessage[12]); return -11; }
    if(cfg.procUnits & 0x08  && !cfg.sys.cpuAVX2)   { wprintf(wstrMessage[13]); return -11; }
    if(cfg.procUnits & 0x010 && !cfg.sys.cpuAVX512) { wprintf(wstrMessage[14]); return -11; }
+
+   // Requested synchronisation & timing checks. Each rejects a configuration that would idle the threads,
+   // or end the test before they compute, and then report ".Pass." for silicon that was never exercised
+   cui8 syncShape = ui8(cfg.procSync & 0x07); // Round-robin, Parallel and Staggered are mutually exclusive
+   if(syncShape & (syncShape - 1))                 { wprintf(wstrMessage[15]); return -12; }
+   if(cfg.tics <= 0)                               { wprintf(wstrMessage[16]); return -13; }
+   if(!(cfg.procSync & 0x010) && !cfg.onTime)      { wprintf(wstrMessage[17]); return -14; }
+
+   if(!syncShape) cfg.procSync |= 0x02; // An unspecified pulse shape is parallel; it must never stay 0
 
    outFile = CreateFileW(L"cpu.values", GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, 0);
    if(outFile == INVALID_HANDLE_VALUE) {

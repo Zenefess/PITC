@@ -21,12 +21,12 @@ Command-line options
  Ox : Results file output options. A filename can be stacked with any of the remaining options; eg. O[results.txt]16
  
       []=Filename, A=Non-UTF ASCII, 8=UTF-8, 16=UTF-16
- Sx : Set core synchronisation options. The first three options (P,R,S) can be stacked with the last (T); eg. Spt
+ Sx : Set core synchronisation options. One of the first three options (P,R,S) can be stacked with the last (T); eg. Spt
  
-      P==Parallel, R==Round-robin, S==Staggered, T==Time synchronised
- Tx : Set timing options. One of the first three options (C,F,T) can be stacked with any of the remaining (D,T,[,]); eg. Tfd1.0t12.5[100]2400
+      P==Parallel, R==Round-robin, S==Staggered, T==Time synchronised                           |  P, R and S are mutually exclusive
+ Tx : Set timing options. One of the first three options (C,F,S) can be stacked with any of the remaining (D,T,[,]); eg. Tfd1.0t12.5[100]2400
  
-      C==Constant, F==Fixed-length pulses, S==Sweeping-length pulses
+      C==Constant, F==Fixed-length pulses, S==Sweeping-length pulses                            |  The last of C, F and S given is used
       Global options: Dx==Set start-up delay, Tx==Set test duration                             |  Replace 'x' with a decimal value; eg. d10.0
       Fixed-length pulse options (in milliseconds): [x==Active duration, ]x==Inactive duration  |  Replace 'x' with a whole number; eg. [250
       Sweeping-length pulse option (in milliseconds): [x==Cycle duration

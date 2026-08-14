@@ -38,16 +38,21 @@ void ComputationPulse(ptrc dataPtr) {
          startTics  += cycleTics * si64(coreNum);
          sleepDelay += cycleTime * (tcfg->threadCount - 1);
          cycleTics  *= tcfg->threadCount;
-      case 2: // Parallel
-         nextTic += startTics;
          break;
-      case 4: // Staggered
+      case 4: { // Staggered
          csi64 cycleStag = cycleTics * (coreStag - 1);
          startTics  += cycleStag;
          sleepDelay += cycleTime * (coreStag);
          cycleTics  *= si64(coreStag) << 1;
-         nextTic    += startTics + cycleStag;
+         nextTic    += cycleStag;
+         break;
       }
+      // 2==Parallel. Every other combination is rejected during parsing; treating them as parallel here
+      // guarantees that nextTic can never be left holding a duration instead of an absolute tic count
+      default:
+         break;
+      }
+      nextTic += startTics;
    }
 
    // Wait for start time

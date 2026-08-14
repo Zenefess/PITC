@@ -37,10 +37,13 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1, A2 and A3 are fixed** — see the `Fixed` notes on those entries. The counts in the table above are as
-first audited and have not been decremented. The three fixes together restore bit-exact verification on the
-SSE and AVX2 paths and make the summary table able to report an AVX-512 failure; every other entry below
-still stands.
+**A1, A2, A3, A4, A5, A6 and F1 are fixed** — see the `Fixed` notes on those entries. The counts in the table
+above are as first audited and have not been decremented. A1–A3 restored bit-exact verification on the SSE and
+AVX2 paths and made the summary table able to report an AVX-512 failure; A4–A6 and F1 were the false-pass
+family of Appendix B item 2, where the configuration itself guaranteed that no work was done, or no time was
+spent doing it. Rejecting those configurations also closed **E9** and the sweep half of **E4**, made **E10**
+unobservable, and the documentation they touched closed **K1** and two bullets of **K4**. Every other entry
+below still stands.
 
 ---
 
@@ -126,7 +129,15 @@ digits wide while the rows print 16, leaving the output visibly misaligned as we
   (or the `O[…]` results file, which contains only the table) sees an unqualified pass.
 * **Fix:** change `case 10:` to `case 16:`.
 
-### A4. Two stacked `S` flags make every thread idle for the whole run and report `.Pass.` — **Critical**
+### A4. Two stacked `S` flags make every thread idle for the whole run and report `.Pass.` — **Critical** — *Fixed*
+
+> **Fixed** in two places. `wmain` (`CPU.cpp:455–462`) now rejects a `procSync` carrying more than one of
+> bits 0–2 with `-12`, and substitutes Parallel when it carries none, so `S`, `St` and `Sq` stay usable while
+> `Spr`, `Sps`, `Srs` and `Sprs` are refused before any thread is created. `ComputationPulse` was also
+> restructured so that the fall-through `case 2` became a `default`, and the `nextTic += startTics` that
+> converts the duration into an absolute timestamp moved *out* of the `switch` — no value of `procSync` can
+> now leave `nextTic` holding a bare duration. The round-robin, parallel and staggered arms are otherwise
+> unchanged (E3's double-counted stagger offset is preserved verbatim, and is still open).
 
 `CPU_methods.h:36–50`:
 
@@ -153,7 +164,13 @@ Reachable masked values with no case: 0 (`S` with no letters), 3 (`Spr`), 5 (`Sr
   user who stacks flags as documented gets a fabricated pass.
 * **Fix:** add a `default:` that errors out, and validate at parse time that at most one of P/R/S is set.
 
-### A5. A zero on-time produces a run that does no work and passes — **Critical**
+### A5. A zero on-time produces a run that does no work and passes — **Critical** — *Fixed*
+
+> **Fixed.** `CPU.cpp:460` rejects a zero `onTime` with `-14` whenever the run is not in constant mode, which
+> covers the fixed-pulse path described below and the sweeping path, where a zero `onTime` collapses
+> `cycleTics` to zero instead (`offTime` having been zeroed by the `S` sub-option). Constant runs never read
+> `activeTics`, so `Tc T[0` is still accepted. An `onTime` of at least 1 ms also guarantees `activeTics` and
+> `cycleTics` are non-zero, which removes E9's zero-length cycle (`Tf[0]0` being one of the rejected forms).
 
 `CPU.cpp:240` accepts any `T[` value without validation, and `CPU.cpp:598` turns it into
 `activeTics = timer.siFrequency * cfg.onTime / 1000`. With `onTime == 0`, `nextTic` equals `startTics` exactly
@@ -165,7 +182,12 @@ again and the compute branch is never entered.
 * **Impact:** a full-duration run that executes one job cycle and then idles, reporting `.Pass.` for every
   thread with exit code 0.
 
-### A6. A zero or negative test duration reports `.Pass.` immediately — **Critical**
+### A6. A zero or negative test duration reports `.Pass.` immediately — **Critical** — *Fixed*
+
+> **Fixed.** `CPU.cpp:459` rejects `cfg.tics <= 0` with `-13`, after the whole command line has been parsed
+> so that a later preset can still legitimately overwrite an earlier `Tt`. This also removes the sweep-ramp
+> divide-by-zero half of E4 (`Tst0`), since `endTics - startTics` is now always positive. The KUPS half of E4
+> (`B Tt0.5`, where `cfg.tics / timer.siFrequency` truncates to zero) is untouched and still open.
 
 `CPU.cpp:267` — `cfg.tics = si64((fl64)timer.siFrequency * wcstod(&argv[i][j + 1], &stopChar));` — accepts 0
 and negative values. `endTics = startTics + cfg.tics` (`CPU.cpp:596`), so the pulse loop's condition
@@ -846,14 +868,15 @@ case 4: // Staggered
 
 * **Trigger:** presets `-8` and `-9`, or any `Ss` run.
 
-### E4. Integer division by zero in two places — **Medium**
+### E4. Integer division by zero in two places — **Medium** — *Partly fixed*
 
 * `CPU.cpp:653` — the benchmark score divides by `(cfg.tics / timer.siFrequency)`, an integer count of whole
-  seconds, which is 0 for any run shorter than one second. **Trigger:** `PITC.exe B Tt0.5`.
-* `CPU_methods.h:69` — the sweep ramp divides by `(tcfg->endTics - tcfg->startTics)`, i.e. `cfg.tics`.
-  **Trigger:** `PITC.exe Tst0`.
+  seconds, which is 0 for any run shorter than one second. **Trigger:** `PITC.exe B Tt0.5`. **Still open** —
+  A6 rejects only a duration of zero or less, and 0.5 s is a legitimate request.
+* ~~`CPU_methods.h:69` — the sweep ramp divides by `(tcfg->endTics - tcfg->startTics)`, i.e. `cfg.tics`.
+  **Trigger:** `PITC.exe Tst0`.~~ **Fixed** by A6's `cfg.tics <= 0` rejection.
 
-Neither `Tt` nor `T[` validates its argument (F4).
+`Tt` and `T[` are now range-checked against zero (A5, A6) but are otherwise still unvalidated (F4).
 
 ### E5. The main loop condition reads a stale timestamp — **Medium**
 
@@ -891,12 +914,21 @@ recorded here only because neither `CLAUDE.md` nor the help text (`en-GB.h:43`) 
 one-directional or that it begins idle, so a user cannot predict from the documentation which duty cycles a
 `-6` or `-7` run will actually visit, or in what order.
 
-### E9. A zero-length cycle spins — **Low**
+### E9. A zero-length cycle spins — **Low** — *Fixed*
+
+> **Fixed** by A5. `cycleTics` is `onTime + offTime`, so a zero-length cycle needs `onTime == 0`, which is
+> now rejected with `-14` in every mode that reads it.
 
 `Tf[0]0` gives `cycleTics == 0` and `cycleTime == 0` (`CPU_methods.h:22`), so `nextTic` advances only by the
 jitter and the thread busy-loops on `Sleep(offset[0])` for the whole test.
 
 ### E10. The "Fixed pulse" flag is never read by the executor — **Medium**
+
+> **Still open, but no longer observable.** Since F1's fix, bits 4–6 always carry exactly one mode — the
+> default and every preset set one, and each of `T`'s `C`/`F`/`S` replaces it — so "neither Constant nor
+> Sweep" and "Fixed pulse" have become the same state, and the banner can no longer claim a mode the
+> executor is not running. The flag is still never read, so the impact below survives as a latent one:
+> add a fourth mode and the executor will silently treat it as a fixed pulse.
 
 `procSync` bit 5 is parsed from `Tf` (`CPU.cpp:258`) and printed in the banner (`CPU.cpp:575,580`), but a
 search of `CPU_methods.h`, `CPU_job_cycles.h` and `CPU.h` finds no read of `0x020` anywhere. `ComputationPulse`
@@ -957,7 +989,17 @@ Two independent accounting errors, on top of the division by zero already record
 
 ## F. Command-line parsing and results output
 
-### F1. Any `T` option silently cancels Constant / Fixed / Sweep mode — **High**
+### F1. Any `T` option silently cancels Constant / Fixed / Sweep mode — **High** — *Fixed*
+
+> **Fixed.** The blanket `cfg.procSync &= 0x08F;` is gone from the head of the option; each of the `C`, `F`
+> and `S` sub-options now clears bits 4–6 immediately before setting its own. A `T` argument therefore
+> replaces the timing mode only when it names one, and two mode letters in one command line resolve
+> last-wins instead of setting two contradictory bits (`Tcf` was Constant+Fixed, and is now Fixed).
+>
+> One consequence is worth knowing: pulse *timings* no longer imply pulse *mode*. `T[250]1750` with no
+> preset and no `F` now runs in the default Constant mode rather than silently switching to pulses — the
+> banner reports `Con`, and `Tf[250]1750` gives the pulsed run. Presets are unaffected, since each sets a
+> mode of its own.
 
 `CPU.cpp:235`:
 
@@ -1704,7 +1746,11 @@ the final compared value:
 
 ## K. Documentation and localisation
 
-### K1. The exit-code table is wrong — **Medium**
+### K1. The exit-code table is wrong — **Medium** — *Fixed*
+
+> **Fixed** alongside A4–A6, which added three codes of their own. The second `-8` is now `-9`, and `-11`
+> (unsupported vector unit), `-12` (more than one thread synchronisation option), `-13` (test duration of
+> zero or less) and `-14` (pulse on-time of zero) are documented. `README.md` still carries no table (K6).
 
 `en-GB.h:13–24` lists `-8` twice and never mentions `-9` or `-11`:
 
@@ -1730,7 +1776,13 @@ comments in `CPU.cpp` are correct; the user-facing text is not.
 is skipped and the file is written as ASCII; and if the encoding *is* selected, F3 truncates the file to half
 its length. Every documented spelling of this option is broken in one way or another.
 
-### K4. The `Ux` and `Tx` option letters are described inconsistently — **Medium**
+### K4. The `Ux` and `Tx` option letters are described inconsistently — **Medium** — *Partly fixed*
+
+> **Fixed:** the second and fourth bullets. `en-GB.h` and `README.md` now both read `(C,F,S)` and note that
+> the last of `C`, `F` and `S` given is the one used, and the `Sx` line reads *"One of the first three
+> options (P,R,S) can be stacked with the last (T)"* with `P, R and S are mutually exclusive` beside it —
+> matching the parser, which now rejects the stack (A4). The first and third bullets (the `Ux` sub-option
+> list and the unusable `Uc` examples) still stand, and depend on F2.
 
 * `en-GB.h:44` — *"One of the first two options (C,T) can be stacked with the one of the remaining (S, O)"*.
   There is no `S` sub-option; the code implements `A`, `C`, `E`, `O`, `T` (`CPU.cpp:276–318`). `README.md:33`
@@ -1858,20 +1910,20 @@ verified by execution rather than by reading.
 | `PITC.exe W` on a 9/17/25-thread CPU | Hangs forever (**B3**) |
 | `PITC.exe Iv Tct60` (any AVX2 run) | Cannot fail, whatever the hardware does (**A1**) |
 | `PITC.exe Ix Tct60` (any AVX-512 run) | Summary always prints `.Pass.` (**A3**) |
-| `PITC.exe Spr Tf[250]1750` | Threads never compute; prints `.Pass.` after idling (**A4**) |
-| `PITC.exe Tf[0]1000` | Zero work performed; prints `.Pass.` (**A5**) |
-| `PITC.exe Tt0` / `Tt-5` / `Tt` | Test ends before it starts; prints `.Pass.`, exit code 0 (**A6**) |
-| `PITC.exe Td0 Tt0` | Workers exit while the spawn loop is still running; the lost-update race hangs `wmain` (**D1**) |
+| ~~`PITC.exe Spr Tf[250]1750`~~ | ~~Threads never compute; prints `.Pass.` after idling~~ — rejected with `-12` (**A4**, fixed) |
+| ~~`PITC.exe Tf[0]1000`~~ | ~~Zero work performed; prints `.Pass.`~~ — rejected with `-14` (**A5**, fixed) |
+| ~~`PITC.exe Tt0` / `Tt-5` / `Tt`~~ | ~~Test ends before it starts; prints `.Pass.`, exit code 0~~ — rejected with `-13` (**A6**, fixed) |
+| `PITC.exe Td0 Tt0.001` | Workers exit while the spawn loop is still running; the lost-update race hangs `wmain` (**D1**) — `Tt0` itself is now rejected (A6) |
 | `PITC.exe O[]` | File output silently disabled — no file, no warning, exit code 0 (**F14**) |
-| `PITC.exe Tf[250]1750` vs `T[250]1750` | Identical runs; only the first claims `F-P` in the banner (**E10**) |
-| `PITC.exe B Tt120` / `PITC.exe -1 Tt600` | Constant stress silently becomes a 10 % duty pulse (**F1**) |
+| ~~`PITC.exe Tf[250]1750` vs `T[250]1750`~~ | ~~Identical runs; only the first claims `F-P` in the banner~~ — the second is now a Constant run, as its banner says (**E10** no longer observable, F1) |
+| ~~`PITC.exe B Tt120` / `PITC.exe -1 Tt600`~~ | ~~Constant stress silently becomes a 10 % duty pulse~~ — mode preserved (**F1**, fixed) |
 | `PITC.exe Iasv Mc8` (two vector units) | Wrong seeds; `!Fail!` on healthy hardware (**C1**) |
 | `PITC.exe Ivx` | Reads past the end of `JobCycle[2][24]` (**A9**) |
 | `PITC.exe I3 Mc8` | Writes ~64 MB into an 8 MB slice, then prints an empty results table (**A10**) |
 | `PITC.exe` (no arguments) | Prints the help text, then blocks on `system("pause")` forever in any non-interactive context (**F15**) |
 | `PITC.exe -6` / `-7` / any `Ts` run | Frequently hangs at the end of the test (**E1**) |
 | `PITC.exe B Tt0.5` | Integer divide-by-zero in the KUPS calculation (**E4**) |
-| `PITC.exe Tst0` | Integer divide-by-zero in the sweep ramp (**E4**) |
+| ~~`PITC.exe Tst0`~~ | ~~Integer divide-by-zero in the sweep ramp~~ — rejected with `-13` (**E4**'s sweep half, fixed by A6) |
 | `PITC.exe Lde-DE-formal` | Overflows `wstrLang[6]` (**C6**) |
 | `PITC.exe O[results.txt]16` | Writes ASCII, not UTF-16 (**F5**) |
 | `PITC.exe O16[results.txt]` | Creates a file named `results.txt]`, half-truncated (**F3**, **F5**) |
@@ -1888,10 +1940,12 @@ verified by execution rather than by reading.
 
 ## Appendix B — suggested order of work
 
-1. **A1, A2, A3** — replace all three vector comparisons with true bitwise equality and fix `case 10:`.
-   Nothing else matters until the tool can actually detect a fault.
-2. **A4, A5, A6, F1** — the false-pass family. Every one of these returns exit code 0 on an untested CPU;
-   together they are the reason a green PITC run currently cannot be trusted.
+1. ~~**A1, A2, A3** — replace all three vector comparisons with true bitwise equality and fix `case 10:`.
+   Nothing else matters until the tool can actually detect a fault.~~ **Done.**
+2. ~~**A4, A5, A6, F1** — the false-pass family. Every one of these returns exit code 0 on an untested CPU;
+   together they are the reason a green PITC run currently cannot be trusted.~~ **Done.** The three
+   configuration faults are refused before any thread is created, and a `T` argument no longer discards the
+   requested timing mode.
 3. **B1, B2, B3** — make `W` produce a complete, correct `cpu.values` on every topology and every ISA level.
 4. **A9, A10, C1** — reject or handle every `procUnits` combination the parser can produce.
 5. **E1, E2** — fix the sweep-mode hang and raise the timer resolution, so pulse timing means what it says.
