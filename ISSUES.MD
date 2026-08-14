@@ -1978,7 +1978,8 @@ verified by execution rather than by reading.
    together they are the reason a green PITC run currently cannot be trusted.~~ **Done.** The three
    configuration faults are refused before any thread is created, and a `T` argument no longer discards the
    requested timing mode.
-3. **B1, B2, B3** — make `W` produce a complete, correct `cpu.values` on every topology and every ISA level.
+3. ~~**B1, B2, B3** — make `W` produce a complete, correct `cpu.values` on every topology and every ISA level.~~
+   **Done.**
 4. **A9, A10, C1** — reject or handle every `procUnits` combination the parser can produce.
 5. **E1, E2** — fix the sweep-mode hang and raise the timer resolution, so pulse timing means what it says.
 6. **C2, C3, C4, C5, C6** — the memory-safety set.
