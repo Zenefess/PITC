@@ -37,15 +37,19 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-One finding dominates everything else: **on an AVX2 machine the per-cycle result check is a no-op and the
-summary table is also blind (A1, A3).** AVX2 is the unit `B` and every `-N` preset select on non-AVX-512
-hardware, so **PITC currently cannot fail an AVX2 run no matter what the silicon does.**
+**A1, A2 and A3 are fixed** — see the `Fixed` notes on those entries. The counts in the table above are as
+first audited and have not been decremented. The three fixes together restore bit-exact verification on the
+SSE and AVX2 paths and make the summary table able to report an AVX-512 failure; every other entry below
+still stands.
 
 ---
 
 ## A. Verdict integrity — the tool's core claim
 
-### A1. `_mm256_testc_pd` compares only sign bits, so AVX2 verification never fails — **Critical**
+### A1. `_mm256_testc_pd` compares only sign bits, so AVX2 verification never fails — **Critical** — *Fixed*
+
+> **Fixed.** All ten call sites now use the `ResultsMatch(cfl64x4, cfl64x4)` overload added at the top of
+> `CPU_job_cycles.h`, which XORs the two vectors and tests the difference with `_mm256_testz_si256`.
 
 `CPU_job_cycles.h:134` (and `:148,153,158,163` in `JobCycleMemAVX2`, `:360` in `JobCycleALU_AVX2`,
 `:378,383,388,393` in `JobCycleMemALU_AVX2`):
@@ -73,7 +77,10 @@ sign bit 0, the condition is never satisfied, `CF` is always 1, and the `if` bod
   `_mm256_movemask_pd(_mm256_cmp_pd(a, b, _CMP_NEQ_UQ))`. `common functions.h:162` already provides a correct
   `AllTrue(cui256, cui256)` built on `_mm256_testc_si256` — the `_pd` spelling here looks like a slip.
 
-### A2. `_mm_testc_si128` is a subset test, not equality — SSE misses every 0→1 bit flip — **Critical**
+### A2. `_mm_testc_si128` is a subset test, not equality — SSE misses every 0→1 bit flip — **Critical** — *Fixed*
+
+> **Fixed.** All ten call sites now use the `ResultsMatch(cfl64x2, cfl64x2)` overload added at the top of
+> `CPU_job_cycles.h`, which XORs the two vectors and tests the difference with `_mm_testz_si128`.
 
 `CPU_job_cycles.h:94` (and `:108,113,118,123,290,308,313,318,323`):
 
@@ -89,7 +96,10 @@ single-bit corruptions in the 128-bit SSE result are invisible.
 * **Impact:** a genuine class of silicon faults produces `.Pass.`.
 * **Fix:** `_mm_testz_si128(d, d)` on `d = _mm_xor_si128(a, b)`.
 
-### A3. The results table can never report an AVX-512 failure — **Critical**
+### A3. The results table can never report an AVX-512 failure — **Critical** — *Fixed*
+
+> **Fixed.** `case 10:` is now `case 16:` (`CPU.cpp:642`), so AVX-512 rows reach their own arm, print all
+> eight lanes and are graded by `Evaluate(i, 0)`. This also squares the row width with the header rulers.
 
 `CPU.cpp:630–646`:
 

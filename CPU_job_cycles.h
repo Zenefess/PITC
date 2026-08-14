@@ -8,6 +8,31 @@
  ************************************************************/
 #pragma once
 
+//-- Bit-exact result comparison --//
+// A job's output must be bit-identical to its golden value, so every exponent and mantissa bit has to be
+// examined. _mm_testc_si128 is a subset test -- a bit that should be 0 turning 1 satisfies it -- and
+// _mm256_testc_pd inspects only the sign bit of each lane. Neither is an equality test; XOR-then-testz is.
+
+/// @brief  Compare a 128-bit (SSE) result against its golden value
+/// @param  result:   Value produced by the job kernel
+/// @param  expected: Reference value loaded from "cpu.values"
+/// @return true if every bit of both operands is identical
+static inline cbool ResultsMatch(cfl64x2 result, cfl64x2 expected) {
+   csi128 delta = _mm_xor_si128(_mm_castpd_si128(result), _mm_castpd_si128(expected));
+
+   return _mm_testz_si128(delta, delta);
+}
+
+/// @brief  Compare a 256-bit (AVX2) result against its golden value
+/// @param  result:   Value produced by the job kernel
+/// @param  expected: Reference value loaded from "cpu.values"
+/// @return true if every bit of both operands is identical
+static inline cbool ResultsMatch(cfl64x4 result, cfl64x4 expected) {
+   csi256 delta = _mm256_xor_si256(_mm256_castpd_si256(result), _mm256_castpd_si256(expected));
+
+   return _mm256_testz_si256(delta, delta);
+}
+
 static cui8 JobCycleALU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    value[1][coreNum].alu = value[0][coreNum].alu;
    JobALU(value[1][coreNum].alu);
@@ -91,7 +116,7 @@ static cui8 JobCycleMemFPU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
 static cui8 JobCycleSSE(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    value[1][coreNum].sse = value[0][coreNum].sse;
    JobSSE(value[1][coreNum].sse);
-   if(!_mm_testc_si128((__m128i&)value[1][coreNum].sse, (__m128i&)value[2][coreNum].sse)) {
+   if(!ResultsMatch(value[1][coreNum].sse, value[2][coreNum].sse)) {
       value[3][coreNum].sse = value[1][coreNum].sse;
       Failed(coreNum, threadByte, 2);
       return 1;
@@ -105,22 +130,22 @@ static cui8 JobCycleMemSSE(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    value[1][coreNum].p2[offset + 2] = value[0][coreNum].sse;
    value[1][coreNum].p2[offset + 3] = value[0][coreNum].sse;
    JobMemSSE(&value[1][coreNum].p2[offset]);
-   if(!_mm_testc_si128((__m128i&)value[1][coreNum].p2[offset], (__m128i&)value[2][coreNum].sse)) {
+   if(!ResultsMatch(value[1][coreNum].p2[offset], value[2][coreNum].sse)) {
       value[3][coreNum].sse = value[1][coreNum].p2[offset];
       Failed(coreNum, threadByte, 2);
       return 1;
    }
-   if(!_mm_testc_si128((__m128i&)value[1][coreNum].p2[offset + 1], (__m128i&)value[2][coreNum].sse)) {
+   if(!ResultsMatch(value[1][coreNum].p2[offset + 1], value[2][coreNum].sse)) {
       value[3][coreNum].sse = value[1][coreNum].p2[offset + 1];
       Failed(coreNum, threadByte, 2);
       return 1;
    }
-   if(!_mm_testc_si128((__m128i&)value[1][coreNum].p2[offset + 2], (__m128i&)value[2][coreNum].sse)) {
+   if(!ResultsMatch(value[1][coreNum].p2[offset + 2], value[2][coreNum].sse)) {
       value[3][coreNum].sse = value[1][coreNum].p2[offset + 2];
       Failed(coreNum, threadByte, 2);
       return 1;
    }
-   if(!_mm_testc_si128((__m128i&)value[1][coreNum].p2[offset + 3], (__m128i&)value[2][coreNum].sse)) {
+   if(!ResultsMatch(value[1][coreNum].p2[offset + 3], value[2][coreNum].sse)) {
       value[3][coreNum].sse = value[1][coreNum].p2[offset + 3];
       Failed(coreNum, threadByte, 2);
       return 1;
@@ -131,7 +156,7 @@ static cui8 JobCycleMemSSE(cui64 coreNum, csi64 offset, vchptrc threadByte) {
 static cui8 JobCycleAVX2(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    value[1][coreNum].avx = value[0][coreNum].avx;
    JobAVX2(value[1][coreNum].avx);
-   if(!_mm256_testc_pd(value[1][coreNum].avx, value[2][coreNum].avx)) {
+   if(!ResultsMatch(value[1][coreNum].avx, value[2][coreNum].avx)) {
       value[3][coreNum].avx = value[1][coreNum].avx;
       Failed(coreNum, threadByte, 1);
       return 1;
@@ -145,22 +170,22 @@ static cui8 JobCycleMemAVX2(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    value[1][coreNum].p1[offset + 2] = value[0][coreNum].avx;
    value[1][coreNum].p1[offset + 3] = value[0][coreNum].avx;
    JobMemAVX2(&value[1][coreNum].p1[offset]);
-   if(!_mm256_testc_pd(value[1][coreNum].p1[offset], value[2][coreNum].avx)) {
+   if(!ResultsMatch(value[1][coreNum].p1[offset], value[2][coreNum].avx)) {
       value[3][coreNum].avx = value[1][coreNum].p1[offset];
       Failed(coreNum, threadByte, 1);
       return 1;
    }
-   if(!_mm256_testc_pd(value[1][coreNum].p1[offset + 1], value[2][coreNum].avx)) {
+   if(!ResultsMatch(value[1][coreNum].p1[offset + 1], value[2][coreNum].avx)) {
       value[3][coreNum].avx = value[1][coreNum].p1[offset + 1];
       Failed(coreNum, threadByte, 1);
       return 1;
    }
-   if(!_mm256_testc_pd(value[1][coreNum].p1[offset + 2], value[2][coreNum].avx)) {
+   if(!ResultsMatch(value[1][coreNum].p1[offset + 2], value[2][coreNum].avx)) {
       value[3][coreNum].avx = value[1][coreNum].p1[offset + 2];
       Failed(coreNum, threadByte, 1);
       return 1;
    }
-   if(!_mm256_testc_pd(value[1][coreNum].p1[offset + 3], value[2][coreNum].avx)) {
+   if(!ResultsMatch(value[1][coreNum].p1[offset + 3], value[2][coreNum].avx)) {
       value[3][coreNum].avx = value[1][coreNum].p1[offset + 3];
       Failed(coreNum, threadByte, 1);
       return 1;
@@ -287,7 +312,7 @@ static cui8 JobCycleALU_SSE(cui64 coreNum, csi64 offset, vchptrc threadByte) {
       Failed(coreNum, threadByte, 4);
       return 1;
    }
-   if(!_mm_testc_si128((__m128i&)value[1][coreNum].sse, (__m128i&)value[2][coreNum].sse)) {
+   if(!ResultsMatch(value[1][coreNum].sse, value[2][coreNum].sse)) {
       value[3][coreNum].sse = value[1][coreNum].sse;
       Failed(coreNum, threadByte, 2);
       return 1;
@@ -305,22 +330,22 @@ static cui8 JobCycleMemALU_SSE(cui64 coreNum, csi64 offset, vchptrc threadByte) 
    value[1][coreNum].p4[offset + 2] = value[0][coreNum].alu;
    value[1][coreNum].p4[offset + 3] = value[0][coreNum].alu;
    JobMemALU_SSE(&value[1][coreNum].p2[offset], &value[1][coreNum].p4[offset]);
-   if(!_mm_testc_si128((__m128i&)value[1][coreNum].p2[offset], (__m128i&)value[2][coreNum].sse)) {
+   if(!ResultsMatch(value[1][coreNum].p2[offset], value[2][coreNum].sse)) {
       value[3][coreNum].sse = value[1][coreNum].p2[offset];
       Failed(coreNum, threadByte, 2);
       return 1;
    }
-   if(!_mm_testc_si128((__m128i&)value[1][coreNum].p2[offset + 1], (__m128i&)value[2][coreNum].sse)) {
+   if(!ResultsMatch(value[1][coreNum].p2[offset + 1], value[2][coreNum].sse)) {
       value[3][coreNum].sse = value[1][coreNum].p2[offset + 1];
       Failed(coreNum, threadByte, 2);
       return 1;
    }
-   if(!_mm_testc_si128((__m128i&)value[1][coreNum].p2[offset + 2], (__m128i&)value[2][coreNum].sse)) {
+   if(!ResultsMatch(value[1][coreNum].p2[offset + 2], value[2][coreNum].sse)) {
       value[3][coreNum].sse = value[1][coreNum].p2[offset + 2];
       Failed(coreNum, threadByte, 2);
       return 1;
    }
-   if(!_mm_testc_si128((__m128i&)value[1][coreNum].p2[offset + 3], (__m128i&)value[2][coreNum].sse)) {
+   if(!ResultsMatch(value[1][coreNum].p2[offset + 3], value[2][coreNum].sse)) {
       value[3][coreNum].sse = value[1][coreNum].p2[offset + 3];
       Failed(coreNum, threadByte, 2);
       return 1;
@@ -357,7 +382,7 @@ static cui8 JobCycleALU_AVX2(cui64 coreNum, csi64 offset, vchptrc threadByte) {
       Failed(coreNum, threadByte, 4);
       return 1;
    }
-   if(!_mm256_testc_pd(value[1][coreNum].avx, value[2][coreNum].avx)) {
+   if(!ResultsMatch(value[1][coreNum].avx, value[2][coreNum].avx)) {
       value[3][coreNum].avx = value[1][coreNum].avx;
       Failed(coreNum, threadByte, 1);
       return 1;
@@ -375,22 +400,22 @@ static cui8 JobCycleMemALU_AVX2(cui64 coreNum, csi64 offset, vchptrc threadByte)
    value[1][coreNum].p4[offset + 2] = value[0][coreNum].alu;
    value[1][coreNum].p4[offset + 3] = value[0][coreNum].alu;
    JobMemALU_AVX2(&value[1][coreNum].p1[offset], &value[1][coreNum].p4[offset]);
-   if(!_mm256_testc_pd(value[1][coreNum].p1[offset], value[2][coreNum].avx)) {
+   if(!ResultsMatch(value[1][coreNum].p1[offset], value[2][coreNum].avx)) {
       value[3][coreNum].avx = value[1][coreNum].p1[offset];
       Failed(coreNum, threadByte, 1);
       return 1;
    }
-   if(!_mm256_testc_pd(value[1][coreNum].p1[offset + 1], value[2][coreNum].avx)) {
+   if(!ResultsMatch(value[1][coreNum].p1[offset + 1], value[2][coreNum].avx)) {
       value[3][coreNum].avx = value[1][coreNum].p1[offset + 1];
       Failed(coreNum, threadByte, 1);
       return 1;
    }
-   if(!_mm256_testc_pd(value[1][coreNum].p1[offset + 2], value[2][coreNum].avx)) {
+   if(!ResultsMatch(value[1][coreNum].p1[offset + 2], value[2][coreNum].avx)) {
       value[3][coreNum].avx = value[1][coreNum].p1[offset + 2];
       Failed(coreNum, threadByte, 1);
       return 1;
    }
-   if(!_mm256_testc_pd(value[1][coreNum].p1[offset + 3], value[2][coreNum].avx)) {
+   if(!ResultsMatch(value[1][coreNum].p1[offset + 3], value[2][coreNum].avx)) {
       value[3][coreNum].avx = value[1][coreNum].p1[offset + 3];
       Failed(coreNum, threadByte, 1);
       return 1;
