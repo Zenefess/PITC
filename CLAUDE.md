@@ -227,9 +227,15 @@ current source before relying on any of these:
   above the first ~320 thread bits go unchecked on non-AVX-512 CPUs. Masked today by the 64-core limit.
 - **`Failed()` clears a whole byte** (`_InterlockedAnd8(threadByte, 0x0)`), not just the failing thread's bit,
   so one failure can make `wmain` believe up to 8 threads have finished while they are still running.
-- **The results table never reports an AVX-512 failure.** Its switch tests `cfg.procUnits & (1 << j)`, which
-  can only yield 1/2/4/8/16, so the `case 10:` arm holding the 512-bit format string is unreachable and
-  AVX-512 falls to `default`. That branch prints one lane and calls `Evaluate(i, 5 - 16)`; the out-of-domain
-  unit index truncates to an empty lane window, which always returns 0 — `.Pass.`. Failures are still caught
-  during the run by `JobCycleAVX512` → `Failed()`, which prints to the console; only the summary is blind.
 - Cache-targeting (`I1`/`I2`/`I3`) is accepted, displayed, and does nothing.
+
+### Result comparison must stay bit-exact
+
+`CPU_job_cycles.h` defines two `ResultsMatch` overloads (`fl64x2`, `fl64x4`) that XOR the computed and
+expected vectors and test the difference against zero. Every SSE and AVX2 job cycle goes through them.
+Do not substitute `_mm_testc_si128` or `_mm256_testc_pd` here, and do not reach for `AllTrue` in
+`common functions.h`: `PTEST`'s `CF` is a *subset* test (a bit that should be 0 turning 1 passes), and
+`VTESTPD` examines only each lane's sign bit — every job output is positive, so it can never fail. Both
+spellings were live in the shipped code and made the SSE and AVX2 verdicts partly or wholly blind.
+The AVX-512 path still compares with `_mm512_mask_cmpneq_pd_mask`, which is a floating-point rather than a
+bitwise comparison — a separate known gap (ISSUES.MD A11), not the same defect.
