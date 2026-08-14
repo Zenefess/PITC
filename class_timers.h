@@ -10,7 +10,7 @@
  ************************************************************/
 #pragma once
 
-#include <typedefs.h>
+#include "typedefs.h"
 
 #ifndef max
 #define max(a,b) (((a) > (b)) ? (a) : (b))
