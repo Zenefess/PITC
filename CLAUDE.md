@@ -81,6 +81,15 @@ The four planes (`value[4][MAX_THREADS]`, declared in `CPU.h`) each carry a fixe
 `Evaluate(thread, unit)` derives its lane window arithmetically from that ordering
 (`unit`: 0=AVX512, 1=AVX2, 2=SSE, 3=FPU, 4=ALU, -1=all) — the layout and the function must change together.
 
+`GenerateValues` (`CPU.h`) fills that table under `W`, and carries two invariants a careless edit will break.
+It splits the 512 entries across `vCoreCount` threads as `[t*q, (t+1)*q)` with the last thread absorbing
+`512 % vCoreCount`, so the ranges must keep tiling `[0, 512)` exactly — a gap leaves seeds in the "expected
+output" block and every healthy core then reports `!Fail!`. And its three ISA ladders (AVX-512, AVX2, SSE)
+each have to transform all 16 lanes **exactly once**, in the same pattern in the generation and self-check
+halves: `JobSSE`, `JobAVX2` and `JobAVX512` compute the same function element-wise, so one pass per lane is
+what makes the golden block the same whichever ladder built it, and any disagreement between the two halves
+makes the self-check fail unconditionally and `W` return `-4`.
+
 ### Job kernels: one translation unit per ISA
 
 `CPU_jobs_standard.cpp` (ALU/FPU), `CPU_jobs_SSE.cpp`, `CPU_jobs_AVX.cpp`, `CPU_jobs_AVX512.cpp` each define

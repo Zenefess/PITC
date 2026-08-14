@@ -229,11 +229,13 @@ static void GenerateValues(ptr dataPtr) {
 
    cui32 entries[2] = { MAX_THREADS / (cui32)cfg.sys.vCoreCount, MAX_THREADS % (cui32)cfg.sys.vCoreCount };
 
-   si16  coreNum   = ((cui64(tcfg->threadByte) << 3) + tcfg->threadBit);
-         coreNum   = coreNum * entries[0] + (coreNum ? 0 : entries[1]);
-   csi16 range     = coreNum + entries[0];
-   ui16  i         = 0;
-   cui8  threadBit = 1u << tcfg->threadBit;
+   // The final thread absorbs the remainder, so the ranges tile [0, MAX_THREADS) exactly: no gaps, no overlaps
+   csi16 threadNum  = si16((cui64(tcfg->threadByte) << 3) + tcfg->threadBit);
+   csi16 entryCount = si16(entries[0] + (threadNum == cfg.sys.vCoreCount - 1 ? entries[1] : 0));
+   si16  coreNum    = si16(threadNum * entries[0]);
+   csi16 range      = si16(coreNum + entryCount);
+   ui16  i          = 0;
+   cui8  threadMask = ui8(~(1u << tcfg->threadBit)); // Clears this thread's completion bit, preserving the other 7
 
    for(resultCopy = value[2][coreNum]; coreNum < range; ++coreNum) {
       value[2][coreNum] = value[3][coreNum];
@@ -245,13 +247,13 @@ static void GenerateValues(ptr dataPtr) {
          JobAVX2((fl64x4&)value[3][coreNum]._fl64[0]);
          JobAVX2((fl64x4&)value[3][coreNum]._fl64[4]);
          JobAVX2(value[3][coreNum].avx);
-      } else {
+      } else { // Lanes 0~11 are the AVX-512 and AVX2 windows; lanes 12~15 are covered by the 3 calls below
          JobSSE((fl64x2&)value[3][coreNum]._fl64[0]);
          JobSSE((fl64x2&)value[3][coreNum]._fl64[2]);
          JobSSE((fl64x2&)value[3][coreNum]._fl64[4]);
+         JobSSE((fl64x2&)value[3][coreNum]._fl64[6]);
          JobSSE((fl64x2&)value[3][coreNum]._fl64[8]);
          JobSSE((fl64x2&)value[3][coreNum]._fl64[10]);
-         JobSSE((fl64x2&)value[3][coreNum]._fl64[12]);
       }
       JobSSE(value[3][coreNum].sse);
       JobFPU(value[3][coreNum].fpu);
@@ -266,11 +268,11 @@ static void GenerateValues(ptr dataPtr) {
             JobAVX2((fl64x4&)value[2][coreNum]._fl64[0]);
             JobAVX2((fl64x4&)value[2][coreNum]._fl64[4]);
             JobAVX2(value[2][coreNum].avx);
-         } else {
+         } else { // Must mirror the generation ladder above, lane for lane
             JobSSE((fl64x2&)value[2][coreNum]._fl64[0]);
             JobSSE((fl64x2&)value[2][coreNum]._fl64[2]);
             JobSSE((fl64x2&)value[2][coreNum]._fl64[4]);
-            JobSSE((fl64x2&)value[2][coreNum]._fl64[8]);
+            JobSSE((fl64x2&)value[2][coreNum]._fl64[6]);
             JobSSE((fl64x2&)value[2][coreNum]._fl64[8]);
             JobSSE((fl64x2&)value[2][coreNum]._fl64[10]);
          }
@@ -292,7 +294,7 @@ static void GenerateValues(ptr dataPtr) {
       printf(".");
    }
 
-   _InterlockedAnd8(&((chptr)threadBits)[tcfg->threadByte], threadBit);
+   _InterlockedAnd8(&((chptr)threadBits)[tcfg->threadByte], threadMask);
 
    _endthread();
 }
