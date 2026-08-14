@@ -18,16 +18,16 @@
     <ClCompile Include="CPU.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="CPU jobs%3b standard.cpp">
+    <ClCompile Include="CPU_jobs_standard.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="CPU jobs%3b SSE.cpp">
+    <ClCompile Include="CPU_jobs_SSE.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="CPU jobs%3b AVX.cpp">
+    <ClCompile Include="CPU_jobs_AVX.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="CPU jobs%3b AVX512.cpp">
+    <ClCompile Include="CPU_jobs_AVX512.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -38,10 +38,10 @@
     <ClInclude Include="en-GB.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="CPU methods.h">
+    <ClInclude Include="CPU_methods.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="CPU job cycles.h">
+    <ClInclude Include="CPU_job_cycles.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="translations.h">

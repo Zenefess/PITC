@@ -1,24 +1,35 @@
-/****************************************************************
- * File: typedefs.h                         Created:   Jul.2007 *
- *                                    Last modified: 2025/02/10 *
- *                                                              *
- * Desc: Shorthand type defines & composites, and static        *
- *       constant values of common data-type sizes.             *
- *                                                              *
- * Notes: 2023/05/23: Added SSE & AVX data types                *
- *        2023/06/05: Added ui24 data type                      *
- *        2024/05/02: Added csize_t data type                   *
- *        2024/05/11: Added all (~2) void pointer combinations  *
- *        2024/05/13: Moved ui24 data type to separate file     *
- *        2024/05/18: Added AVX512 vector types                 *
- *        2025/02/10: Added threadfunc type                     * 
- *        2025/02/19: Added ptr to const ptr to const types     *
- *                                                              *
- * MIT license                 Copyright (c) David William Bull *
- ****************************************************************/
+/*
+ * File: typedefs.h
+ * Version: v1.0
+ * Owner: David William Bull
+ * Created: 2007-07-01
+ * Last Modified: 2025-09-26
+ * Description: Shorthand type aliases and composites; scalar width/sign, SIMD vector aliases, and common size constants.
+ * To Do: Add static_assert size/ISA guards for vector aliases.
+ *        Publish "constness legend" and pointer-lattice table.
+ *        Add examples for defpa/refpa casts.
+ *        Wire CPUID dispatch and scalar fallbacks.
+ *        Add microbenchmarks in docs/.
+ * Dependencies: immintrin.h
+ * ISA: Scalar | SSE4.2 | AVX2 | AVX512
+ * Thread-safety: N/A
+ * Reviewers: David William Bull
+ * License: MIT  Copyright: David William Bull
+ */
+
+/******************************************************CHANGELOG***  <- Move to CHANGELOG.md
+ * 2023-05-23: Added SSE & AVX data types                         *
+ * 2023-06-05: Added ui24 data type                               *
+ * 2024-05-02: Added csize_t data type                            *
+ * 2024-05-11: Added all (~2) void pointer combinations           *
+ * 2024-05-13: Moved ui24 data type to separate file              *
+ * 2024-05-18: Added AVX512 vector types                          *
+ * 2025-02-10: Added threadfunc type                              *
+ * 2025-02-19: Added ptr to const ptr to const types              *
+ ******************************************************************/
 #pragma once
 
-#include <intrin.h>
+#include <immintrin.h>
 
 #define _COMMON_TYPES_
 
@@ -181,7 +192,7 @@ typedef void vol   * vol   * const vptrvptrc; // Constant pointer to volatile po
 typedef void       *       * vol   ptrptrv;   // Volatile pointer to pointer
 typedef void const *       * vol   cptrptrv;  // Constant pointer to pointer to constant
 typedef void vol   *       * vol   vptrptrv;  // Volatile pointer to pointer to volatile
-typedef void       * const * vol   ptrcptrv;  // Volatile pointer to constant to pointer
+typedef void       * const * vol   ptrcptrv;  // Volatile pointer to constant pointer
 typedef void const * const * vol   cptrcptrv; // Volatile pointer to constant pointer to constant
 typedef void vol   * const * vol   vptrcptrv; // Volatile pointer to constant pointer to volatile
 typedef void       * vol   * vol   ptrvptrv;  // Volatile pointer to volatile pointer
@@ -192,6 +203,7 @@ typedef void vol   * vol   * vol   vptrvptrv; // Volatile pointer to volatile po
 #ifdef _FILE_DEFINED
 typedef          FILE     *Fptr;
 #endif
+typedef          bool     *boolptr;
 typedef unsigned char     *bptr;
 typedef unsigned short    *wptr;
 typedef unsigned long     *dwptr;
@@ -250,6 +262,7 @@ typedef          wchar_t  *wchptr;
 typedef          wchar_t **wchptrptr;
 
 // Pointer to constant types
+typedef const          bool     *cboolptr;
 typedef const unsigned char     *cbptr;
 typedef const unsigned short    *cwptr;
 typedef const unsigned long     *cdwptr;
@@ -284,14 +297,15 @@ typedef const          wchar_t  *cwchptr;
 typedef const          wchar_t **cwchptrptr;
 
 // Pointers to constant pointers to constant types
-typedef unsigned  __int8 const * const * cui8ptrcptr;
+typedef          bool    const * const * cboolptrcptr;
+typedef unsigned __int8  const * const * cui8ptrcptr;
 typedef unsigned __int16 const * const * cui16ptrcptr;
 typedef unsigned __int32 const * const * cui32ptrcptr;
 typedef unsigned __int64 const * const * cui64ptrcptr;
 typedef          __m128i const * const * cui128ptrcptr;
 typedef          __m256i const * const * cui256ptrcptr;
 typedef          __m512i const * const * cui512ptrcptr;
-typedef   signed  __int8 const * const * csi8ptrcptr;
+typedef   signed __int8  const * const * csi8ptrcptr;
 typedef   signed __int16 const * const * csi16ptrcptr;
 typedef   signed __int32 const * const * csi32ptrcptr;
 typedef   signed __int64 const * const * csi64ptrcptr;
@@ -299,19 +313,20 @@ typedef          __m128i const * const * csi128ptrcptr;
 typedef          __m256i const * const * csi256ptrcptr;
 typedef          __m512i const * const * csi512ptrcptr;
 typedef       __bfloat16 const * const * cfl16ptrcptr;
-typedef            float const * const * cfl32ptrcptr;
-typedef           double const * const * cfl64ptrcptr;
-typedef      long double const * const * cfl80ptrcptr;
-typedef           __m128 const * const * cfl32x4ptrcptr;
-typedef           __m256 const * const * cfl32x8ptrcptr;
-typedef           __m512 const * const * cfl32x16ptrcptr;
+typedef          float   const * const * cfl32ptrcptr;
+typedef          double  const * const * cfl64ptrcptr;
+typedef     long double  const * const * cfl80ptrcptr;
+typedef          __m128  const * const * cfl32x4ptrcptr;
+typedef          __m256  const * const * cfl32x8ptrcptr;
+typedef          __m512  const * const * cfl32x16ptrcptr;
 typedef          __m128d const * const * cfl64x2ptrcptr;
 typedef          __m256d const * const * cfl64x4ptrcptr;
 typedef          __m512d const * const * cfl64x8ptrcptr;
-typedef             char const * const * cchptrcptr;
+typedef          char    const * const * cchptrcptr;
 typedef          wchar_t const * const * cwchptrcptr;
 
 // Constant pointers to types
+typedef          bool     * const boolptrc;
 typedef unsigned  __int8  * const ui8ptrc;
 typedef unsigned  __int8 ** const ui8ptrptrc;
 typedef unsigned __int16  * const ui16ptrc;
@@ -364,6 +379,7 @@ typedef          wchar_t  * const wchptrc;
 typedef          wchar_t ** const wchptrptrc;
 
 // Constant pointers to constant pointers to types
+typedef          bool    * const * const boolptrcptrc;
 typedef unsigned  __int8 * const * const ui8ptrcptrc;
 typedef unsigned __int16 * const * const ui16ptrcptrc;
 typedef unsigned __int32 * const * const ui32ptrcptrc;
@@ -392,6 +408,7 @@ typedef             char * const * const chptrcptrc;
 typedef          wchar_t * const * const wchptrcptrc;
 
 // Constant pointers to constant types
+typedef          bool    const * const cboolptrc;
 typedef unsigned  __int8 const * const cui8ptrc;
 typedef unsigned __int16 const * const cui16ptrc;
 typedef unsigned __int32 const * const cui32ptrc;
@@ -420,6 +437,7 @@ typedef             char const * const cchptrc;
 typedef          wchar_t const * const cwchptrc;
 
 // Constant pointers to constant pointers to constant types
+typedef          bool    const * const * const cboolptrcptrc;
 typedef unsigned  __int8 const * const * const cui8ptrcptrc;
 typedef unsigned __int16 const * const * const cui16ptrcptrc;
 typedef unsigned __int32 const * const * const cui32ptrcptrc;
@@ -448,6 +466,7 @@ typedef             char const * const * const cchptrcptrc;
 typedef          wchar_t const * const * const cwchptrcptrc;
 
 // Pointers to volatile types
+typedef vol          bool     *vboolptr;
 typedef vol unsigned char     *vbptr;
 typedef vol unsigned short    *vwptr;
 typedef vol unsigned long     *vdwptr;
@@ -482,6 +501,7 @@ typedef vol          wchar_t  *vwchptr;
 typedef vol          wchar_t **vwchptrptr;
 
 // Constant pointers to volatile types
+typedef vol          bool     * const vboolptrc;
 typedef vol unsigned char     * const vbptrc;
 typedef vol unsigned short    * const vwptrc;
 typedef vol unsigned long     * const vdwptrc;
@@ -553,5 +573,5 @@ al4 static const int CHI_SIZE = sizeof(_CHAR_INFO);
 #define defp1a1(dataType, dimension1, dimension2, varName) dataType (*varName[dimension1])[dimension2]
 
 #define refpa(dataType, dimension) (dataType (*)[dimension])
-#define refpa2(dataType, dimension1, dimesnion2) (dataType (*)[dimension1][dimension2])
+#define refpa2(dataType, dimension1, dimension2) (dataType (*)[dimension1][dimension2])
 #define refp1a1(dataType, dimension1, dimension2) (dataType (*[dimension1])[dimension2])

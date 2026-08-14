@@ -11,7 +11,7 @@
  ************************************************************/
 #pragma warning(disable:4996)
 
-#include "CPU methods.h"
+#include "CPU_methods.h"
 
 csi32 wmain(csi32 argc, cwchptrc argv[]) {
    al64 declare1d64z(wchar, wstrOutput, 32768);

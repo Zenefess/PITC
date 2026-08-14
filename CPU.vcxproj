@@ -45,6 +45,7 @@
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
+    <EnableASAN>true</EnableASAN>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
@@ -160,18 +161,18 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="CPU jobs%3b AVX.cpp">
+    <ClCompile Include="CPU_jobs_AVX.cpp">
       <EnableEnhancedInstructionSet Condition="'$(Configuration)|$(Platform)'=='Release|x64'">AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
       <Optimization Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Custom</Optimization>
     </ClCompile>
-    <ClCompile Include="CPU jobs%3b AVX512.cpp">
+    <ClCompile Include="CPU_jobs_AVX512.cpp">
       <EnableEnhancedInstructionSet Condition="'$(Configuration)|$(Platform)'=='Release|x64'">AdvancedVectorExtensions512</EnableEnhancedInstructionSet>
       <Optimization Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Custom</Optimization>
     </ClCompile>
-    <ClCompile Include="CPU jobs%3b SSE.cpp">
+    <ClCompile Include="CPU_jobs_SSE.cpp">
       <Optimization Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Custom</Optimization>
     </ClCompile>
-    <ClCompile Include="CPU jobs%3b standard.cpp">
+    <ClCompile Include="CPU_jobs_standard.cpp">
       <EnableEnhancedInstructionSet Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">AdvancedVectorExtensions512</EnableEnhancedInstructionSet>
       <Optimization Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Custom</Optimization>
       <FavorSizeOrSpeed Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Size</FavorSizeOrSpeed>
@@ -179,8 +180,8 @@
     <ClCompile Include="CPU.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="CPU job cycles.h" />
-    <ClInclude Include="CPU methods.h" />
+    <ClInclude Include="CPU_job_cycles.h" />
+    <ClInclude Include="CPU_methods.h" />
     <ClInclude Include="CPU.h" />
     <ClInclude Include="en-GB.h" />
     <ClInclude Include="translations.h" />

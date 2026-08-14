@@ -14,8 +14,8 @@
 #include <windows.h>
 #include <timeapi.h>
 #include <process.h>
-#include <memory management.h>
-#include <class_timers.h>
+#include "memory management.h"
+#include "class_timers.h"
 
 constexpr auto MAX_THREADS       = 512;
 constexpr auto MAX_THREADS_BYTES = (MAX_THREADS + 7) >> 3;
