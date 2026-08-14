@@ -37,17 +37,29 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1, A2, A3, A4, A5, A6, B1, B2, B3 and F1 are fixed** — see the `Fixed` notes on those entries. The counts
-in the table above are as first audited and have not been decremented. A1–A3 restored bit-exact verification
-on the SSE and AVX2 paths and made the summary table able to report an AVX-512 failure; A4–A6 and F1 were the
-false-pass family of Appendix B item 2, where the configuration itself guaranteed that no work was done, or no
-time was spent doing it. Rejecting those configurations also closed **E9** and the sweep half of **E4**, made
-**E10** unobservable, and the documentation they touched closed **K1** and two bullets of **K4**. B1–B3 made
-`W` able to produce a correct `cpu.values` at all: the per-thread ranges now tile the table exactly, the SSE
-ladders cover each of the 16 lanes once, and a finishing thread clears only its own completion bit.
+**A1, A2, A3, A4, A5, A6, A9, A10, B1, B2, B3, C1 and F1 are fixed** — see the `Fixed` notes on those
+entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
+bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
+failure; A4–A6 and F1 were the false-pass family of Appendix B item 2, where the configuration itself
+guaranteed that no work was done, or no time was spent doing it. Rejecting those configurations also closed
+**E9** and the sweep half of **E4**, made **E10** unobservable, and the documentation they touched closed
+**K1** and two bullets of **K4**. B1–B3 made `W` able to produce a correct `cpu.values` at all: the
+per-thread ranges now tile the table exactly, the SSE ladders cover each of the 16 lanes once, and a
+finishing thread clears only its own completion bit.
+
+A9, A10 and C1 are the malformed-`I`-string family, and one pre-flight rule closes all three: a unit
+selection must name at least one processing unit (`-15`) and at most one of FPU/SSE4.1/AVX2/AVX-512 (`-16`).
+That removes the `JobCycle` index overrun, the arena sized in bytes rather than records, the empty results
+table, and the overlapping sub-array seeds together. `JobCycle` was also widened to the full 0–31 index
+domain so the overrun cannot return by another route. The two new exit codes are documented in
+`wstrInstructions_English`, and `wstrMessage_*` grew from 18 entries to 20.
 
 Note that B1–B3 shifted every line in `CPU.h` after 231 down by two, so line citations below that point in
-`CPU.h` — B4, B5, B7 and B8 among them — read two low against the current source.
+`CPU.h` — B4, B5, B7 and B8 among them — read two low against the current source. A9, A10 and C1 shifted
+three more files: `CPU.cpp` by twelve lines (nine of them ahead of the memory-allocation block, so C2–C5 and
+C8–C13 are all below the edits), `CPU_job_cycles.h` by six at the dispatch table, and `en-GB.h` by five.
+Citations into those files read correspondingly low, and several were already stale before these fixes — as
+the preamble says, re-confirm every line number against the current source before acting on an entry.
 
 Every other entry below still stands.
 
@@ -238,7 +250,15 @@ reinterpret pointer values as doubles and print nonsense.
 * **Impact:** the error report — the only place an AVX-512 failure is ever surfaced (A3) — shows meaningless
   numbers, making a real fault impossible to characterise.
 
-### A9. `procUnits & 0x1F` indexes a 24-entry table — **High**
+### A9. `procUnits & 0x1F` indexes a 24-entry table — **High** — *Fixed*
+
+> **Fixed** in two places. `wmain` (`CPU.cpp:450–457`) now rejects a unit selection naming more than one of
+> FPU/SSE4.1/AVX2/AVX-512 with `-16`, so `Ivx` and its relatives are refused before any thread is created.
+> And `JobCycle` is now declared `[2][32]` (`CPU_job_cycles.h:521`), which makes the table total over the
+> `procUnits & 0x1F` domain `ComputationPulse` indexes it with, so no future path that skips the validation
+> can call through the bytes following the table. Entries 24–31 follow the same "only the ALU bit and the
+> widest selected unit matter" rule as the rest of the table and therefore mirror 16–23 — which is what the
+> arena-sizing switch already assumed for those indices, so the two tables now agree on the valid domain.
 
 `CPU_job_cycles.h:492` declares `JobCycle[2][24]`; `CPU_methods.h:24,61,67` index it with
 `tcfg->procUnits & 0x01F`, domain 0–31. Selecting AVX2 *and* AVX-512 together yields index 24–31, reads past
@@ -251,7 +271,15 @@ the end of the table and calls through whatever bytes follow it.
   before dispatch. Note the arena-sizing switch at `CPU.cpp:544–549` *does* handle 24–31, so the two tables
   disagree about the valid domain.
 
-### A10. Selecting no processing unit silently runs the ALU kernel with an un-divided record count — **High**
+### A10. Selecting no processing unit silently runs the ALU kernel with an un-divided record count — **High** — *Fixed*
+
+> **Fixed.** `CPU.cpp:456` rejects a `procUnits` with no processing bit set with `-15`, after the whole
+> command line has been parsed and before the arena is sized or any thread is created. That closes all three
+> consequences at once: no run can be silently promoted to an ALU test, `resArray.records[]` can no longer
+> keep the block size in bytes, and the results table can no longer come out empty. The sizing `switch` also
+> gained the `default:` arm asked for below (`CPU.cpp:542–545`), grouped with the two 8-byte-record cases
+> because index 0 dispatches to `JobCycleMemALU`; it is unreachable while the validation stands, but an
+> index that ever escapes it now still yields a record count rather than a byte count.
 
 `I1`, `I2` or `I3` alone sets only the cache bits, so `procUnits & 0x1F == 0`.
 
@@ -493,7 +521,20 @@ error is silently discarded and a corrupt `cpu.values` is written and reported a
 
 ## C. Memory safety
 
-### C1. Selecting more than one non-ALU unit corrupts the arena seeds — **Critical**
+### C1. Selecting more than one non-ALU unit corrupts the arena seeds — **Critical** — *Fixed*
+
+> **Fixed.** `CPU.cpp:457` rejects a unit selection naming more than one of FPU/SSE4.1/AVX2/AVX-512 with
+> `-16` — the same check that closes A9 — so at most one of `p0`–`p3` is ever seeded and the aliased
+> sub-arrays can no longer overwrite one another. `Iaf` (ALU + FPU) stays legal because `p3` and `p4`
+> address the arena in the same 8-byte units and `case 3` advances `resArray.alu` past the FPU sub-array;
+> every shipped preset, `B` and the default configuration name exactly one non-ALU unit and are unaffected.
+>
+> The other candidate fix — seeding only the sub-array the dispatcher will use — was rejected. It leaves the
+> configuration banner and the results table reporting units the dispatcher never runs, and an un-run unit's
+> row is graded against `value[3]`, which is still the untouched copy of `value[2]` made at `CPU.cpp:487`.
+> That trades a false failure for a false `.Pass.` on silicon that was never exercised, which is the worse
+> of the two defects for an integrity tester. The same reasoning rules out normalising `procUnits` down to
+> the ALU bit and the widest selected unit.
 
 `CPU.cpp:554–565` hands every thread five pointers derived from the *same* arena base with *different*
 element strides, then seeds each sub-array whose bit is set:

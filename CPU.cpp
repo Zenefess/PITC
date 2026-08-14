@@ -447,6 +447,15 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
     return 2;
    }
 
+   // Requested processing unit checks. Both dispatch and arena sizing reduce a unit selection to the ALU bit
+   // and the widest other unit, so a selection naming two of FPU/SSE4.1/AVX2/AVX-512 would seed sub-arrays
+   // that overlap inside the arena, and a selection naming none would size the arena in bytes instead of
+   // records, dispatch an ALU test that was never requested, and print an empty results table
+   cui8 procUnitBits = ui8(cfg.procUnits & 0x01F); // ALU, FPU, SSE4.1, AVX2 and AVX-512
+   cui8 vectorBits   = ui8(cfg.procUnits & 0x01E); // FPU, SSE4.1, AVX2 and AVX-512 are mutually exclusive
+   if(!procUnitBits)                 { wprintf(wstrMessage[18]); return -15; }
+   if(vectorBits & (vectorBits - 1)) { wprintf(wstrMessage[19]); return -16; }
+
    // Requested vector unit checks
    if(cfg.procUnits & 0x04  && !cfg.sys.cpuSSE4_1) { wprintf(wstrMessage[12]); return -11; }
    if(cfg.procUnits & 0x08  && !cfg.sys.cpuAVX2)   { wprintf(wstrMessage[13]); return -11; }
@@ -527,11 +536,11 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
 
       resArray.avx = (fl64x4ptrc)(resArray.avx512 = (fl64x8ptrc)(resArray.p = malloc64(cfg.allocMem[0])));
       resArray.alu = (si64ptrc)(resArray.fpu = (fl64ptrc)(resArray.sse = (fl64x2ptrc)resArray.avx));
+      // 'default' catches a unit selection with no processing bit set. wmain rejects that before reaching
+      // here, so the arm is unreachable; it divides by 8 because index 0 dispatches to JobCycleMemALU, which
+      // walks 8-byte records. Without it, records[] would keep the block size in bytes assigned above
       switch(cfg.procUnits & 0x01F) {
-      case 1:
-         resArray.records[0] /= 8; resArray.records[1] /= 8;
-         break;
-      case 2:
+      default: case 1: case 2:
          resArray.records[0] /= 8; resArray.records[1] /= 8;
          break;
       case 3:
@@ -560,6 +569,9 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          resArray.alu = (si64ptrc)resArray.p + (resArray.records[0] * threadCount[0] + resArray.records[1] * threadCount[1] * 8);
       }
 
+      // resArray.avx512, .avx, .sse and .fpu are four views of one address with different element strides, so
+      // seeding two of them would leave each overwriting the other's records. wmain has already rejected any
+      // selection naming more than one of FPU/SSE4.1/AVX2/AVX-512, so at most one of p0~p3 is written below
       for(k = 0, m = 0; m < 2; ++m)
          for(l = 0, bos = 0; l < threadCount[m]; ++k, ++l, bos += resArray.records[m]) {
             value[1][k].p0 = &resArray.avx512[bos];

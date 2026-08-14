@@ -51,10 +51,11 @@ thread reports `!Fail!`. `W` self-validates by re-running the kernels 65,535 tim
 file on any mismatch.
 
 Exit codes are meaningful and documented in `en-GB.h` (`wstrInstructions_English`): negative = error,
-`0` = stability test completed, `1` = values file written, `2` = instructions displayed. `-11` … `-14` are the
+`0` = stability test completed, `1` = values file written, `2` = instructions displayed. `-11` … `-16` are the
 pre-flight rejections in `wmain` — an unsupported vector unit, more than one `S` pulse shape, a test duration
-of zero or less, and a zero pulse on-time. Add a code and the table in `wstrInstructions_English` and the
-message in `wstrMessage_*` have to grow with it.
+of zero or less, a zero pulse on-time, an `I` string naming no processing unit, and an `I` string naming more
+than one of FPU/SSE4.1/AVX2/AVX-512. Add a code and the table in `wstrInstructions_English` and the message in
+`wstrMessage_*` have to grow with it.
 
 ## Architecture
 
@@ -105,7 +106,7 @@ and the arithmetic is deliberately chosen to be latency-bound and irreducible (c
 multiply/shift/xor/divide for integer). The `ALU_` variants interleave integer and FP ops to load both pipes
 simultaneously. Adding a new unit means adding all eight functions plus its `JobCycle` entries.
 
-### Dispatch: `JobCycle[2][24]`
+### Dispatch: `JobCycle[2][32]`
 
 `CPU_job_cycles.h` wraps each kernel in a `JobCycle*` function that seeds the working values from `value[0]`,
 runs the kernel, compares against `value[2]`, and on mismatch records `value[3]` and calls `Failed()`.
@@ -113,8 +114,14 @@ These are indexed by a **function-pointer table** — `JobCycle[hasMemory][procU
 thread in `ComputationPulse`, so the hot loop has no branching on configuration.
 
 The table's shape encodes a real rule: **only the ALU bit and the widest enabled vector unit matter.** Index 6
-(FPU+SSE) maps to the same `JobCycleSSE` as index 4; indices 8–15 all map to AVX2 variants; 16–23 to AVX-512.
+(FPU+SSE) maps to the same `JobCycleSSE` as index 4; indices 8–15 all map to AVX2 variants; 16–31 to AVX-512.
 The FPU path is only reached when no vector unit is selected.
+
+The table's 32 entries cover the whole `procUnits & 0x1F` index domain, and must keep covering it: the index
+is not range-checked in `ComputationPulse`, so a short table is an indirect call through whatever follows it
+(ISSUES.MD A9). `wmain` separately rejects an `I` string that names two of FPU/SSE4.1/AVX2/AVX-512, which is
+what makes 24–31 unreachable in practice — but the entries stay, because that validation is the only thing
+standing between a hand-built `I` string and a wild jump.
 
 ### Thread lifecycle and scheduling
 
@@ -153,7 +160,14 @@ working over a RAM arena — this is what exercises load/store units and the cac
 `value[1][k].p0..p4`. The `switch(cfg.procUnits & 0x01F)` that computes `resArray.records[]` is the arena
 layout: the divisor is the per-record byte cost of the selected units (8 for ALU-only, 40 for ALU+AVX2, 72 for
 ALU+AVX-512, …), and for the `ALU_` combinations the ALU sub-array is placed *after* the vector sub-array by
-advancing `resArray.alu`. Change the unit set or the record size and this switch must change with it.
+advancing `resArray.alu`. Change the unit set or the record size and this switch must change with it, and keep
+its `default:` arm: without one, an index with no case leaves `records[]` holding the *byte* count assigned
+just above the switch, and each thread then walks eight times its slice (ISSUES.MD A10).
+
+Of the five pointers handed to each thread, `p0`–`p3` are four views of the *same* arena address at different
+element strides (only `p4` is advanced past them, and only for the `ALU_` combinations). The seeding loop must
+therefore write no more than one of them, which is why `wmain` rejects a unit selection naming more than one
+of FPU/SSE4.1/AVX2/AVX-512 (ISSUES.MD C1).
 
 ### Configuration bit-fields
 
@@ -168,6 +182,12 @@ procSync   bit 0 R-R   1 Par   2 Stag     3 T-Sync 4 Constant 5 Fixed pulse  6 S
 Cache bits 5–7 are parsed and displayed but **not implemented** (the README and help text say so explicitly).
 Benchmark mode (bit 7) additionally records each thread's iteration count into `resArray.iter` and prints a
 KUPS score weighted by the vector width.
+
+`procUnits` bits 1–4 select *one* unit: `wmain` rejects a selection carrying more than one of them with `-16`,
+and one carrying none of bits 0–4 with `-15`, both before the arena is allocated. Bit 0 (ALU) is orthogonal and
+stacks with any of them. Dispatch and arena sizing already reduced a wider selection to the ALU bit plus the
+widest other unit, so the extra units never ran: they only corrupted the arena seeds of the unit that did —
+a false `!Fail!` — while their own results row was graded `.Pass.` against silicon never exercised.
 
 `procSync` bits 4–6 are the mutually exclusive timing modes, and each of `T`'s `C`/`F`/`S` sub-options clears
 all three before setting its own — so the last one given wins, and a `T` argument that carries only a duration
@@ -242,9 +262,6 @@ current source before relying on any of these:
 - **Single processor group / 64 virtual cores.** `MAX_THREADS` is 512 and the buffers are sized for it, but
   topology enumeration, the `U` core-map parsing and the affinity mask in `wmain` all assume one 64-bit mask.
   This is the top item on `CPU.cpp`'s To-do list.
-- **`JobCycle` index overrun.** The table has 24 entries but is indexed by `procUnits & 0x1F` (0–31). Selecting
-  AVX2 *and* AVX-512 together (`Ivx`, index ≥24) reads past the end. All shipped presets and `B` stay in
-  range because they set exactly one vector bit; hand-built `I` strings can escape it.
 - **`ThreadsRunningAVX`/`ThreadsRunningSSE` stride bug.** They index `threadBits[0],[2]` and `[0],[1],[2],[3]`
   where a 4-`ui64` (`si256`) and 2-`ui64` (`ui128`) stride requires `[0],[4]` and `[0],[2],[4],[6]`. Windows
   above the first ~320 thread bits go unchecked on non-AVX-512 CPUs. Masked today by the 64-core limit.
