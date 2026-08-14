@@ -51,7 +51,10 @@ thread reports `!Fail!`. `W` self-validates by re-running the kernels 65,535 tim
 file on any mismatch.
 
 Exit codes are meaningful and documented in `en-GB.h` (`wstrInstructions_English`): negative = error,
-`0` = stability test completed, `1` = values file written, `2` = instructions displayed.
+`0` = stability test completed, `1` = values file written, `2` = instructions displayed. `-11` … `-14` are the
+pre-flight rejections in `wmain` — an unsupported vector unit, more than one `S` pulse shape, a test duration
+of zero or less, and a zero pulse on-time. Add a code and the table in `wstrInstructions_English` and the
+message in `wstrMessage_*` have to grow with it.
 
 ## Architecture
 
@@ -126,6 +129,12 @@ the widest of `ThreadsRunningAVX512/AVX/SSE` (`CPU.h`) so the poll itself uses a
 - **Time-synchronised** (bit 3): suppresses the per-thread random start/period jitter (`offset[0..1]`) that is
   otherwise applied to deliberately desynchronise threads.
 
+Bits 0–2 select *one* shape, so `wmain` rejects a `procSync` carrying more than one of them and substitutes
+Parallel when it carries none. The shape `switch` in `ComputationPulse` accordingly treats every value other
+than 1 (R-R) and 4 (Staggered) as Parallel, and adds `startTics` outside the `switch`: `nextTic` starts life as
+a *duration* (`activeTics`), so any path that fails to add the start timestamp leaves the thread comparing a
+QPC reading against a few million tics, permanently asleep — the whole-run idle of ISSUES.MD A4.
+
 ### Memory-backed mode and the arena
 
 Requesting memory (`M`, or any preset) switches every thread from register-resident to `JobMem*` kernels
@@ -150,6 +159,11 @@ procSync   bit 0 R-R   1 Par   2 Stag     3 T-Sync 4 Constant 5 Fixed pulse  6 S
 Cache bits 5–7 are parsed and displayed but **not implemented** (the README and help text say so explicitly).
 Benchmark mode (bit 7) additionally records each thread's iteration count into `resArray.iter` and prints a
 KUPS score weighted by the vector width.
+
+`procSync` bits 4–6 are the mutually exclusive timing modes, and each of `T`'s `C`/`F`/`S` sub-options clears
+all three before setting its own — so the last one given wins, and a `T` argument that carries only a duration
+or a start-up delay leaves the mode untouched. That is what keeps `B Tt120` and `-1 Tt600` constant-load runs
+(ISSUES.MD F1); do not hoist the clear back out to the top of the option's parse loop.
 
 ## Shared headers vendored from an external library
 
@@ -203,7 +217,7 @@ manual. The rules that bite most often when editing here:
 ## Localisation
 
 `translations.h` selects a language by pointing three globals at one header's string tables; `en-GB.h` is the
-only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[15]`
+only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[18]`
 and `wstrInterface_*[13]`, then extending both `translations.h` and the `L` case in `CPU.cpp`.
 
 Note the `L` option's selection logic is inverted (`if(lstrcmpiW(...))` is truthy when the codes *differ*), so

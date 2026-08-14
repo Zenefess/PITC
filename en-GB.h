@@ -20,8 +20,12 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n-6  : Failed to write all correct input values to file"
  "\n-7  : Failed to write all correct output values to file"
  "\n-8  : Invalid filename for results file"
- "\n-8  : Unable to create results file"
- "\n-10 : Failed to write results file\n"
+ "\n-9  : Unable to create results file"
+ "\n-10 : Failed to write results file"
+ "\n-11 : Requested processing unit not supported by the CPU"
+ "\n-12 : More than one thread synchronisation option requested"
+ "\n-13 : Test duration of zero or less requested"
+ "\n-14 : Pulse on-time of zero requested\n"
  "\nCommand-line options   ---   Example: pitc.exe I3x Mc8 Spt Tcd8.0t3600 Ua"
  "\n--------------------"
  "\n B  : Run the benchmark. Options after 'B' override defaults; eg. pitc.exe B Iaf mt1024 !!! CACHE USE NOT YET IMPLEMENTED !!!"
@@ -34,10 +38,10 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      C==Per virtual core, N==Per non-SMT core, S==Per SMT virtual core, T=Total split amongst all virtual cores"
  "\n Ox : Results file output options. A filename can be stacked with any of the remaining options; eg. O[results.txt]16"
  "\n      []=Filename, A=Non-UTF ASCII, 8=UTF-8, 16=UTF-16"
- "\n Sx : Set core synchronisation options. The first three options (P,R,S) can be stacked with the last (T); eg. Spt"
- "\n      P==Parallel, R==Round-robin, S==Staggered, T==Time synchronised"
- "\n Tx : Set timing options. One of the first three options (C,F,T) can be stacked with any of the remaining (D,T,[,]); eg. Tfd1.0t12.5[100]2400"
- "\n      C==Constant, F==Fixed-length pulses, S==Sweeping-length pulses"
+ "\n Sx : Set core synchronisation options. One of the first three options (P,R,S) can be stacked with the last (T); eg. Spt"
+ "\n      P==Parallel, R==Round-robin, S==Staggered, T==Time synchronised                           |  P, R and S are mutually exclusive"
+ "\n Tx : Set timing options. One of the first three options (C,F,S) can be stacked with any of the remaining (D,T,[,]); eg. Tfd1.0t12.5[100]2400"
+ "\n      C==Constant, F==Fixed-length pulses, S==Sweeping-length pulses                            |  The last of C, F and S given is used"
  "\n      Global options: Dx==Set start-up delay, Tx==Set test duration                             |  Replace 'x' with a decimal value; eg. d10.0"
  "\n      Fixed-length pulse options (in milliseconds): [x==Active duration, ]x==Inactive duration  |  Replace 'x' with a whole number; eg. [250"
  "\n      Sweeping-length pulse option (in milliseconds): [x==Cycle duration"
@@ -60,7 +64,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      9==Staggered fixed-width pulsed stress on all virtual cores. 4 hour duration"
  "\n      0==Synchronised fixed-width pulsed stress on all virtual cores, using ALU & SSE code-paths with 2MB memory per core. 1 hour duration\n\n";
 
-cwchptrc wstrMessage_English[15] = {
+cwchptrc wstrMessage_English[18] = {
    L"\nSuccessfully wrote results to \"%s\" file.\n\n",
    L"\n\nNew \"cpu.values\" file generated.\n\n",
    L"\n\n\"cpu.values\" file not found. Generate via 'W' command-line option.\n\n",
@@ -75,7 +79,10 @@ cwchptrc wstrMessage_English[15] = {
    L"\n\nFailed to write results to \"%s\" file.\n\n",
    L"\nSystem processor cores do not support the SSE4.1 instruction set.\n",
    L"\nSystem processor cores do not support the AVX2 instruction set.\n",
-   L"\nSystem processor cores do not support the AVX512F instruction set.\n"
+   L"\nSystem processor cores do not support the AVX512F instruction set.\n",
+   L"\nOnly one of the 'S' options P, R and S can be active; they are mutually exclusive.\n",
+   L"\nTest duration must be greater than zero.\n",
+   L"\nPulse on-time must be greater than zero.\n"
 };
 
 cwchptrc wstrInterface_English[13] = {
