@@ -27,15 +27,15 @@ against the current source before acting.
 | B — Golden-value generation (`W`) | 2 | 1 | 4 | 1 | 8 |
 | C — Memory safety | 1 | 5 | 4 | 3 | 13 |
 | D — Concurrency | 0 | 3 | 5 | 1 | 9 |
-| E — Scheduling and timing | 0 | 2 | 5 | 2 | 9 |
+| E — Scheduling and timing | 0 | 2 | 8 | 2 | 12 |
 | F — Command-line parsing and output | 0 | 4 | 5 | 6 | 15 |
 | G — Topology and scaling | 0 | 4 | 5 | 0 | 9 |
 | H — Build configuration and determinism | 0 | 1 | 4 | 5 | 10 |
 | I — Vendored headers | 0 | 0 | 8 | 6 | 14 |
-| J — Job kernels | 0 | 1 | 3 | 2 | 6 |
-| K — Documentation and localisation | 0 | 0 | 6 | 7 | 13 |
+| J — Job kernels | 0 | 1 | 4 | 2 | 7 |
+| K — Documentation and localisation | 0 | 0 | 6 | 8 | 14 |
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
-| **Total** | **9** | **25** | **52** | **38** | **124** |
+| **Total** | **9** | **25** | **56** | **39** | **129** |
 
 One finding dominates everything else: **on an AVX2 machine the per-cycle result check is a no-op and the
 summary table is also blind (A1, A3).** AVX2 is the unit `B` and every `-N` preset select on non-AVX-512
@@ -640,8 +640,11 @@ A plain read-modify-write on a `vui64` word. Worker threads clear their bits in 
 `_InterlockedAnd8` (`CPU_methods.h:76`). `volatile` orders the accesses but does not make the RMW atomic.
 
 * **Impact:** a worker's clear can be lost, leaving a bit set for a thread that has exited —
-  `while(ThreadsRunning())` at `CPU.cpp:614` then hangs forever. Improbable today because of the 2 s start-up
-  delay, but a genuine race.
+  `while(ThreadsRunning())` at `CPU.cpp:614` then hangs forever. With the default 2 s start-up delay the
+  window is narrow, because no worker reaches its clear until long after the spawn loop finishes. But
+  `Td0` removes the delay, and a short or zero-length test (`PITC.exe Td0 Tt0`, see **A6**) makes workers
+  exit *while the spawn loop is still running* — at which point the lost update is not a rare race but the
+  expected outcome, and the program hangs instead of printing its (already meaningless) pass.
 * **Fix:** set all bits before spawning any thread, or use `_InterlockedOr8` on the byte.
 
 ### D2. Every worker thread mutates one shared `CLASS_TIMER` — **High**
@@ -688,6 +691,11 @@ spans two. Two independent defects follow:
 * **Impact:** on any CPU without AVX-512 this is at best silently incomplete coverage and at worst an
   immediate general-protection fault in `wmain`'s wait loop. `ThreadsRunningAVX512` is unaffected — it only
   views offset 0, which is correctly aligned.
+* **Related sizing confusion:** `CPU.h:122` declares the array as
+  `declare1d64z(vui64, threadBits, MAX_THREADS_BYTES)`. `MAX_THREADS_BYTES` is a *byte* count (64), but the
+  macro's third parameter is an *element* count, so the allocation is 64 × `ui64` = 512 bytes for a structure
+  that needs 64. Harmless over-allocation, but it is the same units mix-up that produces the stride bug above,
+  and it means the buffer's true capacity (4096 thread bits) silently disagrees with `MAX_THREADS`.
 
 ### D4. The SSE fallback poll requires SSE4.1 but is selected without checking for it — **Medium**
 
@@ -863,18 +871,77 @@ therefore `onTime + 900`.
 * **Impact:** `-6` runs a 2 900 ms cycle where its `onTime = 2000` implies 2 000 ms, and `-7` runs 3 400 ms
   rather than 2 500 ms. The two ways of requesting a sweep behave differently.
 
-### E8. Sweep mode begins with a fully idle cycle and never sweeps back down — **Low**
+### E8. The shape of the sweep is undocumented — **Low**
 
 `CPU_methods.h:28` starts `nextTic` at 0, so after the parallel branch adds `startTics` the first iteration
-always takes the sleep branch for a full cycle — 0 % duty. The ramp then increases the duty cycle
-monotonically to 100 % at the end of the run. That is a defensible interpretation of "sweeping", but neither
-the help text (`en-GB.h:43`) nor `CLAUDE.md` says the sweep is one-directional or that it starts idle, and a
-symmetric sweep would exercise more of the C-state transition space.
+takes the sleep branch for a full cycle — 0 % duty — and the ramp then raises the duty cycle monotonically to
+100 % at the end of the run. This is a design choice, not a defect: `CLAUDE.md` describes bit 6 as
+"continuously sweeping the duty cycle rather than holding it fixed", which is what the code does. It is
+recorded here only because neither `CLAUDE.md` nor the help text (`en-GB.h:43`) says the sweep is
+one-directional or that it begins idle, so a user cannot predict from the documentation which duty cycles a
+`-6` or `-7` run will actually visit, or in what order.
 
 ### E9. A zero-length cycle spins — **Low**
 
 `Tf[0]0` gives `cycleTics == 0` and `cycleTime == 0` (`CPU_methods.h:22`), so `nextTic` advances only by the
 jitter and the thread busy-loops on `Sleep(offset[0])` for the whole test.
+
+### E10. The "Fixed pulse" flag is never read by the executor — **Medium**
+
+`procSync` bit 5 is parsed from `Tf` (`CPU.cpp:258`) and printed in the banner (`CPU.cpp:575,580`), but a
+search of `CPU_methods.h`, `CPU_job_cycles.h` and `CPU.h` finds no read of `0x020` anywhere. `ComputationPulse`
+consults bits 0–3 (the sync switch), 4 (Constant), 6 (Sweep) and 7 (Benchmark) only.
+
+* **Impact:** `Tf[250]1750` and a bare `T[250]1750` produce byte-identical runs, yet only the first prints
+  `F-P` in the sync column — the banner and the saved results file assert a mode the executor does not
+  implement. Conversely, dropping `Tf` from a command line changes nothing, so a user debugging why their
+  pulse settings "did not apply" has no way to tell from the output that the flag is inert. Fixed-pulse
+  behaviour is really just "neither Constant nor Sweep", which nothing states.
+
+### E11. Thread deadlines are computed from a clock snapshot taken before the arena is allocated — **Medium**
+
+`CPU.cpp:478` calls `timer.Update()`, and it is the last such call before the worker threads are configured.
+Between that snapshot and `CPU.cpp:595`, `wmain` allocates the arena (`:517`) and runs the seeding loop
+(`:552–566`), which writes every byte of it. Then:
+
+```cpp
+threadData[d].startTics = timer.siFrequency * cfg.delayTime / 1000 + timer.siCurrentTics;
+threadData[d].endTics   = threadData[d].startTics + cfg.tics;
+```
+
+`timer.siCurrentTics` is stale by however long the allocation and seeding took — hundreds of milliseconds for
+`Mc8` across many threads, and far longer for a multi-gigabyte request.
+
+* **Impact:** the start-up delay is silently consumed by the seeding pass, and once seeding exceeds
+  `delayTime` the computed `startTics` is already in the past, so the wait loop at `CPU_methods.h:54–57` falls
+  through immediately and threads begin unsynchronised. `endTics` shifts earlier by the same amount, so the
+  test also runs *shorter* than the requested duration by the seeding time.
+* **Fix:** call `timer.Update()` immediately before the spawn loop.
+
+### E12. The benchmark score's unit weight and iteration accounting are both wrong — **Medium**
+
+`CPU.cpp:653`:
+
+```cpp
+c += swprintf(&wstrOutput[c], wstrInterface[10],
+              accum * max(si64((cfg.procUnits & 0x01F) >> 1), 1) / (cfg.tics / timer.siFrequency) >> 10);
+```
+
+Two independent accounting errors, on top of the division by zero already recorded as **E4**:
+
+* The weight `(procUnits & 0x1F) >> 1` is an arithmetic accident of the bitfield, not a vector width. It
+  yields the intended 2 / 4 / 8 only for the exact combinations `B` installs (`0x05`, `0x09`, `0x11`). Any
+  other selection produces a meaningless multiplier — `Iasv` gives 6, a width no unit has, while the run
+  actually executes the AVX2 kernel that `JobCycle` selected. The score is derived from what was *requested*
+  rather than from what was *dispatched*.
+* `accum` sums `j`, the loop-iteration counter from `CPU_methods.h:63`. One iteration is **four** records in
+  memory-backed mode (every `JobCycleMem*` processes `offset … offset+3`) but **one** in register mode, so
+  scores from `B` (memory-backed) and from a register-mode run differ by a factor of four in units, not in
+  performance. `j` also counts sleep iterations, which is harmless for `B` because it sets the Constant bit,
+  but wrong for any pulsed run that reaches this code.
+
+* **Impact:** KUPS figures are not comparable between configurations, and the published benchmark number is
+  only meaningful for the exact default `B` invocation.
 
 ---
 
@@ -1068,6 +1135,11 @@ filename** path, which `en-GB.h:22` documents as a distinct condition, and no fi
 The `%s` argument is `wstrOut`, which `lstrcpynW` has just failed to populate — as a zero-initialised global it
 prints as an empty string. The message the user sees names neither the problem nor the input that caused it.
 
+The branch is also unreachable in practice: `lstrcpynW` returns NULL only on failure, and an empty filename is
+not a failure. `PITC.exe O[]` gives `d == c == 2`, so the call copies zero characters, null-terminates, and
+returns a valid pointer. `wstrOut[0]` is then 0, the guard at `CPU.cpp:481` is false, and the run completes
+with **file output silently disabled** — no file, no warning, exit code 0.
+
 ### F15. `system("pause")` makes the no-argument path hang outside an interactive console — **Low**
 
 `CPU.cpp:444`:
@@ -1115,8 +1187,11 @@ On a CPU with no SMT, `cfg.sys.SMT` is never assigned (`CPU.cpp:38–42` only wr
 
 * **Trigger:** `Uo` or `Ue`, and presets `-1`, `-3`, `-4`, `-6`, `-8` (all set `cfg.SMTLoad = 2`), on any
   non-SMT CPU — most Intel i5 desktop parts of several generations, all E-core-only parts, and many VMs.
-* **Impact:** the core map is computed from undefined values; the likely outcome is an empty map, which then
-  divides by zero at `CPU.cpp:499` or spawns no threads at all.
+* **Impact:** the core map is computed from undefined values. With a memory request the empty map divides by
+  zero at `CPU.cpp:499`; without one, `threadCount[2]` is 0, the spawn loop at `CPU.cpp:592` runs zero times,
+  `ThreadsRunning()` is immediately false, and `wmain` prints an empty results table and returns **0** —
+  documented in `en-GB.h:15` as "Successul completion of stability test". A CPU that was never tested at all
+  reports success.
 
 ### G2. `SetSMTLoading` deselects every non-SMT core — **High**
 
@@ -1152,8 +1227,18 @@ cfg.sys.groupCount = ((cfg.sys.coreCount[0] + cfg.sys.coreCount[0] + 63) >> 6) +
 
 The second term should be `coreCount[1]` (SMT physical cores); as written the SMT count is excluded entirely
 and the non-SMT count doubled. `groupCount` drives the loops at `CPU.cpp:72,472,582` and `SetSMTLoading`
-(`CPU.h:164,172`). On a conventional SMT CPU `coreCount[0]` is 0, the expression yields 1, and everything works
-by accident — but it is wrong for a non-SMT CPU with more than 32 cores and for every hybrid part.
+(`CPU.h:164,172`).
+
+On a conventional SMT CPU `coreCount[0]` is 0, so the expression yields `(63 >> 6) + 1` = 1 and everything
+works by accident. But the trailing `+ 1` means that **as soon as `coreCount[0]` reaches 1, `groupCount`
+becomes 2** — while only `cfg.coreMap[0]` and `cfg.sys.coreMap[*][0]` are ever populated, because the writer
+at `CPU.cpp:36–37` indexes them with `procGroup`, which is initialised to 0 at `CPU.cpp:26` and never
+assigned again. Five loops then iterate over a second group that is entirely zero.
+
+That is what makes **G1**'s shift-by-64 reachable on hardware that *does* have SMT: on a hybrid P/E-core part
+`coreCount[0]` counts the E-cores, so `groupCount` is 2, and `SetSMTLoading`'s second iteration scans an
+all-zero `coreMap[1][1]`, runs `k` to 64, and executes `mask <<= 64`. The banner at `CPU.cpp:582–586` also
+prints a second, all-dots thread-bitmap row for a processor group that does not exist.
 
 ### G5. The affinity mask restarts at bit 0 for the SMT pass — **Medium**
 
@@ -1455,9 +1540,11 @@ by PITC, so nothing here is live today — but the header is shared, and these a
   a 64-byte alignment with a 128-bit pattern, which is safe.
 * `mzero` (`:388`) picks its store width from the byte *count* rather than the address alignment, so a
   64-byte-multiple length at a 16-byte-aligned address selects an aligned 512-bit store.
-* `RoundUpToNearest*` (`common functions.h:191–210`) wraps to 0 on near-maximum inputs with no guard, and is
-  what sizes every `declare*`/`zalloc*` allocation — an overflow there produces a zero-byte buffer that the
-  caller treats as full size. PITC's sizes are small enough that this cannot trigger today.
+* `RoundUpToNearest*` (`common functions.h:191–210`) wraps to 0 for inputs above `2^64 - 64`, with no guard,
+  and it sizes every `declare*`/`zalloc*` allocation — an overflow there yields a zero-byte buffer the caller
+  treats as full size. Note this does **not** reach the arena: `malloc64` (`memory management.h:46`) passes
+  its byte count straight to `_aligned_malloc`, so `cfg.allocMem[0]` never touches this code. The only PITC
+  call that does is `zalloc1d64(si64, cfg.sys.vCoreCount)` at `CPU.cpp:93`, about 2^61 short of wrapping.
 * `mfree(pointer, ...)` (`:350`) expands to `mdealloc_(p, , -1ll)` when given a single pointer — a syntax error
   under a conforming preprocessor. PITC's only call passes two.
 * `mdealloc_` (`:366`) stops reporting results past 64 pointers as `ptrBit` shifts out, and the
@@ -1473,9 +1560,6 @@ by PITC, so nothing here is live today — but the header is shared, and these a
   duplicate of `al2`. Not used by PITC.
 * `typedefs.h:44` — `#define vol volatile` leaks a lowercase object-like macro into every translation unit that
   includes it, which is all five.
-* `typedefs.h:63–72` — `ui128`/`si128`, `ui256`/`si256` and `ui512`/`si512` are all the same underlying type,
-  so the sign in the alias name carries no type information and cannot be relied on for overload resolution —
-  relevant to `ThreadsRunning*` (D3), which mixes the two spellings for the same storage.
 * `typedefs.h:117` — eleven derived `fl80` aliases exist with no base `fl80` alias; `:193` has a comment
   describing the wrong type; `:551` declares size constants as bare `int`, contrary to GCS r1.
 * `vector structures.h` — several unions do not have the size or lane coverage their names imply
@@ -1570,6 +1654,41 @@ sources shows they *are* consistent today: the four ALU constant groups `789/13+
 `791/14+502 … /9 −294941`, `789/13+501 … /7 −294939`, `787/11+500 … /5 −294937` appear in the same order in
 every variant, and the trailing post-loop multiply matches). Nothing enforces that, and B5 shows `W` does not
 check it either. A single shared macro or template would remove the class of defect entirely.
+
+### J7. The floating-point kernels absorb most single-ULP transient faults — **Medium**
+
+Each FP step is `x = sqrt(k) / (abs(1.0 - sqrt(sqrt(x / c))) + e)` (`CPU_jobs_standard.cpp:34–37`, and the
+same arithmetic in the SSE, AVX2 and AVX-512 units). The nested `sqrt(sqrt(...))` is a fourth root, whose
+derivative damps a *relative* perturbation by roughly 4× each time it is applied. A one-ULP error injected
+mid-chain is therefore usually driven back below the rounding threshold by the steps that follow it, and
+vanishes before the comparison ever sees it.
+
+I transcribed `JobFPU` and `JobALU` into IEEE-754 double arithmetic and injected a single bit flip at each of
+the 256 chain steps, across 12 random seeds of the form `W` generates, measuring how often the flip changes
+the final compared value:
+
+| Kernel | Flipped bit | Faults detected | Faults silently absorbed |
+|--------|-------------|----------------:|-------------------------:|
+| FPU | mantissa LSB (1 ULP) | **18.9 %** | **81.1 %** |
+| FPU | mid mantissa (bit 26) | 100 % | 0 % |
+| FPU | mantissa MSB (bit 51) | 100 % | 0 % |
+| FPU | exponent (bit 62) | 100 % | 0 % |
+| ALU | integer LSB | 99.7 % | 0.3 % |
+| ALU | mid word (bit 31) | 100 % | 0 % |
+
+* **Scope:** this affects only the smallest perturbation class. Any error beyond one ULP is caught reliably,
+  and a *persistent* fault (a stuck bit, a bad divider) corrupts every iteration and will show. What is
+  largely invisible is the single-event upset in the low mantissa bit — which is precisely the silent-data-
+  corruption signature that idle-stability testing exists to find, and the ALU kernel catches it 5× more
+  often than the FP kernels do.
+* **Interaction:** this is the *floor* on FP sensitivity after **A1** and **A2** are fixed. Until they are,
+  the AVX2 figure is 0 % for every bit position, not 18.9 %.
+* **Caveat:** measured in Python, whose `sqrt` and division are IEEE-754 correctly rounded as MSVC's are; the
+  trailing `x * (x * 1.0101… + 0.00021)` was not FMA-contracted, which does not affect sensitivity. Worth
+  re-measuring against the real binary before acting.
+* **Fix:** if transient-fault sensitivity matters more than the current arithmetic's latency-bound property,
+  add a step that is expansive rather than contracting — accumulating each intermediate into a running
+  checksum lane would preserve every perturbation without changing the instruction mix.
 
 ---
 
@@ -1686,6 +1805,18 @@ deviations, none of which affects behaviour:
   path and forks at compile time per translation unit. That is a reasonable choice for this program, but it is
   an unmarked deviation from the standard the project claims to follow.
 
+### K14. Declarations that misdescribe the program's actual behaviour — **Low**
+
+* `CPU.h:46–47` gives `GLOBAL_CFG` in-class defaults of `procUnits = 0x04` (SSE) and `procSync = 0x02A`
+  (parallel + synchronised + fixed pulse). `CPU.cpp:83–84` overwrites both before any argument is read, with
+  `0x012` (parallel + constant) and `0x03` (ALU + FPU). The header's values are dead and describe a different
+  program from the one that runs — a reader checking "what does PITC do by default" from the struct gets the
+  wrong answer for both fields.
+* `THREAD_CFG::packetSizeRAM` (`CPU.h:55`) is commented "Amount of RAM (in bytes) to utilise per pulse" but is
+  written with the whole-run per-thread block size (`CPU.cpp:594`) and never read by anything.
+  `THREAD_CFG::maxTics` (`:58`) is likewise written (`CPU.cpp:597`) and never read, and `records32` (`:67`)
+  aliases only the low 32 bits of a 48-bit record count and is unused.
+
 ---
 
 ## L. Project process
@@ -1720,6 +1851,9 @@ verified by execution rather than by reading.
 | `PITC.exe Spr Tf[250]1750` | Threads never compute; prints `.Pass.` after idling (**A4**) |
 | `PITC.exe Tf[0]1000` | Zero work performed; prints `.Pass.` (**A5**) |
 | `PITC.exe Tt0` / `Tt-5` / `Tt` | Test ends before it starts; prints `.Pass.`, exit code 0 (**A6**) |
+| `PITC.exe Td0 Tt0` | Workers exit while the spawn loop is still running; the lost-update race hangs `wmain` (**D1**) |
+| `PITC.exe O[]` | File output silently disabled — no file, no warning, exit code 0 (**F14**) |
+| `PITC.exe Tf[250]1750` vs `T[250]1750` | Identical runs; only the first claims `F-P` in the banner (**E10**) |
 | `PITC.exe B Tt120` / `PITC.exe -1 Tt600` | Constant stress silently becomes a 10 % duty pulse (**F1**) |
 | `PITC.exe Iasv Mc8` (two vector units) | Wrong seeds; `!Fail!` on healthy hardware (**C1**) |
 | `PITC.exe Ivx` | Reads past the end of `JobCycle[2][24]` (**A9**) |
@@ -1736,7 +1870,8 @@ verified by execution rather than by reading.
 | `PITC.exe Mc65536` / `Mc-1` | Null-pointer crash with no diagnostic (**C5**) |
 | `PITC.exe Mn8 Ua` / `Ms8 Ua` | Threads silently drop out of memory-backed mode (**C9**) |
 | Any `Mc*` run with ALU + a vector unit | Each thread overruns its arena slice by up to 3 records (**C4**) |
-| `-1`/`-3`/`-4`/`-6`/`-8` on a CPU without SMT | Undefined shift in `SetSMTLoading`; likely an empty core map (**G1**) |
+| `-1`/`-3`/`-4`/`-6`/`-8` on a CPU without SMT | Undefined shift in `SetSMTLoading`; zero threads, empty table, **exit code 0** (**G1**) |
+| Any run on a hybrid P/E-core CPU | `groupCount` becomes 2 for a single populated group, so `SetSMTLoading` shifts by 64 (**G4**) |
 | `-1`/`-3`/`-4`/`-6`/`-8` on a hybrid P/E CPU | Every E-core silently deselected (**G2**) |
 | Any run on a CPU with SSE2 but not SSE4.1 | Illegal instruction in `ThreadsRunningSSE` before the test starts (**D4**) |
 | Debug build on a non-AVX-512 CPU | Illegal instruction in the scalar ALU/FPU path (**H1**) |
@@ -1754,7 +1889,8 @@ verified by execution rather than by reading.
 7. **A7, D1, D2, D3, D5** — the concurrency set; A7 corrupts the report exactly when it matters most.
 8. **H1, H2, B6** — pin the floating-point model, stop the Debug/Release divergence, and version the
    `cpu.values` format so a toolchain change can never be mistaken for a hardware fault.
-9. **J1, J2, B5** — decide the intended ALU shift behaviour, move the chains to unsigned arithmetic, and
+9. **J1, J2, J7, B5** — decide the intended ALU shift behaviour, move the chains to unsigned arithmetic,
+   consider whether the FP kernels' 1-ULP blindness is acceptable, and
    extend `W` to validate the `JobMem*` and `JobALU_*` kernels; regenerate golden values once, together.
 10. **G1, G2, G4, G6** — topology correctness, then **G3** to lift the 64-core ceiling.
 11. **F2–F15** — the parser and output set.
