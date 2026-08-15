@@ -25,11 +25,17 @@ constexpr auto MAX_THREADS_BYTES = (MAX_THREADS + 7) >> 3;
 // with MAX_THREADS. It is the same units mix-up that produced the stride bug in the ThreadsRunning* polls
 constexpr auto MAX_THREADS_WORDS = (MAX_THREADS_BYTES + 7) >> 3;
 
-al32 struct GLOBAL_CFG { // 96 bytes
+al32 struct GLOBAL_CFG { // 104 bytes
    struct _C_D_ { ui32 L1Code, L1Data, L2; };
    struct {
       struct {
          declare2d64z(ui64, coreMap, 2, MAX_THREADS); // Bitmaps of available virtual cores; 0=Non-SMT cores, 1=SMT cores
+         // One bit per physical core, taken from the sibling mask the enumeration reports for that core: its
+         // lowest set bit, and its highest. A physical core without SMT sets the same bit in both maps, so
+         // "one virtual core per physical core" keeps it either way. SetSMTLoading masks with one of these
+         // rather than rebuilding the sibling layout from a core count and a stride, which is what excluded
+         // every non-SMT core and shifted by 64 on a CPU reporting no SMT at all (ISSUES.MD G1, G2)
+         declare2d64z(ui64, coreSibling, 2, MAX_THREADS); // Bitmaps of one virtual core per physical core; 0=First, 1=Last
          _C_D_ cache[2];     // Sizes of L1 code & data and L2 caches; 0=Non-SMT cores, 1=SMT cores
          ui32  cacheL3;      // Size of L3 cache per core complex
          si16  coreCount[2]; // Number of physical cores: 0==Non-SMT, 1==SMT
@@ -53,7 +59,7 @@ al32 struct GLOBAL_CFG { // 96 bytes
    ui8  SMTLoad     = 0;        // Only utilise the specified virtual core(s) of each active physical core; 0=Unchanged, 1=First, 2=Last, 3=All
    ui8  memConfig   = 0;        // 0=Total equally split, 1=Per core, 2=non-SMT/SMT split
 
-   ~GLOBAL_CFG(void) { mfree(coreMap, sys.coreMap); }
+   ~GLOBAL_CFG(void) { mfree(coreMap, sys.coreMap, sys.coreSibling); }
 }; typedef GLOBAL_CFG *const GLOBAL_CFGptrc;
 
 al64 struct THREAD_CFG { // 64 bytes
@@ -504,29 +510,58 @@ static void PulseWaitUntil(cHANDLE hTimer, csi64 targetTics) {
 }
 //--- High-resolution pulse timing ---//
 
-// Force 1 thread per SMT core
+//--- Processor topology ---//
+
+/// Isolates the lowest set bit of a bitmap
+/// @param mask Bitmap to scan
+/// @return The lowest set bit of mask; 0 if mask is empty
+static inline cui64 LowestSetBit64(cui64 mask) { return mask & (~mask + 1ull); }
+
+/// Isolates the highest set bit of a bitmap. The smear-down-and-subtract form is branchless and defined for
+/// every input, an empty mask included, where a bit-scan intrinsic leaves its index operand untouched
+/// @param mask Bitmap to scan
+/// @return The highest set bit of mask; 0 if mask is empty
+static inline cui64 HighestSetBit64(cui64 mask) {
+   ui64 smear = mask;
+
+   smear |= smear >> 1;   smear |= smear >> 2;    smear |= smear >> 4;
+   smear |= smear >> 8;   smear |= smear >> 16;   smear |= smear >> 32;
+
+   return smear - (smear >> 1);
+}
+
+/// Applies the SMT loading policy to the core map: a cfg.SMTLoad of 1 keeps the first virtual core of each
+/// physical core, 2 the last, 3 adds every virtual core of each active physical core, and 0 leaves the map
+/// as the enumeration and any 'U' argument left it.
+///
+/// The two one-virtual-core policies were a single 'default' arm that built its mask arithmetically -- one
+/// bit per cfg.sys.coreCount[1] entry, spaced cfg.sys.SMT apart, shifted up to the first set bit of the SMT
+/// core map -- and ANDed it over the whole map. Three things were wrong with that. The mask described SMT
+/// physical cores only, so the AND cleared every non-SMT core: on a hybrid part "one thread per physical
+/// core" tested the P-cores and silently ignored every E-core, while the banner still reported the full
+/// bitmap (ISSUES.MD G2). On a CPU reporting no SMT at all, cfg.sys.SMT is 0, so the "last sibling" shift
+/// count was ui64(0 - 1) and the scan over an all-zero map ran to 64 -- two undefined shifts, from which
+/// the core map was then built (G1). And the scan could only ever yield 0 or 64, because any non-zero map
+/// is non-zero shifted right by zero, so it never found the offset it was written to find (G7).
+/// Masking with the per-core sibling bitmaps the enumeration records needs none of that arithmetic: it is
+/// exact for hybrid parts, for non-SMT parts, and for any virtual core numbering the OS reports
 static void SetSMTLoading(void) {
-   ui8 i = 0, j, k;
+   ui8 i, j;
 
    if(!cfg.SMTLoad) return;
 
    switch(cfg.SMTLoad) {
    case 3: // Use all virtual cores
-      for(ui8 i = 0; i < cfg.sys.groupCount; ++i)
+      for(i = 0; i < cfg.sys.groupCount; ++i)
          for(j = 0; j < cfg.sys.SMT; ++j)
             cfg.coreMap[i] |= (cfg.coreMap[i] << j) & cfg.sys.coreMap[1][i];
       break;
-   default: // Use one virtual core
-      ui64  mask;
-      cui64 shift = cfg.SMTLoad == 2 ? ui64(cfg.sys.SMT - 1) : 0;
-      cui64 mask0 = mask = 0x01ull << shift;
-      while(i < cfg.sys.groupCount) {
-         for(j = 1; j < cfg.sys.coreCount[1]; ++j) mask = (mask << cfg.sys.SMT) + mask0;
-         for(k = 0; k < 64 && cfg.sys.coreMap[1][i] >> k == 0; ++k);
-         cfg.coreMap[i++] &= (mask <<= k);
-      }
+   case 1: // Use the first virtual core of each physical core
+   case 2: // Use the last virtual core of each physical core
+      for(i = 0; i < cfg.sys.groupCount; ++i) cfg.coreMap[i] &= cfg.sys.coreSibling[cfg.SMTLoad - 1][i];
    }
 }
+//--- Processor topology ---//
 
 // Print computational failure data
 static void Failed(cui64 coreNum, vchptrc threadByte, cui8 unit) {
