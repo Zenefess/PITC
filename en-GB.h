@@ -45,7 +45,8 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n Lx : Set interface language."
  "\n      Recognises ISO 639-1 language codes; eg. Len-GB"
  "\n Mx : Set amount of memory to utilise during test. Values are in MebiBytes; eg. Mt128"
- "\n      C==Per virtual core, N==Per non-SMT core, S==Per SMT virtual core, T=Total split amongst all virtual cores"
+ "\n      C==Per virtual core, N==Per first-class core, S==Per second-class virtual core, T=Total split amongst all virtual cores"
+ "\n         The two core classes are the CPU's non-SMT and SMT cores; on a hybrid CPU they are its efficiency and performance cores"
  "\n Ox : Results file output options. A filename can be stacked with any of the remaining options; eg. O[results.txt]16"
  "\n      []=Filename, A=Non-UTF ASCII, 8=UTF-8, 16=UTF-16"
  "\n Sx : Set core synchronisation options. One of the first three options (P,R,S) can be stacked with the last (T); eg. Spt"
@@ -60,6 +61,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n         Format for core utilisation map is: ','/'.'/'_'==Core disabled, Any other character==Core enabled"
  "\n      A==Forces utilisation of every virtual core of each active physical core"
  "\n      E==Only utilise the first virtual core of each active physical core, O==Only utilise the last virtual core of each active physical core"
+ "\n         A physical core carrying a single virtual core is kept by both; on a hybrid CPU that is every efficiency core"
  "\n W  : Write new \"cpu.values\" file."
  "\n      File will only be created if the integrity of the results pass 65,536 iterations."
  "\n -x : Configuration presets. By default will use the ALU & the largest vector unit, and 8MB memory per core."
@@ -74,7 +76,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      9==Staggered fixed-width pulsed stress on all virtual cores. 4 hour duration"
  "\n      0==Synchronised fixed-width pulsed stress on all virtual cores, using ALU & SSE code-paths with 2MB memory per core. 1 hour duration\n\n";
 
-cwchptrc wstrMessage_English[34] = {
+cwchptrc wstrMessage_English[35] = {
    L"\nSuccessfully wrote results to \"%s\" file.\n\n",
    L"\n\nNew \"cpu.values\" file generated.\n\n",
    L"\n\n\"cpu.values\" file not found. Generate via 'W' command-line option.\n\n",
@@ -108,7 +110,10 @@ cwchptrc wstrMessage_English[34] = {
    L"\n\nThe %s kernel does not agree with the register-resident kernel for its unit. \"cpu.values\" not written.\n\n",
    L"\nUnable to enumerate the processor topology of the system; error code %u.\n\n",
    L"\nThe system reported no processor cores; there is nothing to test.\n\n",
-   L"\nWARNING: The system has %d virtual cores; this build tests at most %d, so %d will not be tested.\n"
+   L"\nWARNING: The system has %d virtual cores; this build tests at most %d, so %d will not be tested.\n",
+   L"\nHybrid CPU: %d performance core(s) at %d-way SMT, and %d efficiency core(s) at %d-way SMT.\n"
+    "  The two core classes are those rather than non-SMT and SMT cores, so 'Mn' and the first cache record\n"
+    "  describe the efficiency cores, and 'Ms' and the second describe the performance cores.\n"
 };
 
 cwchptrc wstrInterface_English[13] = {

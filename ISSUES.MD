@@ -37,7 +37,7 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1–A7, A9, A10, B1, B2, B3, B5, B6, C1–C7, C11, D1, D2, D3, D5, E1, E2, F1, G1–G7, H1, H2,
+**A1–A7, A9, A10, B1, B2, B3, B5, B6, C1–C7, C11, D1, D2, D3, D5, E1, E2, F1, G1–G7, G9, H1, H2,
 H7, J1, J2 and J7 are fixed** — see the
 `Fixed` notes on those entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
 bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
@@ -299,7 +299,35 @@ updated to match — its exit-code and thread-lifecycle sections describe the gr
 cursor and the `MAX_THREADS` refusal, and the known-constraints bullet that named the 64-core ceiling is
 replaced by two, one on the ceiling that remains at 512 and one on `Uc`/`Ut`.
 
-**G9 is now the last topology entry open**, and G8's remaining half with it.
+G9 is the entry the other eight were being described in the wrong words by, and its fix is one function:
+`CoreClass` (`CPU.h:583`). The program splits everything two ways — two core maps, two sibling bitmaps, two
+cache records, two memory sizes, two passes of the spawn loop — and the split came from a core's own sibling
+count, so it read "non-SMT / SMT" and meant "efficiency / performance" on every hybrid part. The rule is now
+the OS's `EfficiencyClass` wherever a machine reports more than one, and the sibling count only where it
+reports one; `cfg.sys.hybrid` records which applied, `cfg.sys.SMT` becomes `SMT[2]` so a hybrid part's two
+classes stop sharing one width, and the walk becomes three passes (`WalkTopology`) because the classification
+has to be settled before any core is filed and a cache can only be filed once the maps it names are built.
+**The class assignment on an Intel P/E part with SMT enabled is unchanged** — the sibling count sorted those
+correctly and only misnamed them. What changes is the machines it could not sort at all: the same part with
+SMT disabled in firmware, and a hybrid part whose classes share an SMT width, both of which used to put every
+core in one class. One message is added, `wstrMessage[34]`, naming the two classes on a hybrid CPU; it is a
+notice rather than an exit code, so `wstrInstructions_English` gains no row, though its `M` and `U` entries
+and `README.md` now say what a core class is. No job kernel is touched, so **`cpu.values` does not need
+regenerating**.
+
+**G8's remaining half is taken next**, in the commit that follows this one: with the classification correct,
+`SetSMTLoading`'s "use all virtual cores" arm is the last thing in the topology code still reasoning about
+cores by a stride.
+
+Two files moved. `CPU.h` gained 116 — 833 now 949 — sixteen in and above `GLOBAL_CFG` at `:34`, for the
+core-class note and the per-class SMT widths, and 100 at `:555` for `CoreClass`, `WalkTopology` and the
+three-pass `EnumerateTopology`; a citation therefore reads 16 low from `:34` to `:554` and 116 low below
+that — `SetSMTLoading`, `Failed()`, `Evaluate` and `GenerateValues`, and so A7, B4, B5, B7 and B8, on top of
+every earlier shift. `en-GB.h` gained five, two in the option reference and three at the end of the message
+array, 34 entries now 35. `CPU.cpp` is unchanged in length; only its comments moved. `CLAUDE.md` and
+`README.md` were updated to match — `CLAUDE.md`'s thread-lifecycle section describes `CoreClass` and the
+three passes, and the known-constraints bullet that named G9 as live now says what the classes mean and that
+`Mn`/`Ms` keep their spelling.
 
 Every other entry below still stands.
 
@@ -2079,7 +2107,54 @@ substantively, the statement reads `cfg.coreMap[i]` while writing it, so each it
 smeared* map: for `SMT == 4` the accumulated shift exceeds the intended sibling span. The `j == 0` iteration is
 also a no-op.
 
-### G9. Hybrid P/E-core CPUs are misclassified — **Medium**
+### G9. Hybrid P/E-core CPUs are misclassified — **Medium** — *Fixed*
+
+> **Fixed** by asking the OS the question the sibling count was standing in for. `CoreClass` (`CPU.h`) files a
+> physical core by its `EfficiencyClass` on any machine reporting more than one of them — the most performant
+> tier is class 1 and every lower tier class 0, so a three-tier part collapses onto the two classes this
+> program has — and by its sibling count on any machine reporting one, which is the property that describes
+> that machine. `EfficiencyClass` is 0 for every core of a non-hybrid CPU, so the fallback is exact rather
+> than approximate, and both rules order the classes the same way round: class 1 is the wider core.
+>
+> Reading `EfficiencyClass` before filing anything is what makes the walk three passes (`WalkTopology`).
+> No single record can say whether the machine is hybrid, the maps cannot be built until that is decided, and
+> the third pass exists for the sentence in this entry about caches: a cache is now filed under the class of
+> the cores *its own mask names*, read from the finished maps, rather than under `PopulationCount64(mask) > 1`.
+> That was a different question with a coincidentally similar answer — the L2 of a four-core E-core cluster
+> counted 4 and was filed as a performance-core cache, and on a CPU with no SMT at all every shared cache in
+> the machine was filed under a class holding no cores.
+>
+> `cfg.sys.SMT` is now `SMT[2]`, the widest sibling count of each class, which is the entry's last clause: one
+> machine-wide maximum described a hybrid part's efficiency cores as being as wide as its performance cores,
+> and every reader of it took it for the width of whichever class it was asking about. Each is normalised to
+> 1 rather than 0 for the reason G1 gives.
+>
+> **On an Intel P/E part with SMT enabled the class assignment does not change** — the sibling count sorted
+> those correctly and only named them wrongly — so what changes there is the cache records, `SMT[0]`, and that
+> the run now says which split it is using (`wstrMessage[34]`, the 35th message). Where the assignment changes
+> is on the two machines the old rule could not sort at all: **the same part with SMT disabled in firmware**,
+> where every core carries one virtual core and 8 P plus 16 E collapsed into a single class of 24 with one set
+> of cache sizes for both, and **a hybrid part whose classes share an SMT width** — AMD's Zen 4 plus Zen 4c
+> parts, where both are 2-way and every core landed in class 1, leaving `Mn` addressing nothing.
+>
+> The `Ue`/`Uo` clause needed documenting rather than fixing: a core of one virtual core sets the same bit in
+> both `cfg.sys.coreSibling` maps (G2), so both policies keep it, which is the meaningful reading of "first"
+> and "last" for a single-threaded core. The help text and `README.md` say so, and say what the two classes
+> are. The option letters `Mn` and `Ms` are unchanged — renaming them would break every existing command line
+> — but they are described as core classes now rather than as SMT-ness.
+>
+> Verified off-target, in the same way the G1 and G3 batches were. `EnumerateTopology`'s walk, `CoreClass`,
+> `SetSMTLoading` and `NextSelectedCore` were transcribed pre- and post-fix into a harness with a stand-in for
+> `GetLogicalProcessorInformationEx`, and driven over sixteen synthetic topologies — five conventional (2-way,
+> 4-way, two non-SMT, a 64-thread part), five hybrid (P-cores at the low bits and at the high, SMT disabled,
+> three tiers, and one whose classes share an SMT width), four multi-group including 64 groups and a
+> two-group hybrid, and two over-capacity machines — each against four starting core selections and all four
+> `U` policies, with the expectations computed from the topology description rather than from either
+> transcription. The pre-fix forms fail 44 of 1 750 checks: two topologies whose class maps and per-class core
+> counts are wrong outright, four whose narrow class is given the wide class's SMT width, twelve misfiled
+> cache records, and 24 `Ua` selections. The post-fix forms fail 25 of 1 766, **all of them `Ua`** — which is
+> G8, fixed in the commit after this one; every classification, cache, count, selection and affinity check
+> passes.
 
 `CPU.cpp:32` — `cui8 coreType = (PopulationCount64(sysLPI[i].ProcessorMask) > 1 ? 1 : 0);` — infers
 "SMT-ness" from the sibling count. On an Intel hybrid part the E-cores (1 thread) become `coreType 0` and the

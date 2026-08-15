@@ -18,7 +18,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    ui64  mask;
    DWORD bytesProc = 0;
    int   c = 1, d;
-   si16  threadCount[3] = { 0, 0, 0 }; // 0=Non-SMT, 1=SMT, 2=Total
+   si16  threadCount[3] = { 0, 0, 0 }; // 0=First core class, 1=Second core class, 2=Total
    si16  i;
    si16  k;     // Indexes value[] over every selected core, so it counts to MAX_THREADS, not to 255
    ui8   j;
@@ -550,7 +550,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       resArray.blockSize[0] = resArray.blockSize[1] = cfg.allocMem[0];
       cfg.allocMem[0] *= (cui64)threadCount[2];
       break;
-   case 2: // Separate non-SMT/SMT
+   case 2: // Separate per core class
       resArray.blockSize[0] = cfg.allocMem[0];
       resArray.blockSize[1] = cfg.allocMem[1];
       cfg.allocMem[0] = resArray.blockSize[0] * threadCount[0] + (resArray.blockSize[1] * threadCount[1]);
@@ -686,10 +686,10 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    // Spawn child processes
    for(d = 0, j = 0; j < 2; ++j) {
       // The affinity cursor walks the selected cores of the thread's own class, group by group. It consulted
-      // the combined map from bit 0 for both classes, so on any topology carrying non-SMT *and* SMT threads
+      // the combined map from bit 0 for both classes, so on any topology carrying two populated core classes
       // the second class was pinned over cores the first already held while the top of the map idled -- and
-      // that is every hybrid P/E-core part at every setting, because coreType is inferred from a core's
-      // sibling count, so its E-cores are the non-SMT class and its P-cores the SMT one (ISSUES.MD G5, G9).
+      // that is every hybrid P/E-core part at every setting, its efficiency cores being the first class and
+      // its performance cores the second (ISSUES.MD G5, G9).
       // Walking the class map also keeps packetSizeRAM and resArray.records[j], both selected by class,
       // describing the core the thread is actually pinned to. The two class maps are disjoint, so restarting
       // the cursor at group 0 bit 0 for each class costs nothing beyond skipping the other class's bits, and

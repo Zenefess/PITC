@@ -93,9 +93,10 @@ disagrees with the register-resident kernel for its unit, raised by `ValidateKer
 either of its two calls, a buffer that could not be allocated for it, or a walk that named no processor core
 — raised by `EnumerateTopology` before anything else in `wmain` and shared by three messages (ISSUES.MD G6,
 G3). Add a code and the table in `wstrInstructions_English` and the message in `wstrMessage_*` have to grow
-with it. Not every message is an exit code: `wstrMessage[24]` warns that a thread could not be pinned and
-`wstrMessage[33]` that the machine carries more virtual cores than `MAX_THREADS`, and both let the run
-continue.
+with it. Not every message is an exit code: `wstrMessage[24]` warns that a thread could not be pinned,
+`wstrMessage[33]` that the machine carries more virtual cores than `MAX_THREADS`, and `wstrMessage[34]` names
+the two core classes of a hybrid CPU, because there the split is not the non-SMT/SMT one the options are
+documented against (ISSUES.MD G9); none of the three stops the run.
 
 ## Architecture
 
@@ -222,22 +223,37 @@ The core a thread is pinned to comes from `NextSelectedCore` (`CPU.h`), a cursor
 `cfg.sys.coreMap[j][g] & cfg.coreMap[g]` — the selected cores of the thread's **own class** — not over the
 combined map. `threadCount[j]` is the population count of exactly that expression summed over the groups, so
 the cursor hands out one distinct core per thread and leaves none of the selected cores idle, and a class-0
-thread lands on a non-SMT core, which is what makes `packetSizeRAM` and `resArray.records[j]` (both chosen by
+thread lands on a class-0 core, which is what makes `packetSizeRAM` and `resArray.records[j]` (both chosen by
 class) describe the core the thread is really on. The walk used the combined map and restarted at bit 0 for
 each class, so the second class was pinned over cores the first already held: on a hybrid P/E-core part that
-left **every E-core untested at every setting**, because `coreType` is inferred from a core's sibling count
-and puts the E-cores in the other class (ISSUES.MD G5). The two class maps are disjoint, which is why
+left **every E-core untested at every setting**, its efficiency cores being class 0 and its performance cores
+class 1 (ISSUES.MD G5, G9). The two class maps are disjoint, which is why
 restarting the cursor at group 0, bit 0 per class is still correct. A mask shifted past bit 63 is 0, and that
 is the cursor's signal to resume at bit 0 of the next group — do not "fix" the shift.
 
-The enumeration carries six rules of its own. Both `GetLogicalProcessorInformationEx` calls are checked, as
+**The two core classes are not the same two classes on every machine, and `CoreClass` (`CPU.h`) is the one
+place that decides which.** Class 1 is the wider core and class 0 the narrower, and everything indexed by
+class follows from that: the two core maps, the two cache records, `Mn`/`Ms`, and the two passes of the spawn
+loop. A machine reporting more than one `EfficiencyClass` is split by that — performance cores are class 1,
+every lower tier class 0, so a three-tier part collapses onto two — and a machine reporting one is split by
+sibling count, which is the property that describes it. Deriving the class from the sibling count alone named
+a hybrid part's classes "non-SMT" and "SMT" when they are nothing of the kind, and stopped sorting it at all
+once SMT was disabled in firmware: every core then carries one virtual core, so P and E cores landed in one
+class with one set of cache sizes for both (ISSUES.MD G9). `cfg.sys.hybrid` records which rule applied and
+`wstrMessage[34]` reports it, because the `M` and `U` options are documented against the other one.
+
+The enumeration carries seven rules of its own. Both `GetLogicalProcessorInformationEx` calls are checked, as
 is the buffer allocated between them, and a walk that names no processor core is refused as well — all
 `-23`; an unchecked call left the walk reading an untouched buffer as though it held topology records, and an
 empty core map means no thread is ever created, which `wmain` would otherwise report as a successful test of
 a CPU it never touched. Records are stepped by the `Size` each one carries, and a `Size` of 0 or one reaching
-past the buffer ends the walk rather than spinning or reading past it. `cfg.sys.SMT` is normalised to 1 when
-nothing set it: `Processor.Flags` carries `LTP_PC_SMT` only for a core of more than one virtual core, so a
-CPU without SMT left it 0 for every later shift and multiply. `cfg.sys.groupCount` is the number of groups
+past the buffer ends the walk rather than spinning or reading past it. **The buffer is walked three times**,
+by `WalkTopology`, because each pass needs the one before it complete and the API documents no order for its
+records: the efficiency classes decide how a core is filed, the core maps cannot be built until that rule is
+known, and a cache is filed by the class of the cores its own mask names, which only the finished maps can
+answer. `cfg.sys.SMT[class]` is the widest sibling count *of that class*, and each is normalised to 1 when
+nothing set it — a machine-wide maximum described a hybrid part's narrow class as being as wide as its wide
+one, and a CPU without SMT left a 0 behind for every later shift and multiply. `cfg.sys.groupCount` is the number of groups
 the walk *populated*, counted from the maps themselves over `MAX_GROUPS` — it was an arithmetic expression
 that omitted the SMT core count, doubled the non-SMT one and added 1, so a single non-SMT core made it 2
 while only group 0 was ever written (ISSUES.MD G1, G4, G6). And **a core that would take the virtual core
@@ -422,7 +438,7 @@ manual. The rules that bite most often when editing here:
 ## Localisation
 
 `translations.h` selects a language by pointing three globals at one header's string tables; `en-GB.h` is the
-only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[34]`
+only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[35]`
 and `wstrInterface_*[13]`, then extending both `translations.h` and the `L` case in `CPU.cpp`.
 
 Note the `L` option's selection logic is inverted (`if(lstrcmpiW(...))` is truthy when the codes *differ*), so
@@ -447,9 +463,10 @@ Verify against current source before relying on any of these:
   core they name, index `cfg.coreMap` as though a 64-bit word held eight cores, and shift by 64 or more on a
   long enough map. That last one used to write into a `cfg.coreMap` element nothing read; now that a second
   element can be a second processor group, it writes into one that does.
-- **Hybrid P/E-core parts are classified as "non-SMT / SMT"** (ISSUES.MD G9), because `coreType` is inferred
-  from a core's sibling count. `Mn`/`Ms` therefore mean "E-core / P-core" on those CPUs, with the two cache
-  records to match, and nothing in the code or the help text says so.
+- **On a hybrid CPU, `Mn`/`Ms` and the two cache records mean "efficiency core / performance core"**, not
+  "non-SMT / SMT". That is now what the code computes (`CoreClass`, ISSUES.MD G9) rather than what it
+  accidentally did, and the run says so through `wstrMessage[34]`, but the option letters are still `N` and
+  `S` — renaming them would break every existing command line.
 - Cache-targeting (`I1`/`I2`/`I3`) is accepted, displayed, and does nothing.
 
 ### Result comparison must stay bit-exact
