@@ -2962,6 +2962,9 @@ physical core) have no meaningful interpretation for single-threaded E-cores. `c
 > Note this is a guard on the *baseline* unit only. The AVX2 and AVX-512 units deliberately carry no
 > matching "must be raised" assertion, because in `Debug|x64` they legitimately compile at the SSE2
 > baseline today — that is **H3**, which is untouched.
+>
+> *(Superseded: H3 is fixed. Both x64 configurations now raise those two units, and each of them carries the
+> complementary guard — `#error` unless `__AVX2__` or `__AVX512F__` respectively is defined.)*
 
 `CPU.vcxproj:175–179`:
 
@@ -3015,7 +3018,31 @@ minimum `/fp:precise` plus `#pragma fp_contract(off)` in the kernel units) and r
 header (B6). Related: `Release|x64` sets `<FloatingPointExceptions>false</FloatingPointExceptions>`
 (`CPU.vcxproj:151`) while `Debug|x64` leaves it at the default — another way the two builds diverge.
 
-### H3. Per-file ISA and optimisation settings apply only to `Release|x64` — **Medium**
+### H3. Per-file ISA and optimisation settings apply only to `Release|x64` — **Medium** — *Fixed*
+
+> **Fixed** by deleting the `Condition` from all six per-file overrides, so both x64 configurations compile
+> the AVX2 unit with `/arch:AVX2`, the AVX-512 unit with `/arch:AVX512`, and all four kernel units with
+> `Optimization=Custom`. `Debug|x64` sets no `Optimization` of its own, so `Custom` changes nothing there —
+> both spellings emit no `/O` switch and leave the kernels unoptimised — but the two configurations now say
+> the same thing rather than agreeing by accident.
+>
+> The ISA half is enforced from the sources as well, which is the half that was actually producing different
+> code: `CPU_jobs_AVX.cpp` `#error`s unless `__AVX2__` is defined and `CPU_jobs_AVX512.cpp` unless
+> `__AVX512F__` is, so a build that leaves either unit at the baseline fails and says why. They are the
+> complement of the guard H1 put in `CPU_jobs_standard.cpp`, which `#error`s if the baseline unit is *raised*,
+> and the note under H1 saying the vector units deliberately carry no such assertion no longer applies.
+>
+> `CPU_jobs_SSE.cpp` carries no such guard, because there is nothing to guard with: MSVC offers `/arch:AVX2`
+> and `/arch:AVX512` but nothing for SSE4.1, so that unit compiles at the baseline in every configuration by
+> construction and its one SSE4.1 instruction (`_mm_testz_si128`, in `ResultsMatch` and the completion-bitmap
+> poll) is gated at run time on `cfg.sys.cpuSSE4_1` instead.
+>
+> Raising the AVX2 unit had one consequence worth recording. Now that the kernel units include `CPU.h` (see
+> H4), they also reach `SIMD management.h`, which defines `_mm_abs_pd` and `_mm256_abs_pd` itself whenever the
+> unit compiles below AVX2 — and its `_mm_abs_pd` is spelt `_mm_and_epi64`, an AVX-512VL instruction (I1).
+> Both units `#undef` the macro and restore their own spelling before their kernels use it: an `#ifndef` is
+> not enough, that definition being a bare `#define`. Without it the SSE kernels would have compiled to an
+> EVEX opcode and faulted on every CPU this program dispatches them to.
 
 The `EnableEnhancedInstructionSet` overrides at `CPU.vcxproj:165,169` and every `Optimization=Custom` carry
 `Condition="…=='Release|x64'"`. In `Debug|x64` the AVX2 and AVX-512 kernel units compile at the global
@@ -3023,7 +3050,37 @@ The `EnableEnhancedInstructionSet` overrides at `CPU.vcxproj:165,169` and every 
 the surrounding code (producing AVX↔SSE transition penalties), and the debug build does not honour the
 documented "kernels are not optimised" contract in the same way as release.
 
-### H4. The AVX-512 and AVX2 comparison intrinsics live in the SSE2-baseline translation unit — **Medium**
+### H4. The AVX-512 and AVX2 comparison intrinsics live in the SSE2-baseline translation unit — **Medium** — *Fixed*
+
+> **Fixed** with the first of the two options this entry offers, and taken past the comparison wrappers to
+> everything else in `CPU.cpp`'s translation unit that was emitting an instruction above the baseline. Four
+> groups moved, each into the unit built for its own instruction set:
+>
+> * the eighteen `JobCycle*` wrappers and the three `ResultsMatch` overloads, which is what the entry names;
+> * the three vector completion-bitmap polls, `ThreadsRunningSSE`/`AVX`/`AVX512` (`CPU.h`), whose `AllFalse`
+>   is `_mm_testz_si128`, `_mm256_testz_si256` and a 512-bit compare respectively;
+> * the AVX2 and AVX-512 halves of `ValidateKernelFamilies`, which moved `fl64x8` and `fl64x4` values about
+>   in a file compiled at the baseline. It is now four `ValidateFamily*` functions, one per unit, called by a
+>   dispatcher in `CPU.h` that is the same gate the old function's `if(cfg.sys.cpuAVX2)` arms were;
+> * the arena seeding loop in `wmain`, whose `value[1][k].p0[os] = value[0][k].avx512` is a 512-bit store per
+>   record. It is now `SeedRecords<UNIT>`, one per unit, and the pointer setup that surrounds it is unchanged.
+>
+> `CPU_job_cycles.h` is left holding the declarations, the reasoning, and the dispatch table's rules; the
+> table itself is defined in `CPU.cpp` with the other namespace-scope objects. `Failed` moved from `CPU.h` to
+> `CPU.cpp` for the same reason, every caller of it now being in another translation unit. None of this was
+> possible before H9, which is why the two were fixed together.
+>
+> The result is checkable rather than asserted. Compiled for x64 with clang, which enforces per-function
+> target features where MSVC accepts any intrinsic at any `/arch`, `CPU.cpp` now compiles at the SSE2
+> baseline; before the move it failed with nine errors naming `_mm_testz_si128`, `_mm256_xor_si256`,
+> `_mm512_xor_si512` and `_mm512_test_epi64_mask`. Disassembling the objects says the same thing: `CPU.obj`
+> contains no `ymm` or `zmm` operand and no `ptest`, where the AVX2, AVX-512 and SSE objects each carry their
+> own.
+>
+> What remains, and is not this entry's to fix, is `memory management.h`: it holds AVX2 and AVX-512 copy and
+> stream helpers, and `CPU.h` includes it. They are `inline`, and no path in PITC calls the wide ones, so
+> nothing is emitted into `CPU.obj` — the objdump above is the evidence — but the header is a vendored copy
+> and the guard it needs belongs upstream (section I).
 
 `CLAUDE.md` states that the global `StreamingSIMDExtensions2` setting "keeps AVX-512 opcodes out of the
 baseline code path". That holds for the *kernels*, but `CPU_job_cycles.h` — containing `_mm_testc_si128`
@@ -3036,7 +3093,22 @@ and MSVC is compiling ZMM-using code without being told the target supports it, 
 placement and register allocation. Move the comparison wrappers into their per-ISA translation units, or
 document the reliance explicitly.
 
-### H5. `Release|x64` combines mutually contradictory optimisation switches — **Low**
+### H5. `Release|x64` combines mutually contradictory optimisation switches — **Low** — *Fixed*
+
+> **Fixed** by removing every switch this entry names, so that `Optimization=Disabled` is the whole of what
+> `Release|x64` says about optimisation and the question of whether LTCG reaches the kernels cannot be asked.
+>
+> `WholeProgramOptimization` is now `false` in the `Label="Configuration"` property group as well as in
+> `ClCompile`. Only the `ClCompile` one had been cleared, which turns off `/GL` at compile time but leaves the
+> configuration-level property driving `/LTCG` at link — the deferred optimisation the `/Od` choice exists to
+> prevent, with nothing but the absence of `/GL`-marked objects standing between it and the kernels.
+> `EnableFiberSafeOptimizations` (`/GT`) and both `AssemblyDebug` entries (a managed-code linker option) are
+> gone as inert, and the per-file `FavorSizeOrSpeed=Size` (`/Os`) on `CPU_jobs_standard.cpp` is gone as both
+> inert under `/Od` and contrary to the rule that the kernels are not optimised.
+>
+> `InlineFunctionExpansion` is not mentioned above because the file no longer carries one; it had already been
+> removed by the time of this batch. `OmitFramePointers` and `IntrinsicFunctions` stay: the entry does not
+> name them, and neither reorders or removes arithmetic.
 
 `CPU.vcxproj:143–147` sets `<Optimization>Disabled</Optimization>` (deliberate, per `CLAUDE.md`) alongside
 `<WholeProgramOptimization>true</WholeProgramOptimization>` (`/GL`), `<FavorSizeOrSpeed>Size</FavorSizeOrSpeed>`
@@ -3046,7 +3118,22 @@ prevent. Whether LTCG actually reaches the kernels should be confirmed from the 
 the "kernels are not optimised" invariant is not being enforced. `<EnableFiberSafeOptimizations>` (`/GT`) and
 `<AssemblyDebug>` (a managed-code linker option) are inert here.
 
-### H6. Security mitigations are disabled in the shipping configuration — **Low**
+### H6. Security mitigations are disabled in the shipping configuration — **Low** — *Fixed*
+
+> **Fixed**, and stated rather than left to a default. `Release|x64` had already regained `SDLCheck=true`, and
+> dropping `BufferSecurityCheck=false` restores `/GS` because `/GS` is the compiler's default — but a default
+> is not a decision, and the entry's complaint is about a configuration that had made three of them
+> explicitly. All three are now written out: `SDLCheck`, `BufferSecurityCheck` and `ControlFlowGuard=Guard`,
+> the last of which is not a default and had to be asked for.
+>
+> `Debug|x64` gains `BufferSecurityCheck=true` for symmetry. It is deliberately *not* given
+> `ControlFlowGuard`: that configuration carries `EnableASAN`, the debug binary is not the shipped one, and
+> pairing the two buys nothing that would justify the interaction.
+>
+> The cost of `/guard:cf` here is one indirect-call check per dispatch through `JobCycle[][]`, against a job
+> cycle of sixteen unrolled chains of dependent square roots and divides. It is not measurable against that,
+> but it is a change to the code the benchmark measures, so a `B` score from this build and one from an
+> earlier build are — as ever — not comparable.
 
 `CPU.vcxproj:136,149,150` set `SDLCheck=false`, `BufferSecurityCheck=false` (`/GS-`) and
 `ControlFlowGuard=false` in `Release|x64`, while `Debug|x64` leaves `SDLCheck=true`. Given the unbounded
@@ -3090,7 +3177,27 @@ Note also that `<EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEn
 x64 baseline). The setting is therefore a no-op that produces a build warning; the per-file *raises* to
 AVX2/AVX-512 are what actually do the work described in `CLAUDE.md`.
 
-### H9. The project can never grow a second translation unit — **Medium**
+### H9. The project can never grow a second translation unit — **Medium** — *Fixed*
+
+> **Fixed** with the first of the two options this entry offers, for everything a translation unit can write
+> to, and the second for everything it cannot.
+>
+> `timer`, `cfg`, `threadData`, `value`, `threadBits`, `wstrOut`, `resArray`, `generateError`, `wstrLang` and
+> `translations.h`'s `wstrInstructions`, `wstrMessage` and `wstrInterface` are now declared `extern` in the
+> headers and defined once, together, at the top of `CPU.cpp` — where the `JobCycle[2][32]` dispatch table and
+> `Failed` now sit as well. The five immutable tables beside them (`wstrUnitsCPU`, `wstrSyncCPU`, `wstrPass`,
+> the two byte-order marks, and `wstrKernelName`) are `inline` instead, which makes them one entity rather
+> than a private copy per unit without moving them away from what they describe.
+>
+> The distinction is the one this entry draws. A duplicate *mutable* object is not merely a link error waiting
+> to happen: the four result planes and the completion bitmap are what the workers and `wmain` compare and
+> signal through, and `wstrMessage` is repointed at run time by the `L` option, so a per-unit copy of either
+> is a program whose halves cannot see each other. An immutable table has no such failure mode; `inline` is
+> there to stop five copies of it being emitted.
+>
+> The refactor H4 needed is what proves it: the four `CPU_jobs_*.cpp` units now include `CPU.h`, reach
+> `value[][]` and `Failed`, and link. The five objects were also checked directly — each of the twelve globals
+> resolves to exactly one external definition across the five objects, with no duplicate and no per-unit copy.
 
 `CPU.h:117–124` defines six objects at namespace scope in a header, five of them through `declare1d64z` /
 `declare2d64z` (which expand to `dataType *const name = (dataType *)salloc(…)`), plus `al64 CLASS_TIMER timer`
@@ -3105,7 +3212,19 @@ different arrays.
   `JobCycle` wrappers into their per-ISA units (the fix suggested for H4) hits this first.
 * **Fix:** declare the globals `extern` in `CPU.h` and define them once in `CPU.cpp`, or mark them `inline`.
 
-### H10. `#pragma warning(disable:4996)` suppresses every deprecation diagnostic in `CPU.cpp` — **Low**
+### H10. `#pragma warning(disable:4996)` suppresses every deprecation diagnostic in `CPU.cpp` — **Low** — *Fixed*
+
+> **Fixed** by narrowing the suppression to the two regions that need it, each `#pragma warning(push)` /
+> `disable` / `pop` and each carrying a `// RULE-DEV:C4996` comment saying what is being deprecated and why
+> the call stays: the configuration banner and the results table, which between them hold every `swprintf`
+> call in the program. C4996 is diagnosed again everywhere else in `CPU.cpp` — the option parser, the arena,
+> the thread spawn, the topology walk and the file I/O — where before a deprecated call added anywhere in the
+> file would have compiled without a word.
+>
+> Two of the three calls this entry names are already gone rather than suppressed: `wcstombs` was replaced by
+> `WideCharToMultiByte` under F6, and `setlocale` is not deprecated by the CRT at all, so neither needed a
+> region. `swprintf` is the whole of what is left, and it is the two-argument Microsoft form whose deprecation
+> message recommends the ISO one; the calls remain unbounded, which is C7's entry and not this one.
 
 `CPU.cpp:12` disables C4996 for the whole translation unit. That is what allows the legacy two-argument
 `swprintf` (C7), `wcstombs` (F6) and `setlocale` to compile quietly — the three call sites that this audit
