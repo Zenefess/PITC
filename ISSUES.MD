@@ -37,7 +37,7 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1, A2, A3, A4, A5, A6, A9, A10, B1, B2, B3, C1–C6, E1, E2 and F1 are fixed** — see the `Fixed` notes on
+**A1–A7, A9, A10, B1, B2, B3, C1–C6, D1, D2, D3, D5, E1, E2 and F1 are fixed** — see the `Fixed` notes on
 those entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
 bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
 failure; A4–A6 and F1 were the false-pass family of Appendix B item 2, where the configuration itself
@@ -77,6 +77,29 @@ table, and the overlapping sub-array seeds together. `JobCycle` was also widened
 domain so the overrun cannot return by another route. The two new exit codes are documented in
 `wstrInstructions_English`, and `wstrMessage_*` grew from 18 entries to 20.
 
+A7, D1, D2, D3 and D5 are the concurrency batch, and four of the five are one story: nothing that touched
+`threadBits` or the clock was safe to do the way it was being done. Every write to the completion bitmap is
+now byte-wide and interlocked from both sides — `SetThreadRunning`/`ClearThreadRunning` in `wmain` (D1),
+`Failed()` clearing one bit rather than eight (A7) — and every read of it examines the whole 64 bytes once
+(D3). Workers no longer touch the global `CLASS_TIMER` at all beyond `siFrequency`, taking their timestamps
+from `CurrentTics()` instead (D2), which as a side effect gives every thread the identical `startTics` the
+`T-Sync` shapes were always supposed to have. D5 replaced `_beginthread` with `_beginthreadex` at both spawn
+sites, created suspended so the affinity mask lands before the thread runs, and added one exit code, `-19`,
+for a thread that could not be created or resumed; `wstrMessage_*` grew from 23 entries to 25, the second of
+the two being the warning printed when `SetThreadAffinityMask` fails. No job kernel is touched, so
+`cpu.values` does not need regenerating. The bitmap and the three polls were exercised off-target, against a
+stand-in harness that walks all 512 thread indices: the pre-fix forms fail 327 of its checks — 192 SSE poll
+misses (threads 320–511), 128 AVX2 poll misses (threads 384–511) and the seven neighbours one `Failed()`
+clears — and the current forms fail none. The rest of the batch is Windows-specific and was reviewed, not
+executed; the MSVC build still has to confirm it.
+
+**D5 has a consequence worth acting on: affinity now actually reaches the scheduler**, where a
+`_beginthread` handle meant no mask ever did. That promotes **G5** — the mask restarting at bit 1 for the
+SMT thread class — from a latent defect to a live one on any topology carrying both non-SMT and SMT threads.
+Uniform SMT CPUs are unaffected, and **G5 should be the next entry taken**. **D4 and D6–D9 are untouched**,
+and D8 in particular now stands alone: with A7 fixed, the only completion bit cleared ahead of a thread's
+last write is that thread's own.
+
 Note that B1–B3 shifted every line in `CPU.h` after 231 down by two, so line citations below that point in
 `CPU.h` — B4, B5, B7 and B8 among them — read two low against the current source. A9, A10 and C1 shifted
 three more files: `CPU.cpp` by twelve lines (nine of them ahead of the memory-allocation block, so C2–C5 and
@@ -96,6 +119,19 @@ pulse-timing group before `SetSMTLoading`, so citations between those two points
 everything below `SetSMTLoading` — A7's `Failed()`, and B4, B5, B7 and B8 in `GenerateValues` — reads
 sixty-one lines low on top of the two B1–B3 already added. `CPU_methods.h` grew by twelve lines, all of them
 at or below its line 18, so every citation into it reads low: the loop cited at `:63–71` now begins at `:67`.
+
+A7, D1–D3 and D5 shifted four files again, `CPU.h` the most. It gained 48 lines in four places: four at
+`:21` (the `MAX_THREADS_WORDS` constant), 24 at `:143` (the interlocked bitmap helpers, the rewritten
+`ThreadsRunning*` group, and the second line the SSE poll now needs), 14 at `:179` (`CurrentTics`) and six
+at `:243` (`Failed`'s mask). A citation therefore reads 4 lines low between `:21` and `:142`, 27 or 28
+through the `ThreadsRunning*` group, 42 between `:179` and `:242`, and 48 below that — `GenerateValues`, and
+so B4, B5, B7 and B8, on top of every earlier shift.
+`CPU.cpp` gained 20: eight in the `W` spawn loop (now `:339`) and twelve in the test spawn loop (now
+`:641`), so citations between the two read 8 low and citations below the second read 20 low.
+`CPU_methods.h` gained five, two of them at its line 14, so `ComputationPulse`'s loop moves down again. `en-GB.h` gained three: one exit code
+in the instruction table and two messages at the end of the array. `CLAUDE.md` was updated to match — its
+exit-code, thread-lifecycle and known-constraints sections now describe the code as it stands, and the two
+bullets that named A7 and D3 as live constraints are replaced by one naming G5.
 
 Every other entry below still stands.
 
@@ -253,7 +289,15 @@ job cycle at `CPU_methods.h:61`.
   typo in a script becomes a clean bill of health.
 * **Fix:** reject durations ≤ 0 (and see E4 — `Tt0` also divides by zero in sweep mode).
 
-### A7. `Failed()` clears eight threads' completion bits, not one — **High**
+### A7. `Failed()` clears eight threads' completion bits, not one — **High** — *Fixed*
+
+> **Fixed.** `Failed()` now clears only the failing thread's bit. `threadBit` did not have to be threaded
+> through the sixty-odd call sites in `CPU_job_cycles.h`: `coreNum` is `(threadByte << 3) + threadBit` by
+> construction in `ComputationPulse`, so the bit within the byte `threadByte` addresses is `coreNum & 0x07`,
+> and the mask is built from that. The clear is now idempotent with the one `ComputationPulse` performs on
+> its way out, and a failure on one thread no longer releases `wmain` for the other seven in its byte.
+> The residual — `Failed()` clearing the *failing* thread's own bit before that thread writes
+> `resArray.iter[coreNum]` — is **D8**, which is untouched.
 
 `CPU.h:206`:
 
@@ -852,7 +896,14 @@ command line allocates `resArray.iter` again each time, leaking the earlier bloc
 
 ## D. Concurrency
 
-### D1. The main thread's non-atomic `|=` races with the workers' interlocked clears — **High**
+### D1. The main thread's non-atomic `|=` races with the workers' interlocked clears — **High** — *Fixed*
+
+> **Fixed.** Both `|=` sites now call `SetThreadRunning` (`CPU.h`), which sets the bit with
+> `_InterlockedOr8` on the same byte the workers clear with `_InterlockedAnd8` — the two are then atomic
+> with respect to each other and no clear can be lost. The companion `ClearThreadRunning` is used by the
+> thread-creation failure paths added for **D5**. Setting all bits before spawning was the other option the
+> entry offers; the interlocked set was taken instead because it keeps the bit's lifetime beside the
+> `_beginthreadex` call that owns it, and because **D5** needs an atomic *clear* from `wmain` regardless.
 
 `CPU.cpp:607` (and `:336` in the `W` path):
 
@@ -871,7 +922,18 @@ A plain read-modify-write on a `vui64` word. Worker threads clear their bits in 
   expected outcome, and the program hangs instead of printing its (already meaningless) pass.
 * **Fix:** set all bits before spawning any thread, or use `_InterlockedOr8` on the byte.
 
-### D2. Every worker thread mutates one shared `CLASS_TIMER` — **High**
+### D2. Every worker thread mutates one shared `CLASS_TIMER` — **High** — *Fixed*
+
+> **Fixed** by the entry's second suggestion. `CurrentTics()` (`CPU.h`) reads `QueryPerformanceCounter` into
+> a local, and it is now the only clock a worker consults: `PulseWaitUntil` uses it in place of
+> `timer.Update()`, and `ComputationPulse` keeps its own `curTics` instead of reading `timer.siCurrentTics`.
+> No worker writes any field of the global timer. `timer.siFrequency` is still read from worker threads —
+> that one is written once, by the `CLASS_TIMER` constructor, before `wmain` runs, so it is not a race.
+> This also does what the entry's last paragraph says it could not: `wmain`'s single `timer.Update()` before
+> the spawn loop is no longer overwritten by threads that have already started, so every thread's
+> `startTics` is computed from an identical timestamp and the `T-Sync` shapes get the common pulse edge they
+> promise. A per-thread `CLASS_TIMER` was rejected because nothing in the pulse loop reads the scaled,
+> accumulated fields that make `Update()` expensive in the first place.
 
 `CPU.h:117` declares a single global `timer`; `CPU_methods.h:56,64` call `timer.Update()` from every worker.
 `CLASS_TIMER::Update` (`class_timers.h:55–63`) is a multi-field read-modify-write over `siPrevTics`,
@@ -885,7 +947,19 @@ synchronised pulse edges the `T-Sync` modes promise.
 
 * **Fix:** give each thread its own timer, or call `QueryPerformanceCounter` directly in the pulse loop.
 
-### D3. `ThreadsRunningAVX` / `ThreadsRunningSSE` use the wrong stride *and* form misaligned vector references — **High**
+### D3. `ThreadsRunningAVX` / `ThreadsRunningSSE` use the wrong stride *and* form misaligned vector references — **High** — *Fixed*
+
+> **Fixed**, both defects and the sizing note. `ThreadsRunningAVX` now reads `threadBits[0]` and `[4]`, and
+> `ThreadsRunningSSE` reads `[0]`, `[2]`, `[4]` and `[6]`, so all three polls examine the same 64 bytes —
+> exactly `MAX_THREADS` bits, each once. Correcting the strides also removes every misaligned address on its
+> own (0, 16, 32 and 48 are all 16- and 32-byte aligned against a 64-byte-aligned base), but the reference
+> casts were replaced with `_mm_loadu_si128` / `_mm256_loadu_si256` regardless: an explicit unaligned load
+> cannot be lowered to `movdqa`/`vmovdqa`, so no future change to the map's size or alignment can fault the
+> poll, and on current hardware the unaligned form costs nothing at an address that happens to be aligned.
+> `ThreadsRunningAVX512` is unchanged — it already viewed offset 0 only. The related sizing confusion is
+> closed too: `threadBits` is declared with a new `MAX_THREADS_WORDS` (8) rather than `MAX_THREADS_BYTES`
+> (64), because `declare1d64z`'s third parameter is an element count, so the buffer is now the 64 bytes the
+> structure actually needs and its capacity agrees with `MAX_THREADS`.
 
 `CPU.h:148–153`:
 
@@ -929,7 +1003,22 @@ never consults `cfg.sys.cpuSSE4_1`. `ThreadsRunningSSE` calls `AllFalse(cui128, 
 (Core 2, early Athlon 64 X2) executes an illegal instruction before any test begins, and before the friendly
 "does not support the SSE4.1 instruction set" message at `CPU.cpp:449` can be reached.
 
-### D5. The `_beginthread` handle is not valid to pass to `SetThreadAffinityMask` — **Medium**
+### D5. The `_beginthread` handle is not valid to pass to `SetThreadAffinityMask` — **Medium** — *Fixed*
+
+> **Fixed** exactly as the entry prescribes: `_beginthreadex`, checked for failure, created suspended,
+> affinity applied, then resumed. Both spawn sites are converted — the test path and the `W` path — and both
+> close the handle they now own. `ComputationPulse` and `GenerateValues` became `ui32 __stdcall` and end by
+> returning rather than calling `_endthread`, which is what `_beginthreadex` requires. A creation or resume
+> failure clears the thread's completion bit, reports it, and aborts with the new exit code `-19`; without
+> that, a thread that never started left a bit no one would ever clear and `while(ThreadsRunning())` spun
+> forever. `SetThreadAffinityMask`'s return value is now checked, and a failure prints a warning naming the
+> thread rather than being discarded — the run continues, since an unpinned thread still verifies its own
+> results, it simply cannot be attributed to a core.
+>
+> **This makes affinity effective for the first time**, which promotes **G5** from latent to live: `mask`
+> restarts at bit 1 when the spawn loop advances to the SMT thread class, so a topology carrying *both*
+> non-SMT and SMT threads now really does pin two threads to one virtual core while others idle. Uniform SMT
+> CPUs (`threadCount[0] == 0`) are unaffected. **G5 should be taken next.**
 
 `CPU.cpp:609–612`:
 

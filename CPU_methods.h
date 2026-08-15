@@ -11,8 +11,10 @@
 #include "CPU.h"
 #include "CPU_job_cycles.h"
 
-// Staging function for computation threads
-void ComputationPulse(ptrc dataPtr) {
+// Staging function for computation threads. __stdcall and ui32-returning to match _beginthreadex's
+// start-address signature; every wait and every timestamp below is thread-local, because the global timer
+// is shared by every thread and CLASS_TIMER::Update is not atomic (see CurrentTics in CPU.h)
+ui32 __stdcall ComputationPulse(ptrc dataPtr) {
    cTHREAD_CFGptrc tcfg = (THREAD_CFG *)dataPtr;
 
    cHANDLE pulseTimer = CreatePulseTimer(); // Owned by this thread alone; see CreatePulseTimer
@@ -29,6 +31,7 @@ void ComputationPulse(ptrc dataPtr) {
    si64    nextTic    = sweepSync ? 0 : tcfg->activeTics;
    si64    i, j       = 0;
    si64    oldTics    = 0;
+   si64    curTics    = 0;
    ui32    sleepDelay = tcfg->inactiveTime;
 
    if(tcfg->procSync & 0x010) // Constant computation
@@ -60,23 +63,25 @@ void ComputationPulse(ptrc dataPtr) {
    // which is exactly the coincidence the parallel and time-synchronised shapes exist to produce
    PulseWaitUntil(pulseTimer, startTics);
 
+   curTics = CurrentTics();
+
    // Force minimum of one cycle for the sake of sweeping-pulse width
 //   if(JobCycle[recCount ? 1 : 0][jobProc](coreNum, 0, threadByte)) goto fail;
    if(!JobCycle[recCount ? 1 : 0][jobProc](coreNum, 0, threadByte))
       // Main loop
-      for(i = j = 0; timer.siCurrentTics < tcfg->endTics; i = (i >= recCount - 4 ? 0 : i + 4), ++j) {
-         timer.Update();
+      for(i = j = 0; curTics < tcfg->endTics; i = (i >= recCount - 4 ? 0 : i + 4), ++j) {
+         curTics = CurrentTics();
          // The loop condition tested the timestamp of the previous iteration, so the body is regularly
          // entered after the run has ended. Re-checking here keeps the sweep ramp inside its window
-         if(timer.siCurrentTics >= tcfg->endTics) break;
-         if(!coreNum && timer.siCurrentTics - oldTics > timer.siFrequency) { printf("."); oldTics = timer.siCurrentTics; }
-         if(timer.siCurrentTics < nextTic) {
+         if(curTics >= tcfg->endTics) break;
+         if(!coreNum && curTics - oldTics > timer.siFrequency) { printf("."); oldTics = curTics; }
+         if(curTics < nextTic) {
             if(JobCycle[recCount ? 1 : 0][jobProc](coreNum, i, threadByte)) break;
          } else {
             ui32 pulseDelay = sleepDelay;
 
             if(sweepSync) { // Ramp the idle time down across the run, raising the duty cycle as it progresses
-               csi64 ramp = si64(cycleTime) - ((timer.siCurrentTics - tcfg->startTics) * si64(cycleTime) / (tcfg->endTics - tcfg->startTics));
+               csi64 ramp = si64(cycleTime) - ((curTics - tcfg->startTics) * si64(cycleTime) / (tcfg->endTics - tcfg->startTics));
 
                // Clamped because a ratio outside [0, 1] wraps the unsigned delay to roughly 49 days
                pulseDelay = ui32(max(si64(0), min(si64(cycleTime), ramp)));
@@ -92,5 +97,5 @@ void ComputationPulse(ptrc dataPtr) {
 
    _InterlockedAnd8(threadByte, ~cui8(1u << tcfg->threadBit));
 
-   _endthread();
+   return 0; // Returning ends the thread: _beginthreadex's thunk calls _endthreadex with this value
 }
