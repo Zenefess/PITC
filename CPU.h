@@ -15,6 +15,7 @@
 #include <process.h>
 #include "memory management.h"
 #include "class_timers.h"
+#include "CPU_build.h"
 
 constexpr auto MAX_THREADS       = 512;
 constexpr auto MAX_THREADS_BYTES = (MAX_THREADS + 7) >> 3;
@@ -143,6 +144,138 @@ extern void JobMemALU(si64ptrc);      extern void JobMemFPU(fl64ptrc);          
 extern void JobMemSSE(fl64x2ptrc);    extern void JobMemALU_SSE(fl64x2ptrc, si64ptrc);
 extern void JobMemAVX2(fl64x4ptrc);   extern void JobMemALU_AVX2(fl64x4ptrc, si64ptrc);
 extern void JobMemAVX512(fl64x8ptrc); extern void JobMemALU_AVX512(fl64x8ptrc, si64ptrc);
+
+//--- "cpu.values" file format ---//
+// A 64-byte header followed by the two RESULTS[MAX_THREADS] blocks: the input seeds, then the golden
+// outputs those seeds produce. Before the header existed nothing in the file identified what had written
+// it, so its most likely failure -- a file left over from an earlier kernel revision, or from a build that
+// rounds differently -- reached the comparison intact and every thread reported "!Fail!" against a
+// reference for arithmetic this build no longer performs, which reads as a fleet-wide hardware fault.
+// Neither read was checked for length either: ReadFile reports reaching the end of the file as success, so
+// a truncated, empty or unrelated file was accepted with value[0] and value[2] left holding stale zeroes
+
+constexpr cui64 VALUES_FILE_MAGIC   = 0x0534C415643544950; // "PITCVALS", little-endian
+constexpr cui32 VALUES_FILE_VERSION = 1;                   // Raised whenever VALUES_HEADER changes
+constexpr cui64 VALUES_HASH_BASIS   = 0x0CBF29CE484222325; // FNV-1a 64-bit offset basis
+constexpr cui64 VALUES_HASH_PRIME   = 0x0100000001B3;      // FNV-1a 64-bit prime
+
+// Every build setting that changes what a correct golden value is. The compiler version is deliberately
+// absent: under the /fp:strict CPU_build.h requires, a toolset upgrade cannot change a result, and folding
+// it in would demand a fresh "cpu.values" after every Visual Studio update
+constexpr cui64 VALUES_BUILD_ID = (cui64(VALUES_FP_FLAGS) << 32) | cui64(sizeof(RESULTS));
+
+al64 struct VALUES_HEADER { // 64 bytes
+   ui64 magic;      // VALUES_FILE_MAGIC; identifies the file, and its byte order
+   ui32 version;    // VALUES_FILE_VERSION; the layout of the fields below
+   ui32 headerSize; // sizeof(VALUES_HEADER)
+   ui64 blockSize;  // RESULTS_BUF_SIZE; the MAX_THREADS by sizeof(RESULTS) geometry of each block
+   ui64 buildID;    // VALUES_BUILD_ID; the build settings the values depend upon
+   ui64 kernelID;   // KernelFingerprint(); the arithmetic the job kernels actually perform
+   ui64 seedHash;   // Hash of the input block that follows this header
+   ui64 valueHash;  // Hash of the golden output block that follows the input block
+   ui64 reserved;   // 0
+};
+
+/// Hashes a byte range with the 64-bit FNV-1a function. It detects a truncated or altered "cpu.values", it
+/// does not defend one: the file is local data, and every change to it that matters here is an accident
+/// @param data First byte of the range
+/// @param bytes Length of the range, in bytes
+/// @param seed Starting value, so that several ranges can be chained into one hash
+/// @return Hash of the range
+static cui64 HashBytes(cptrc data, csi64 bytes, cui64 seed) {
+   cui8ptrc input = (cui8ptrc)data; // Not named 'byte': <rpcndr.h>, via windows.h, declares that as a type
+   ui64     hash  = seed;
+
+   for(si64 i = 0; i < bytes; ++i) hash = (hash ^ cui64(input[i])) * VALUES_HASH_PRIME;
+
+   return hash;
+}
+
+/// Transforms all 16 lanes of one result set exactly once, using the widest vector unit the CPU provides.
+/// JobSSE, JobAVX2 and JobAVX512 compute the same function element-wise, so each ladder below produces the
+/// same 16 lanes from the same input -- which is what lets a "cpu.values" generated on one CPU be verified
+/// on another of a different vector width. The generating half of GenerateValues, its self-checking half
+/// and the fingerprint stored in the file's header must all walk the same ladder, so there is only one
+/// @param result The 16 lanes to transform, in place
+static void RunGoldenLadder(RESULTS &result) {
+   if(cfg.sys.cpuAVX512) {
+      JobAVX512(result.avx512);
+      JobAVX2(result.avx);
+   } else if(cfg.sys.cpuAVX2) {
+      JobAVX2((fl64x4&)result._fl64[0]);
+      JobAVX2((fl64x4&)result._fl64[4]);
+      JobAVX2(result.avx);
+   } else { // Lanes 0~11 are the AVX-512 and AVX2 windows; lanes 12~15 are covered by the 3 calls below
+      JobSSE((fl64x2&)result._fl64[0]);
+      JobSSE((fl64x2&)result._fl64[2]);
+      JobSSE((fl64x2&)result._fl64[4]);
+      JobSSE((fl64x2&)result._fl64[6]);
+      JobSSE((fl64x2&)result._fl64[8]);
+      JobSSE((fl64x2&)result._fl64[10]);
+   }
+   JobSSE(result.sse);
+   JobFPU(result.fpu);
+   JobALU(result.alu);
+}
+
+/// Runs the golden-value ladder over a fixed seed and hashes the 16 lanes it returns, giving a value that
+/// changes whenever the arithmetic of any kernel that ladder walks changes. Stored in the "cpu.values"
+/// header, it makes "regenerate the file after editing a kernel" a rule the format enforces rather than one
+/// the author has to remember. The seed is of the same sign and magnitude as those 'W' generates, so the
+/// chains settle exactly as they do during a run: the first outer iteration of the FP kernels collapses an
+/// input of any magnitude, no divisor in either kernel can reach zero, and no lane can leave the reals
+/// @return Fingerprint of the job kernels, folded together with the settings they were built under
+static cui64 KernelFingerprint(void) {
+   RESULTS probe = {}; // Zeroed first: every byte of it is hashed, so none of them may be indeterminate
+
+   for(ui8 i = 0; i < 15; ++i) probe._fl64[i] = fl64(0x0123456789ABCull >> (i & 0x03)) + fl64(i);
+   probe.raw[15] = 0x0123456789ABCDEF; // Lane 15 is the ALU lane, and is a plain integer
+
+   RunGoldenLadder(probe);
+
+   return HashBytes(&probe, csi64(sizeof(RESULTS)), VALUES_BUILD_ID);
+}
+
+/// Reads an entire block from a file. ReadFile reports reaching the end of the file as success, so the byte
+/// count is the only evidence that the whole block was there to be read
+/// @param file Handle opened for reading
+/// @param data First byte of the destination
+/// @param bytes Length of the block, in bytes
+/// @return true only if every byte was read
+static cbool ReadBlock(cHANDLE file, ptrc data, cui32 bytes) {
+   DWORD bytesRead = 0;
+
+   return ReadFile(file, data, bytes, &bytesRead, 0) && bytesRead == bytes;
+}
+
+/// Writes an entire block to a file. WriteFile reports a partial write as success, so the byte count is the
+/// only evidence that the whole block reached the file
+/// @param file Handle opened for writing
+/// @param data First byte of the source
+/// @param bytes Length of the block, in bytes
+/// @return true only if every byte was written
+static cbool WriteBlock(cHANDLE file, cptrc data, cui32 bytes) {
+   DWORD bytesWritten = 0;
+
+   return WriteFile(file, data, bytes, &bytesWritten, 0) && bytesWritten == bytes;
+}
+
+/// Fills the header that precedes the two result blocks in "cpu.values"
+/// @param header Header to populate
+/// @param seeds Input block, written directly after the header
+/// @param values Golden output block, written last
+static void FillValuesHeader(VALUES_HEADER &header, cptrc seeds, cptrc values) {
+   header.magic      = VALUES_FILE_MAGIC;
+   header.version    = VALUES_FILE_VERSION;
+   header.headerSize = ui32(sizeof(VALUES_HEADER));
+   header.blockSize  = cui64(RESULTS_BUF_SIZE);
+   header.buildID    = VALUES_BUILD_ID;
+   header.kernelID   = KernelFingerprint();
+   header.seedHash   = HashBytes(seeds, RESULTS_BUF_SIZE, VALUES_HASH_BASIS);
+   header.valueHash  = HashBytes(values, RESULTS_BUF_SIZE, VALUES_HASH_BASIS);
+   header.reserved   = 0;
+}
+//--- "cpu.values" file format ---//
 
 //--- Thread completion bitmap ---//
 // One bit per thread, cleared by each thread as it exits. Every write is interlocked and byte-wide: a worker
@@ -350,45 +483,13 @@ static ui32 __stdcall GenerateValues(ptr dataPtr) {
    for(resultCopy = value[2][coreNum]; coreNum < range; ++coreNum) {
       value[2][coreNum] = value[3][coreNum];
 
-      if(cfg.sys.cpuAVX512) {
-         JobAVX512(value[3][coreNum].avx512);
-         JobAVX2(value[3][coreNum].avx);
-      } else if(cfg.sys.cpuAVX2) {
-         JobAVX2((fl64x4&)value[3][coreNum]._fl64[0]);
-         JobAVX2((fl64x4&)value[3][coreNum]._fl64[4]);
-         JobAVX2(value[3][coreNum].avx);
-      } else { // Lanes 0~11 are the AVX-512 and AVX2 windows; lanes 12~15 are covered by the 3 calls below
-         JobSSE((fl64x2&)value[3][coreNum]._fl64[0]);
-         JobSSE((fl64x2&)value[3][coreNum]._fl64[2]);
-         JobSSE((fl64x2&)value[3][coreNum]._fl64[4]);
-         JobSSE((fl64x2&)value[3][coreNum]._fl64[6]);
-         JobSSE((fl64x2&)value[3][coreNum]._fl64[8]);
-         JobSSE((fl64x2&)value[3][coreNum]._fl64[10]);
-      }
-      JobSSE(value[3][coreNum].sse);
-      JobFPU(value[3][coreNum].fpu);
-      JobALU(value[3][coreNum].alu);
+      RunGoldenLadder(value[3][coreNum]);
 
-      // Test computatational integrity
+      // Test computatational integrity. The self-check has to walk the same ladder as the generation above,
+      // lane for lane, or it grades every entry against a different function; one shared ladder is what
+      // makes that structural rather than a pair of blocks that have to be kept identical by hand
       for(resultCopy = value[2][coreNum]; i < 65535; ++i) {
-         if(cfg.sys.cpuAVX512) {
-            JobAVX512(value[2][coreNum].avx512);
-            JobAVX2(value[2][coreNum].avx);
-         } else if(cfg.sys.cpuAVX2) {
-            JobAVX2((fl64x4&)value[2][coreNum]._fl64[0]);
-            JobAVX2((fl64x4&)value[2][coreNum]._fl64[4]);
-            JobAVX2(value[2][coreNum].avx);
-         } else { // Must mirror the generation ladder above, lane for lane
-            JobSSE((fl64x2&)value[2][coreNum]._fl64[0]);
-            JobSSE((fl64x2&)value[2][coreNum]._fl64[2]);
-            JobSSE((fl64x2&)value[2][coreNum]._fl64[4]);
-            JobSSE((fl64x2&)value[2][coreNum]._fl64[6]);
-            JobSSE((fl64x2&)value[2][coreNum]._fl64[8]);
-            JobSSE((fl64x2&)value[2][coreNum]._fl64[10]);
-         }
-         JobSSE(value[2][coreNum].sse);
-         JobFPU(value[2][coreNum].fpu);
-         JobALU(value[2][coreNum].alu);
+         RunGoldenLadder(value[2][coreNum]);
 
          if(Evaluate(coreNum, -1) == 1) {
             //if(!coreNum) {

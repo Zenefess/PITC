@@ -8,6 +8,7 @@
  ************************************************************/
 
 #include "typedefs.h"
+#include "CPU_build.h"
 
 #ifndef UNLOOPx4
 #define UNLOOPx4(code) code code code code

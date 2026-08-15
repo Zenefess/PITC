@@ -30,7 +30,16 @@ Two build settings look like mistakes but are deliberate — **do not "fix" them
   very work being measured. The four `CPU_jobs_*.cpp` files override this with `Optimization=Custom`.
 - The global `EnableEnhancedInstructionSet` is `StreamingSIMDExtensions2`, and each ISA translation unit
   raises it individually (`CPU_jobs_AVX.cpp` → AVX2, `CPU_jobs_AVX512.cpp` → AVX-512). This is what keeps
-  AVX-512 opcodes out of the baseline code path on CPUs that cannot execute them.
+  AVX-512 opcodes out of the baseline code path on CPUs that cannot execute them. `CPU_jobs_standard.cpp`
+  must never carry such an override — it holds the scalar ALU/FPU path that has to run on any x64 CPU — and
+  now `#error`s if one is applied (ISSUES.MD H1).
+
+Two settings are load-bearing for reproducibility and must stay pinned in **every** configuration:
+`<FloatingPointModel>Strict</FloatingPointModel>` and `<FloatingPointExceptions>false</FloatingPointExceptions>`.
+`/fp:strict` fixes the rounding and forbids the compiler from contracting `a*b + c` into an FMA — `JobFPU`
+ends each outer iteration with exactly that shape — so it is what makes a `cpu.values` written by one build
+valid under another. `CPU_build.h`, included by all four kernel units and by `CPU.h`, `#error`s under MSVC if
+`_M_FP_STRICT` is not defined, and folds the model into the build ID stored in the file's header (H2).
 
 ## Running and verifying a change
 
@@ -46,9 +55,11 @@ PITC.exe Iax Mc8 Spt Tfd2.0t60[250]1750 Ua   # AVX-512 + ALU, 8MB/core, synchron
 ```
 
 **`cpu.values` must be regenerated (`PITC.exe W`) after any change to a `Job*` kernel in `CPU_jobs_*.cpp`.**
-The file stores the expected outputs of those exact kernels; edit a kernel without regenerating and every
-thread reports `!Fail!`. `W` self-validates by re-running the kernels 65,535 times and refuses to write the
-file on any mismatch.
+The file stores the expected outputs of those exact kernels. This is now enforced rather than remembered: the
+file's header carries a fingerprint of the kernels that produced it (`KernelFingerprint`, `CPU.h`), so a stale
+file is rejected with `-21` and a message naming the cause, instead of reaching the comparison and making every
+thread report `!Fail!` as though the silicon were at fault. `W` self-validates by re-running the kernels 65,535
+times and refuses to write the file on any mismatch.
 
 Exit codes are meaningful and documented in `en-GB.h` (`wstrInstructions_English`): negative = error,
 `0` = stability test completed, `1` = values file written, `2` = instructions displayed. `-11` … `-18` are the
@@ -57,7 +68,10 @@ of zero or less, a zero pulse on-time, an `I` string naming no processing unit, 
 than one of FPU/SSE4.1/AVX2/AVX-512, a memory request the machine cannot satisfy (`-17`, shared by the
 pre-flight size check and a failed `malloc64`), and a per-thread slice too small to hold one call's four
 records (`-18`). `-19` is the one runtime failure that aborts a run: a worker thread that could not be
-created or resumed, in either the test or the `W` path. Add a code and the table in
+created or resumed, in either the test or the `W` path. `-20` is a `cpu.values` header that could not be
+written; `-21` is a `cpu.values` this build will not read — bad magic, an unreadable or unsupported format
+version, a different build or kernel revision, or contents that disagree with the hashes in the header —
+one code shared by five messages, the way `-11` and `-17` already share theirs. Add a code and the table in
 `wstrInstructions_English` and the message in `wstrMessage_*` have to grow with it.
 
 ## Architecture
@@ -67,9 +81,16 @@ created or resumed, in either the test or the `W` path. Add a code and the table
 Everything hinges on one idea: a *job* is a fixed-length, fully deterministic arithmetic loop, so the same
 input must produce a bit-identical output on every core, every time. Divergence means the silicon erred.
 
-`cpu.values` holds two `RESULTS[MAX_THREADS]` blocks back to back: random seed inputs, then the outputs those
-seeds produce. At startup `wmain` loads them into two of four parallel result planes, and worker threads
-re-derive the outputs continuously and compare.
+`cpu.values` holds a 64-byte `VALUES_HEADER` followed by two `RESULTS[MAX_THREADS]` blocks: random seed
+inputs, then the outputs those seeds produce. At startup `wmain` loads the two blocks into two of four
+parallel result planes, and worker threads re-derive the outputs continuously and compare.
+
+The header (`CPU.h`) is what stops the file's likeliest failure — being stale — from being reported as a CPU
+fault. It carries a magic value, a format version, the block geometry, a build ID (the floating-point model
+and record size), a fingerprint of the job kernels, and an FNV-1a hash of each block; `wmain` checks all of
+them before the blocks are read, and every read and write is checked for length, because `ReadFile` reports
+reaching the end of a file as success and `WriteFile` reports a partial write the same way (ISSUES.MD B6).
+**Changing `VALUES_HEADER`, `RESULTS`, or `MAX_THREADS` means raising `VALUES_FILE_VERSION` with it.**
 
 The four planes (`value[4][MAX_THREADS]`, declared in `CPU.h`) each carry a fixed role:
 
@@ -89,10 +110,11 @@ The four planes (`value[4][MAX_THREADS]`, declared in `CPU.h`) each carry a fixe
 It splits the 512 entries across `vCoreCount` threads as `[t*q, (t+1)*q)` with the last thread absorbing
 `512 % vCoreCount`, so the ranges must keep tiling `[0, 512)` exactly — a gap leaves seeds in the "expected
 output" block and every healthy core then reports `!Fail!`. And its three ISA ladders (AVX-512, AVX2, SSE)
-each have to transform all 16 lanes **exactly once**, in the same pattern in the generation and self-check
-halves: `JobSSE`, `JobAVX2` and `JobAVX512` compute the same function element-wise, so one pass per lane is
-what makes the golden block the same whichever ladder built it, and any disagreement between the two halves
-makes the self-check fail unconditionally and `W` return `-4`.
+each have to transform all 16 lanes **exactly once**: `JobSSE`, `JobAVX2` and `JobAVX512` compute the same
+function element-wise, so one pass per lane is what makes the golden block the same whichever ladder built
+it. The generation half, the self-check half and the header's kernel fingerprint all call one shared
+`RunGoldenLadder` (`CPU.h`) rather than repeating the ladder, because a disagreement between the generation
+and self-check halves makes the check fail unconditionally and `W` return `-4`.
 
 ### Job kernels: one translation unit per ISA
 
