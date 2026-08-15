@@ -6,7 +6,7 @@ This software is primarily for testing the idle stability of CPUs, but also prov
 
 Command-line options
 --------------------
- Options are applied in the order given: where two of them set the same property, the last one wins. 'B' and the presets reset the processing units and the memory configuration, so give either of them before any 'I' or 'M' option; 'Ts' clears the pulse off-time, so give ']' after 'S' where both are used.
+ Options are applied in the order given: where two of them set the same property, the last one wins. 'B' and the presets reset the processing units and the memory configuration, so give either of them before any 'I' or 'M' option. A sweeping-pulse run has no off-time, so ']' is ignored wherever it is given.
 
  B  : Run the benchmark. Options after 'B' override defaults; eg. pitc.exe B Iaf mt1024 !!! Cache use not yet implemented !!!
  
@@ -35,7 +35,8 @@ Command-line options
       C==Constant, F==Fixed-length pulses, S==Sweeping-length pulses                            |  The last of C, F and S given is used
       Global options: Dx==Set start-up delay, Tx==Set test duration                             |  Replace 'x' with a decimal value; eg. d10.0
       Fixed-length pulse options (in milliseconds): [x==Active duration, ]x==Inactive duration  |  Replace 'x' with a whole number; eg. [250
-      Sweeping-length pulse option (in milliseconds): [x==Cycle duration
+      Sweeping-length pulse option (in milliseconds): [x==Cycle duration                        |  A sweep has no off-time
+         Each cycle begins idle and the duty cycle rises in a straight line to 100% at the end of the test duration
  Ux : Set core usage options. One of the first two options (C,T) can be stacked with the one of the remaining (A,E,O); eg. Uc!.!!...!a
  
       C==Binary sequence map of physical cores to utilise, T==Binary sequence map of virtual cores to utilise

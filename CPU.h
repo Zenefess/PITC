@@ -106,6 +106,8 @@ al64 struct THREAD_CFG { // 64 bytes
       ui64 rc_tc;
       ui32 records32;
    };
+   // Reported rather than executed against: ComputationPulse derives its idle phase from the cycle it has
+   // stretched, in tics, because a millisecond copy of the off-time cannot follow that stretch (ISSUES.MD E6)
    ui32 inactiveTime;  // Sleep duration (in ms)
    union {
       ui32 flags;
@@ -150,7 +152,10 @@ al32 struct RESULTS_ARRAYS { // 96 bytes
    // The two owned allocations, and the only two members the destructor below frees; they are initialised
    // here rather than relying on the static zero-initialisation resArray happens to receive
    ptr       p    = 0; // Master pointer
-   si64ptr   iter = 0; // Total iterations performed per thread
+   // Records processed per thread, not loop iterations: a memory-backed iteration is four records and a
+   // register-resident one is a single record, and the idle iterations of a pulsed run are no records at
+   // all, so a count of iterations was not a count of work the benchmark could weigh (ISSUES.MD E12)
+   si64ptr   iter = 0; // Total records processed per thread
    ui64 blockSize[2] = { 0, 0 }; // Memory per thread, per core class
    ui64 records[2]   = { 0, 0 }; // Memory records per thread, per core class
 

@@ -351,24 +351,52 @@ multi-field read-modify-write, so every thread calling it was an unsynchronised 
 (ISSUES.MD D2). `ComputationPulse` and `PulseWaitUntil` take their timestamps from `CurrentTics()` (`CPU.h`),
 a bare `QueryPerformanceCounter` read into a local. A side effect worth keeping: `wmain`'s single
 `timer.Update()` before the spawn loop now gives every thread an identical `startTics`, which is what the
-time-synchronised shapes need.
+time-synchronised shapes need. **That call belongs immediately above the spawn loop**, below the arena
+allocation and the seeding pass that writes every byte of it: taken above them, as it was, the reading was
+stale by the whole of the seeding — hundreds of milliseconds for `Mc8`, far longer for a multi-gigabyte
+request — so the start-up delay was spent on seeding, `startTics` could already be in the past when the
+threads read it, and `endTics` moved earlier with it, making the test shorter than the duration asked for
+(ISSUES.MD E11). `timer.siCurrentTics` has no other reader in the program.
 
-`ComputationPulse` implements the pulse shapes from the `procSync` bits before entering its loop:
+`ComputationPulse` implements the pulse shapes from the `procSync` bits before entering its loop. **Every
+quantity below is a tic count**, including the idle phase, which is `cycleTics - activeTics` *after* the
+shape has stretched the cycle. It used to be a `ui32` of milliseconds grown separately from the cycle, and
+the two could then disagree — the staggered arm did — as well as overflowing 32 bits at a long cycle on a
+wide machine (ISSUES.MD E3, E6).
 
 - **Constant** (bit 4): `nextTic` is set to the end time, so the compute branch never yields.
 - **Parallel** (bit 1): all threads pulse together — and, unless the run is time-synchronised, this is the one
   shape that is *jittered*, so that "together" is not lockstep.
 - **Round-robin** (bit 0): thread *n*'s start is offset by *n* cycles and its cycle stretched by the thread
   count, so exactly one thread is active at a time.
-- **Staggered** (bit 2): offset by `1 << (coreNum & 7)` cycles — a doubling ramp across each group of 8 cores.
+- **Staggered** (bit 2): offset by `(1 << (coreNum & 7)) - 1` cycles and its cycle stretched by
+  `1 << (coreNum & 7)` — a doubling ramp across each group of 8 cores. The offset is added to `startTics`
+  only, `nextTic` taking it from there; adding it to both left the *first* window open one whole stagger
+  period longer than the on-time asked for — 7.9 s of unbroken compute at preset `-8`'s 900 ms setting. The
+  stretch is by the stagger, not by twice it, or core 0 and every eighth core after it run at half the cycle
+  frequency requested. And the ramp is **folded down** (`stagger >>= 1`) until the thread's first window fits
+  inside the run, because a run shorter than the full 128-cycle ramp otherwise leaves the top of each group
+  of 8 cores executing the one job cycle forced before the loop and nothing else — a `.Pass.` for silicon
+  that was never exercised (ISSUES.MD E3).
 - **Sweeping** (bit 6): the sleep duration is recomputed each cycle as a linear ramp across the test's total
-  duration, continuously sweeping the duty cycle rather than holding it fixed. The ramp is only meaningful
-  *inside* the run's window, so the loop re-checks `endTics` against a fresh reading immediately after
-  `timer.Update()`, and the ramp itself is computed in `si64` and clamped to `[0, cycleTime]` before it is
-  narrowed. Evaluating it past `endTics` used to make the subtraction negative, and the unsigned delay that
-  came out of the cast was ~49 days (ISSUES.MD E1) — do not remove either guard.
+  duration, continuously sweeping the duty cycle rather than holding it fixed. Each cycle **begins idle** and
+  the duty cycle rises in a straight line to 100 % at the end of the run; the help text, the README and the
+  `T` option say so, because nothing but the code did (E8). `wmain` clears `cfg.offTime` for any run carrying
+  this bit — in a sweep the on-time is the whole cycle — which is what makes presets `-6` and `-7` run the
+  cycle they name rather than 900 ms more (E7). The ramp is only meaningful *inside* the run's window, so the
+  loop's condition takes a fresh reading and leaves as soon as the deadline has passed, and the ratio is
+  taken in `fl64` and the result clamped to `[0, cycleTics]` before it is used. Evaluating it past `endTics`
+  used to make the subtraction negative, and the unsigned delay that came out of the cast was ~49 days
+  (ISSUES.MD E1) — do not remove either guard. The `fl64` is not decoration either: the `si64` product of a
+  cycle and a run overflows at a day-long run of minute-long cycles.
 - **Time-synchronised** (bit 3): suppresses the jitter a parallel run is otherwise given, so `Spt`'s threads
   share one pulse edge where `Sp`'s deliberately do not.
+
+**No idle phase may end after the run does.** Each is a wait until `min(curTics + pulseTics, endTics)`, not a
+relative sleep: a round-robin thread's off-phase is one cycle per thread and a staggered thread's up to 127
+of them, so 64 threads at a 2 s cycle issued a single 126-second sleep and `wmain` waited out every second of
+it past the end of the test (ISSUES.MD E6). The only overshoot left is one job cycle — the one already
+executing when the deadline passes, which must finish for its result to be compared.
 
 The jitter is `jitterSpan`, `JitterSeed` and `NextJitter` (`CPU.h`), and four properties of it are
 load-bearing. **It is drawn from a per-thread generator**, seeded from `rand_s`, the performance counter and
@@ -390,6 +418,15 @@ Parallel when it carries none. The shape `switch` in `ComputationPulse` accordin
 than 1 (R-R) and 4 (Staggered) as Parallel, and adds `startTics` outside the `switch`: `nextTic` starts life as
 a *duration* (`activeTics`), so any path that fails to add the start timestamp leaves the thread comparing a
 QPC reading against a few million tics, permanently asleep — the whole-run idle of ISSUES.MD A4.
+
+**Bits 4–6 are read the same way, each from its own bit.** The outer `switch(tcfg->procSync & 0x070)` gives
+Fixed pulse (`0x020`) and Sweeping pulse (`0x040`) the pulsed arm and Constant (`0x010`) the other, and
+`wmain` substitutes Constant when none of the three is set, exactly as it substitutes Parallel above. Bit 5
+had no reader at all while "fixed pulse" was inferred from the absence of the other two, so the banner's
+`F-P` named a mode no line of the executor implemented (ISSUES.MD E10). The arm that catches a combination
+this build does not implement is the **constant** one, deliberately: a thread that never yields cannot be
+left idle for a test it was told to compute, where the fixed-pulse arm would run an unknown mode as a
+100 ms/900 ms pulse under another mode's name.
 
 Every wait a worker thread performs — the start-up delay and each pulse boundary — goes through the
 pulse-timing group in `CPU.h` (`CreatePulseTimer`, `PulseWait` / `PulseSleep`, `PulseWaitUntil`), never
@@ -469,8 +506,17 @@ procSync   bit 0 R-R   1 Par   2 Stag     3 T-Sync 4 Constant 5 Fixed pulse  6 S
 ```
 
 Cache bits 5–7 are parsed and displayed but **not implemented** (the README and help text say so explicitly).
-Benchmark mode (bit 7) additionally records each thread's iteration count into `resArray.iter` and prints a
-KUPS score weighted by the vector width.
+Benchmark mode (bit 7) additionally records each thread's **record** count into `resArray.iter` and prints a
+KUPS score weighted by the 64-bit lanes a job cycle updates. Two rules hold that score together, and both
+were broken (ISSUES.MD E12). `resArray.iter` counts records, not loop iterations: a memory-backed iteration
+is four records and a register-resident one is a single record, and an idle iteration of a pulsed run is no
+records at all, so `j` advances by `recStep` inside the compute branch alone. And the weight is derived the
+way `JobCycle` dispatches — the widest vector unit selected, plus the ALU's lane where bit 0 is set — which
+makes it equal to the arena's own `recSize / 8` for every unit selection `wmain` accepts. It was
+`(procUnits & 0x1F) >> 1`, which is a vector width only for the three combinations `B` installs, and even
+there was short by the ALU lane. The rate is `fl64` over `cfg.tics`, never over a count of whole seconds:
+that count is 0 for `B Tt0.5` (E4). **Changing any of this changes the published score**, and figures from
+different builds are not comparable — the current one is 4.5× what the same run reported before E12.
 
 `procUnits` bits 1–4 select *one* unit: `wmain` rejects a selection carrying more than one of them with `-16`,
 and one carrying none of bits 0–4 with `-15`, both before the arena is allocated. Bit 0 (ALU) is orthogonal and
@@ -482,6 +528,14 @@ a false `!Fail!` — while their own results row was graded `.Pass.` against sil
 all three before setting its own — so the last one given wins, and a `T` argument that carries only a duration
 or a start-up delay leaves the mode untouched. That is what keeps `B Tt120` and `-1 Tt600` constant-load runs
 (ISSUES.MD F1); do not hoist the clear back out to the top of the option's parse loop.
+
+**What each mode implies is applied after the whole command line has been read**, not from the sub-option's
+own parse arm, and there are two such implications: a `procSync` naming no mode at all becomes Constant, and
+a sweep's `cfg.offTime` becomes 0. `Ts` used to clear the off-time as it was parsed, which made `Ts]500` and
+`T]500s` different runs and did nothing whatever for presets `-6` and `-7`, which set the sweep bit without
+passing through that arm — so the two ways of asking for a sweep ran cycles 900 ms apart (ISSUES.MD E7).
+Both statements sit with the `-12`/`-13`/`-14` checks in `wmain`, above the `-14` check because it reads the
+mode they settle.
 
 ### Command-line parsing
 
