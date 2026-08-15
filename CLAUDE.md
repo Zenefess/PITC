@@ -134,7 +134,15 @@ The four planes (`value[4][MAX_THREADS]`, declared in `CPU.h`) each carry a fixe
 | `value[0]` | Input seeds (block 1 of `cpu.values`) — read-only during the run |
 | `value[1]` | Per-thread working scratch; in memory-backed mode its `p0`–`p4` fields instead hold pointers into the RAM arena |
 | `value[2]` | Expected outputs (block 2 of `cpu.values`) — the comparison reference |
-| `value[3]` | Observed value, written only by `Failed()` on a mismatch; otherwise a copy of `value[2]` so the results table prints `.Pass.` |
+| `value[3]` | Observed value, written by the `JobCycle*` wrapper on a mismatch and read back by `Failed()`; otherwise a copy of `value[2]` so the results table prints `.Pass.` |
+
+`value[3]` is where a failure is *reported from*, and both readers depend on the wrapper having written it:
+`Evaluate` grades the results table by comparing it against `value[2]`, and `Failed()` prints it as the
+observed value. `Failed()` used to print `value[1]` for the AVX-512, AVX2, SSE and FPU units instead, which
+is the working plane — and in memory-backed mode the working plane holds no results at all, its first 40
+bytes being the arena pointers the `RESULTS` union overlays on the `avx512` member, so the one place an
+AVX-512 fault is surfaced printed eight pointers formatted as doubles (ISSUES.MD A8). Nothing but a
+`JobCycle*` wrapper should write `value[3]` during a run.
 
 `RESULTS` (`CPU.h`) is a 128-byte union whose 16 `ui64` lanes are ordered **widest unit first**:
 `raw[0..7]` = AVX-512, `raw[8..11]` = AVX2, `raw[12..13]` = SSE, `raw[14]` = FPU, `raw[15]` = ALU.
@@ -195,6 +203,11 @@ eighteen kernels still agree afterwards.
 
 `CPU_job_cycles.h` wraps each kernel in a `JobCycle*` function that seeds the working values from `value[0]`,
 runs the kernel, compares against `value[2]`, and on mismatch records `value[3]` and calls `Failed()`.
+**`Failed()`'s third argument must name the unit whose `value[3]` member the wrapper just wrote**
+(0=AVX-512, 1=AVX2, 2=SSE, 3=FPU, 4=ALU), because that argument is what selects the format the mismatch is
+printed in and the lanes it is read from. `JobCycleMemFPU` passed 4 for all four of its records, so an FPU
+fault printed two unrelated ALU integers with `%lld` (ISSUES.MD A12) — the combined `JobCycle*ALU_*`
+wrappers, which call `Failed()` twice with different units, are the shape to copy.
 These are indexed by a **function-pointer table** — `JobCycle[hasMemory][procUnits & 0x1F]` — resolved once per
 thread in `ComputationPulse`, so the hot loop has no branching on configuration.
 
@@ -523,11 +536,17 @@ Verify against current source before relying on any of these:
 
 ### Result comparison must stay bit-exact
 
-`CPU_job_cycles.h` defines two `ResultsMatch` overloads (`fl64x2`, `fl64x4`) that XOR the computed and
-expected vectors and test the difference against zero. Every SSE and AVX2 job cycle goes through them.
+`CPU_job_cycles.h` defines three `ResultsMatch` overloads (`fl64x2`, `fl64x4`, `fl64x8`) that XOR the
+computed and expected vectors and test the difference against zero. **Every** SSE, AVX2 and AVX-512 job
+cycle goes through them, and the ALU and FPU paths compare raw scalars with `!=`, so all five units now
+answer the same question: are these two bit patterns identical?
 Do not substitute `_mm_testc_si128` or `_mm256_testc_pd` here, and do not reach for `AllTrue` in
 `common functions.h`: `PTEST`'s `CF` is a *subset* test (a bit that should be 0 turning 1 passes), and
 `VTESTPD` examines only each lane's sign bit — every job output is positive, so it can never fail. Both
 spellings were live in the shipped code and made the SSE and AVX2 verdicts partly or wholly blind.
-The AVX-512 path still compares with `_mm512_mask_cmpneq_pd_mask`, which is a floating-point rather than a
-bitwise comparison — a separate known gap (ISSUES.MD A11), not the same defect.
+Do not substitute a floating-point predicate either. The AVX-512 cycles used
+`_mm512_mask_cmpneq_pd_mask`, which asks a question about *numeric values* rather than bit patterns and so
+errs in both directions: `+0.0` and `-0.0` satisfy it as equal, hiding a sign-bit flip in a zero lane,
+while two bit-identical NaNs satisfy it as unequal, which would report a fault where the bits agree
+(ISSUES.MD A11). The `fl64x8` overload uses `_mm512_test_epi64_mask` on the XOR rather than `testz`, which
+AVX-512 does not provide; an empty mask is the match.

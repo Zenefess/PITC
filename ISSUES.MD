@@ -37,7 +37,7 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1–A7, A9, A10, B1, B2, B3, B5, B6, C1–C8, C10, C11, D1, D2, D3, D5, E1, E2, F1–F15, G1–G9, H1, H2,
+**A1–A12, B1, B2, B3, B5, B6, C1–C8, C10, C11, D1, D2, D3, D5, E1, E2, F1–F15, G1–G9, H1, H2,
 H7, J1, J2 and J7 are fixed** — see the
 `Fixed` notes on those entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
 bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
@@ -393,6 +393,38 @@ the four functions and the three invariants of the core maps, its localisation s
 option is inverted, and the known-constraints bullet that named `Uc`/`Ut` as unusable is replaced by one
 saying what a `U` map now means.
 
+A8, A11 and A12 finish section A bar A13, and they are the reporting batch: with A1–A3 the verdicts
+themselves became trustworthy, and these three are about what the tool *says* once a verdict goes against
+the silicon. A8 and A12 are one failure between them — `Failed()` read the working plane rather than the
+plane its caller had just written, and `JobCycleMemFPU` asked for the wrong format on top of that — so a
+memory-backed FPU fault printed two unrelated integers, and a memory-backed AVX-512 fault printed the arena
+pointers the `RESULTS` union overlays on the `avx512` member, formatted as doubles. Neither report named a
+value the CPU had produced. A11 is the last unit whose comparison was not a bit compare: a third
+`ResultsMatch` overload replaces the floating-point predicate at all ten AVX-512 call sites, so ALU, FPU,
+SSE, AVX2 and AVX-512 now agree on what "identical" means. No job kernel is touched by any of the three, so
+`cpu.values` does not need regenerating.
+
+Verified in the manner of the earlier batches. A11's two expressions were transcribed verbatim into a
+harness and run on AVX-512 hardware: the old predicate calls `+0.0` and `-0.0` equal, calls two
+bit-identical NaNs different, and catches 508 of 512 single-bit corruptions of a golden vector with zero
+lanes — the four it misses being those lanes' sign bits — where the new overload catches 512 of 512 and
+reports the NaNs as identical. A8's premise was measured against the real union layout: `p0` at byte 0 and
+`p4` ending at byte 40, both inside `avx512`'s 64 bytes, with `avx`, `sse` and `fpu` at 64, 96 and 112
+overlaid by nothing and written by no memory-backed path. A12 was audited mechanically — all 65 `Failed()`
+call sites paired with the `value[3]` member assigned above them — and `JobCycleMemFPU` was the only
+disagreement. The `wprintf` formatting itself is Windows-specific and was reviewed, not executed; the MSVC
+build still has to confirm it.
+
+Two files moved, both modestly. `CPU.h` gained 7, all of them one comment block at `:1045` inside
+`Failed()`, so a citation below it reads 7 lines low — `Evaluate` and `GenerateValues`, and so B4, B5, B7
+and B8, on top of every earlier shift. `CPU_job_cycles.h` gained 24 in three places: 8 at `:15` extending
+the bit-exactness note, 12 at `:44` for the new overload, and 4 at `:113` inside `JobCycleMemFPU` — so a
+citation into that file reads 8, 20 or 24 lines low depending on which of the three it falls below, and the
+`JobCycle` table is now at `:545`. `CLAUDE.md` was updated to match: its plane table states the `value[3]`
+contract both `Evaluate` and `Failed()` depend on, its dispatch section states the rule A12 broke, and its
+bit-exactness section no longer names A11 as an open gap. **A13 is untouched**, and is now the only entry
+left in section A.
+
 Every other entry below still stands.
 
 ---
@@ -576,7 +608,21 @@ eight have finished. Contrast the correct form at `CPU_methods.h:76`:
   its report becomes unreliable.
 * **Fix:** clear only the failing thread's bit; pass `threadBit` through to `Failed()`.
 
-### A8. `Failed()` prints the wrong value plane, and prints raw pointers in memory-backed mode — **High**
+### A8. `Failed()` prints the wrong value plane, and prints raw pointers in memory-backed mode — **High** — *Fixed*
+
+> **Fixed.** Cases 0–3 now read `value[3][coreNum]`, as case 4 already did, so all five units print the
+> value their caller recorded. The two halves of the entry are one edit: `value[1]` is wrong in
+> register-resident mode because the plane the caller wrote is `value[3]`, and wrong in memory-backed mode
+> for the further reason the entry gives — `p0`–`p4` overlay the `avx512` member, so case 0 was printing
+> pointers formatted as doubles. Measured off-target against the real `RESULTS` layout: `p0` sits at byte 0
+> and `p4` ends at byte 40, entirely inside `avx512`'s 64 bytes, so every AVX-512 lane printed under an
+> `M`, `B` or preset run was pointer bits. Cases 1–3 read `avx`, `sse` and `fpu` at bytes 64, 96 and 112,
+> which no pointer overlays but no memory-backed path writes either — those printed the zeros the plane was
+> allocated with. The observed half of the report was therefore meaningless for four of the five units in
+> every memory-backed run, and for all four in every register-resident one.
+>
+> The plane contract this rests on is now stated in `CLAUDE.md`: a `JobCycle*` wrapper writes `value[3]`,
+> and `Evaluate` and `Failed()` are its two readers.
 
 `CPU.h:181–208`. Cases 0–3 (AVX-512, AVX2, SSE, FPU) print `value[1][coreNum]` as the observed value, while
 case 4 (ALU) prints `value[3][coreNum].alu`. Every caller in `CPU_job_cycles.h` records the observed value
@@ -638,7 +684,24 @@ the end of the table and calls through whatever bytes follow it.
   and the run then reports nothing at all.
 * **Fix:** reject a `procUnits` with no processing bit set, and add a `default:` to the sizing switch.
 
-### A11. AVX-512 uses floating-point comparison semantics while every other unit compares bits — **Medium**
+### A11. AVX-512 uses floating-point comparison semantics while every other unit compares bits — **Medium** — *Fixed*
+
+> **Fixed.** A third `ResultsMatch` overload, `(cfl64x8, cfl64x8)`, joins the two A1 and A2 added, and all
+> ten AVX-512 call sites now go through it — five in `JobCycleAVX512`/`JobCycleMemAVX512` and five in the
+> `ALU_` pair. It has the same shape as its siblings, XOR then test-against-zero, differing only in that
+> AVX-512 provides no `testz`: `_mm512_test_epi64_mask` sets one mask bit per 64-bit lane whose AND is
+> non-zero, so an empty mask over the difference is the match. All five units now answer the same question.
+>
+> Both directions of the defect were reproduced on AVX-512 hardware, off-target, against the two
+> expressions verbatim. The old predicate reported `+0.0` and `-0.0` as equal, and reported two
+> bit-identical NaN encodings as different — a false pass and a false fail from one comparison. Under an
+> exhaustive single-bit sweep of all 512 bits of a golden vector containing zero lanes it caught 508 of
+> 512; the four it missed are the sign bits of the zero lanes. The new form catches 512 of 512 in that
+> sweep and in the all-non-zero one, and reports the identical NaNs as identical.
+>
+> No job kernel is touched, so `cpu.values` does not need regenerating. `CLAUDE.md`'s bit-exactness section
+> no longer names this as an open gap and now says not to reintroduce a floating-point predicate, for the
+> reason above.
 
 `CPU_job_cycles.h:174,188,193,198,203,430,448,…`:
 
@@ -651,7 +714,16 @@ zero lane is missed, and if a fault produced NaN in both planes the comparison w
 ALU and FPU paths use `!=` on raw scalars and the SSE/AVX2 paths use integer `PTEST`, so the four units do not
 agree on what "identical" means. For a bit-exactness tester the comparison should be bitwise everywhere.
 
-### A12. `JobCycleMemFPU` reports FPU failures using the ALU format — **Medium**
+### A12. `JobCycleMemFPU` reports FPU failures using the ALU format — **Medium** — *Fixed*
+
+> **Fixed.** The four `4`s are now `3`, exactly as the entry prescribes. The whole family was then audited
+> mechanically rather than by eye — every `Failed()` call site in `CPU_job_cycles.h` paired with the
+> `value[3]` member assigned immediately above it — and `JobCycleMemFPU` was the only disagreement among
+> the 65. The other 61 already named the unit they had written, the eight in `JobCycleMemALU_FPU` included.
+>
+> Note the interaction with A8, which was fixed alongside: while `Failed()`'s case 3 printed `value[1]`,
+> routing an FPU mismatch through case 4 was not the whole of what made the report useless. Both had to be
+> corrected for a memory-backed FPU fault to print the two doubles that actually disagreed.
 
 `CPU_job_cycles.h:70,75,80,85` pass unit `4` (ALU) to `Failed()` from inside the FPU function:
 

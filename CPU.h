@@ -1042,26 +1042,33 @@ static void Failed(cui64 coreNum, vchptrc threadByte, cui8 unit) {
    // (threadByte << 3) + threadBit, so the failing thread's bit within that byte is coreNum & 0x07
    cui8 threadMask = ui8(~(1u << (coreNum & 0x07)));
 
+   // The observed value is read from value[3], never value[1]. Every caller in CPU_job_cycles.h copies the
+   // value that failed into value[3] immediately before calling, and value[1] is the *working* plane, which
+   // in memory-backed mode does not hold results at all: its first 40 bytes are the arena pointers p0~p4,
+   // which the RESULTS union overlays on the avx512 member. Cases 0~3 read value[1], so an AVX-512 failure
+   // printed eight pointers reinterpreted as doubles, and the AVX2, SSE and FPU cases printed whatever a
+   // register-resident run had last left in those lanes -- zero, under any 'M', 'B' or preset run. Only the
+   // ALU case, which already read value[3], reported the value the CPU actually produced (ISSUES.MD A8)
    wprintf(wstrInterface[11], coreNum);
    switch(unit) {
    case 0:
       wprintf(L"%1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f  %s %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f\n",
          value[2][coreNum].avx512.m512d_f64[0], value[2][coreNum].avx512.m512d_f64[1], value[2][coreNum].avx512.m512d_f64[2], value[2][coreNum].avx512.m512d_f64[3],
          value[2][coreNum].avx512.m512d_f64[4], value[2][coreNum].avx512.m512d_f64[5], value[2][coreNum].avx512.m512d_f64[6], value[2][coreNum].avx512.m512d_f64[7], wstrInterface[12],
-         value[1][coreNum].avx512.m512d_f64[0], value[1][coreNum].avx512.m512d_f64[1], value[1][coreNum].avx512.m512d_f64[2], value[1][coreNum].avx512.m512d_f64[3],
-         value[1][coreNum].avx512.m512d_f64[4], value[1][coreNum].avx512.m512d_f64[5], value[1][coreNum].avx512.m512d_f64[6], value[1][coreNum].avx512.m512d_f64[7]);
+         value[3][coreNum].avx512.m512d_f64[0], value[3][coreNum].avx512.m512d_f64[1], value[3][coreNum].avx512.m512d_f64[2], value[3][coreNum].avx512.m512d_f64[3],
+         value[3][coreNum].avx512.m512d_f64[4], value[3][coreNum].avx512.m512d_f64[5], value[3][coreNum].avx512.m512d_f64[6], value[3][coreNum].avx512.m512d_f64[7]);
       break;
    case 1:
       wprintf(L"%1.9f, %1.9f, %1.9f, %1.9f  %s %1.9f, %1.9f, %1.9f, %1.9f\n",
          value[2][coreNum].avx.m256d_f64[0], value[2][coreNum].avx.m256d_f64[1], value[2][coreNum].avx.m256d_f64[2], value[2][coreNum].avx.m256d_f64[3], wstrInterface[12],
-         value[1][coreNum].avx.m256d_f64[0], value[1][coreNum].avx.m256d_f64[1], value[1][coreNum].avx.m256d_f64[2], value[1][coreNum].avx.m256d_f64[3]);
+         value[3][coreNum].avx.m256d_f64[0], value[3][coreNum].avx.m256d_f64[1], value[3][coreNum].avx.m256d_f64[2], value[3][coreNum].avx.m256d_f64[3]);
       break;
    case 2:
       wprintf(L"%1.9f, %1.9f  %s %1.9f, %1.9f\n",
-         value[2][coreNum].sse.m128d_f64[0], value[2][coreNum].sse.m128d_f64[1], wstrInterface[12], value[1][coreNum].sse.m128d_f64[0], value[1][coreNum].sse.m128d_f64[1]);
+         value[2][coreNum].sse.m128d_f64[0], value[2][coreNum].sse.m128d_f64[1], wstrInterface[12], value[3][coreNum].sse.m128d_f64[0], value[3][coreNum].sse.m128d_f64[1]);
       break;
    case 3:
-      wprintf(L"%1.9f  %s %1.9f\n", value[2][coreNum].fpu, wstrInterface[12], value[1][coreNum].fpu);
+      wprintf(L"%1.9f  %s %1.9f\n", value[2][coreNum].fpu, wstrInterface[12], value[3][coreNum].fpu);
       break;
    case 4:
       wprintf(L"%lld  %s %lld\n", value[2][coreNum].alu, wstrInterface[12], value[3][coreNum].alu);
