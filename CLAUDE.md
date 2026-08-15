@@ -20,8 +20,13 @@ msbuild CPU.vcxproj /p:Configuration=Release /p:Platform=x64   # -> x64\PITC.exe
 msbuild CPU.vcxproj /p:Configuration=Debug   /p:Platform=x64   # -> x64\Debug\PITC.exe (ASAN enabled)
 ```
 
-Build **x64 only**. The `Win32` configurations are vestigial: they lack the `LanguageStandard`, `IncludePath`
-and `TargetName` settings the x64 configurations carry, and are not maintained.
+Build **x64 only** — and now that is the only thing the project file offers. The two `Win32` configurations
+were deleted (ISSUES.MD H7); they had never carried the `LanguageStandard`, `IncludePath`, `TargetName` or
+per-file ISA settings the x64 configurations do. `CPU_build.h`, included by all four kernel units and by
+`CPU.h`, `#error`s if it is compiled for anything but x64, so the sources reject an x86 build however it is
+configured — the kernels use `_mm_set1_epi64x` and the 512-bit intrinsics, and the topology, affinity and
+arena code is written against 64-bit masks throughout. The `Win32Proj` keyword in the globals property
+group is a project *type*, not a platform, and is what Visual Studio emits for an x64 console app; leave it.
 
 Two build settings look like mistakes but are deliberate — **do not "fix" them**:
 
@@ -61,6 +66,17 @@ file is rejected with `-21` and a message naming the cause, instead of reaching 
 thread report `!Fail!` as though the silicon were at fault. `W` self-validates by re-running the kernels 65,535
 times and refuses to write the file on any mismatch.
 
+`W` also runs `ValidateKernelFamilies` (`CPU.h`) *before* it generates anything, and refuses with `-22` and the
+name of the offending kernel if it fails (ISSUES.MD B5). That check is what holds the eighteen job kernels to
+each other: `cpu.values` only ever records what the five register-resident kernels produce, so a `JobMem*` or
+`JobALU_*` kernel that had drifted from its counterpart was compared against nothing, and every memory-backed
+run reported the difference as a CPU fault. It runs one seed through every kernel the CPU can execute and
+requires each memory-array and combined variant to reproduce its register-resident counterpart **byte for
+byte** — `memcmp`, never an arithmetic comparison, for the reason the bit-exactness note at the end of this
+file gives. Each `JobMem*` kernel is handed four records carrying the same seed and all four must come back
+equal, so the record indexing is checked alongside the arithmetic. **Add a `Job*` family and it must be added
+to `ValidateKernelFamilies`, to `wstrKernelName`, and to `JobCycle`.**
+
 Exit codes are meaningful and documented in `en-GB.h` (`wstrInstructions_English`): negative = error,
 `0` = stability test completed, `1` = values file written, `2` = instructions displayed. `-11` … `-18` are the
 pre-flight rejections in `wmain` — an unsupported vector unit, more than one `S` pulse shape, a test duration
@@ -71,8 +87,10 @@ records (`-18`). `-19` is the one runtime failure that aborts a run: a worker th
 created or resumed, in either the test or the `W` path. `-20` is a `cpu.values` header that could not be
 written; `-21` is a `cpu.values` this build will not read — bad magic, an unreadable or unsupported format
 version, a different build or kernel revision, or contents that disagree with the hashes in the header —
-one code shared by five messages, the way `-11` and `-17` already share theirs. Add a code and the table in
-`wstrInstructions_English` and the message in `wstrMessage_*` have to grow with it.
+one code shared by five messages, the way `-11` and `-17` already share theirs. `-22` is a job kernel that
+disagrees with the register-resident kernel for its unit, raised by `ValidateKernelFamilies` under `W`.
+Add a code and the table in `wstrInstructions_English` and the message in `wstrMessage_*` have to grow with
+it.
 
 ## Architecture
 
@@ -130,6 +148,31 @@ Every kernel is `for(i < 16) { UNLOOPx4( ...4 chained ops... ) }` — the `UNLOO
 and the arithmetic is deliberately chosen to be latency-bound and irreducible (chained `sqrt`/divide for FP,
 multiply/shift/xor/divide for integer). The `ALU_` variants interleave integer and FP ops to load both pipes
 simultaneously. Adding a new unit means adding all eight functions plus its `JobCycle` entries.
+
+Three properties of that arithmetic are load-bearing, and all three are easy to undo by accident:
+
+- **The ALU chain runs in `ui64`, not `si64`.** Each kernel binds an alias over the value it was given —
+  `ui64 &v = (ui64&)x;`, or `ui64ptrc v = (ui64ptrc)x;` in the memory variants — and every step wraps. Only
+  unsigned arithmetic is defined to wrap in every language mode; in `si64` the multiply's narrowing
+  conversion and the left shift of a negative value were implementation-defined or undefined before C++20,
+  so the golden values silently depended on `LanguageStandard` (ISSUES.MD J2). Do not "simplify" the alias
+  away by copying the value into a local either — in the memory kernels that would delete the load/store
+  traffic those kernels exist to generate.
+- **The shift predicate is `i < 8`, against a counter that runs to 15**, so the shift reverses direction
+  halfway through the loop. It was `i < 32`, which is always true, and the right-shift arm never executed
+  (ISSUES.MD J1).
+- **Every FP kernel carries a running accumulator**, `acc`, seeded to 1.0, updated as
+  `acc = (acc + x) / (|acc - x| + 0.01)` after *every* step and folded in once at the end with `x *= acc`
+  (one accumulator per record in the memory variants). It is not decoration: each step opens with
+  `sqrt(sqrt(x / c))`, whose fourth root divides a relative perturbation by four and rounds it away, so
+  without a path to the result that avoids a root, four single-ULP faults in five were absorbed and the
+  tool reported `.Pass.` (ISSUES.MD J7). Removing it, or moving the fold inside the loop where a root
+  follows it, restores the defect.
+
+`RunGoldenLadder` depends on `JobSSE`, `JobAVX2` and `JobAVX512` computing `JobFPU` element-wise, bit for
+bit — that is what lets a `cpu.values` written on one vector width verify on another. Any change to the FP
+arithmetic must be made in all four units identically, and `W`'s `ValidateKernelFamilies` is what proves the
+eighteen kernels still agree afterwards.
 
 ### Dispatch: `JobCycle[2][32]`
 
@@ -336,7 +379,8 @@ into `wstrLang[6]`, and the copy is clamped to that capacity — `lstrcpynW`'s t
 code is therefore truncated to five characters; widen `wstrLang` if a language ever needs more. Some strings
 are still
 hard-coded outside the tables — `wstrUnitsCPU`, `wstrSyncCPU` and `wstrPass` in `CPU.h` (the last is flagged
-`///--- Modify for translation ---///`).
+`///--- Modify for translation ---///`). `wstrKernelName` in `CPU.h` is also outside the tables, but
+deliberately: its entries are C++ identifiers naming the job kernels, and are not translated.
 
 ## Known constraints and latent issues
 
