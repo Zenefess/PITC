@@ -63,8 +63,13 @@ PITC.exe Iax Mc8 Spt Tfd2.0t60[250]1750 Ua   # AVX-512 + ALU, 8MB/core, synchron
 The file stores the expected outputs of those exact kernels. This is now enforced rather than remembered: the
 file's header carries a fingerprint of the kernels that produced it (`KernelFingerprint`, `CPU.h`), so a stale
 file is rejected with `-21` and a message naming the cause, instead of reaching the comparison and making every
-thread report `!Fail!` as though the silicon were at fault. `W` self-validates by re-running the kernels 65,535
-times and refuses to write the file on any mismatch.
+thread report `!Fail!` as though the silicon were at fault. `W` self-validates by re-running the kernels
+`VALUES_SELF_CHECK_ITERATIONS` (65,536) times **for every one of the 512 entries** and refuses to write the
+file on any mismatch. It used to run 65,535 times for the first entry of each thread's range and not at all
+for the rest, because the counter was a `ui16` declared once for the whole function and never reset — about
+2 % of the table, in place of the guarantee the help text gives (ISSUES.MD B4, B8). Delivering that guarantee
+costs real time: the check is 33.5 million ladder runs, which is minutes rather than seconds on a CPU of few
+cores, and the counter is a `ui32` because a `ui16` can never reach 65,536.
 
 `W` also runs `ValidateKernelFamilies` (`CPU.h`) *before* it generates anything, and refuses with `-22` and the
 name of the offending kernel if it fails (ISSUES.MD B5). That check is what holds the eighteen job kernels to
@@ -82,8 +87,9 @@ Exit codes are meaningful and documented in `en-GB.h` (`wstrInstructions_English
 pre-flight rejections in `wmain` — an unsupported vector unit, more than one `S` pulse shape, a test duration
 of zero or less, a zero pulse on-time, an `I` string naming no processing unit, an `I` string naming more
 than one of FPU/SSE4.1/AVX2/AVX-512, a memory request the machine cannot satisfy (`-17`, shared by the
-pre-flight size check and a failed `malloc64`), and a per-thread slice too small to hold one call's four
-records (`-18`). `-19` is the one runtime failure that aborts a run: a worker thread that could not be
+pre-flight size check and a failed `malloc64`), and a per-thread slice too small to hold the eight records a
+slice is rounded to (`-18`, which is also where a core class given no memory at all arrives — `Mn` and `Ms`
+each name one class). `-19` is the one runtime failure that aborts a run: a worker thread that could not be
 created or resumed, in either the test or the `W` path. `-20` is a `cpu.values` header that could not be
 written; `-21` is a `cpu.values` this build will not read — bad magic, an unreadable or unsupported format
 version, a different build or kernel revision, or contents that disagree with the hashes in the header —
@@ -158,6 +164,15 @@ function element-wise, so one pass per lane is what makes the golden block the s
 it. The generation half, the self-check half and the header's kernel fingerprint all call one shared
 `RunGoldenLadder` (`CPU.h`) rather than repeating the ladder, because a disagreement between the generation
 and self-check halves makes the check fail unconditionally and `W` return `-4`.
+
+A disagreement is recorded in `generateError` (`CPU.h`), a global flag each thread sets with
+`_InterlockedOr8` before it clears its completion bit, and which `wmain` reads once every thread has joined.
+It used to be signalled by writing two sentinel values into `value[3][0]` and `value[2][0]` — storage that
+belongs to entry 0, and that whichever thread owns entry 0 overwrites wholesale as it passes. A fault found
+by a thread that finished first was therefore erased, and `W` wrote the file and reported success on a run
+that had already failed (ISSUES.MD B7). **Nothing but a result belongs in a result plane**; a new signal
+between the workers and `wmain` needs storage of its own and an interlocked write, so that it is ordered
+ahead of the completion bit `wmain` is waiting on.
 
 ### Job kernels: one translation unit per ISA
 
@@ -377,17 +392,35 @@ this switch must change with it, and keep its `default:` arm — without one an 
 
 Three rules follow the switch and must survive any edit to it:
 
-- **Record counts are rounded down to a multiple of 4** (`& ~0x03ull`). Every `JobCycleMem*` call processes
-  records `offset … offset+3` and the cursor in `ComputationPulse` steps by 4, so an odd count is walked up
-  to three records past the end of the slice (ISSUES.MD C4).
+- **Record counts are rounded down to a multiple of 8** (`& ~0x07ull`). Four of those eight are what the
+  cursor needs: every `JobCycleMem*` call processes records `offset … offset+3` and the cursor in
+  `ComputationPulse` steps by 4, so an odd count is walked up to three records past the end of the slice
+  (ISSUES.MD C4). Eight is what puts every slice on a cache line (C12): a thread's base in a sub-array is its
+  record offset scaled by that sub-array's element size, the smallest of which is the ALU sub-array's 8
+  bytes, so a multiple of 8 records is a whole number of 64-byte lines in every sub-array — and, since the
+  ALU base is the vector records of every thread scaled by 8 bytes or more, for that base as well. At a
+  multiple of 4, adjacent threads shared the line at each boundary and the false sharing was measured as the
+  cache behaviour this mode exists to exercise.
 - **A count of 0 is rejected** with `-18` rather than run. Zero records also drops the thread onto the
   *register* code path (`JobCycle[recCount ? 1 : 0]`) with `p0`–`p4` already overwritten by arena pointers.
+  This is also the check that refuses a core class given no memory at all — `Mn8` names the first class and
+  leaves the second holding nothing (ISSUES.MD C9) — so a class with threads must be given a size.
 - **`bos`, the running per-thread record offset, counts across both thread classes.** It is initialised once,
   outside the `m` loop; restarting it at the first SMT thread handed every SMT thread a slice a non-SMT
   thread already owned (ISSUES.MD C3).
 
 The size of the request is checked against `GlobalMemoryStatusEx` and the result of `malloc64` against null,
 both `-17`: every pointer handed to a thread is derived from that one allocation (ISSUES.MD C5).
+
+**The whole block is entered when *either* class has been given a size**, not when the first has. `Ms8` names
+the second class, so testing `blockSize[0]` alone meant it allocated nothing at all while the banner reported
+the memory it had asked for and every thread ran the register-resident kernels; `allocMem[1]`'s old default of
+1 byte was the other half of the same defect, giving a class that was never named a slice of one byte rather
+than of nothing (ISSUES.MD C9). Both `allocMem[]` entries now default to 0, and a class that has threads and
+no memory is refused by the record check above. The arena and `resArray.iter` are freed by
+`~RESULTS_ARRAYS` (`CPU.h`) — `wmain` leaves by more than a dozen returns, so the frees belong to the object
+that owns the pointers, exactly as `GLOBAL_CFG`'s destructor owns its bitmaps (C13, GCS p2). A second `B` on
+one command line frees `resArray.iter` before allocating it again.
 
 Of the five pointers handed to each thread, `p0`–`p3` are four views of the *same* arena address at different
 element strides (only `p4` is advanced past them, and only for the `ALU_` combinations). The seeding loop must

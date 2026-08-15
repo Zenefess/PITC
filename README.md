@@ -22,6 +22,7 @@ Command-line options
  
       C==Per virtual core, N==Per first-class core, S==Per second-class virtual core, T=Total split amongst all virtual cores
          The two core classes are the CPU's non-SMT and SMT cores; on a hybrid CPU they are its efficiency and performance cores
+         'N' and 'S' each cover one class only: where the CPU has cores of both, give both, or the class left without memory is refused
  Ox : Results file output options. A filename can be stacked with any of the remaining options; eg. O[results.txt]16
  
       []=Filename, A=Non-UTF ASCII, 8=UTF-8, 16=UTF-16
@@ -45,6 +46,7 @@ Command-line options
  W  : Write new "cpu.values" file.
  
       File will only be created if the integrity of the results pass 65,536 iterations.
+      All 512 entries are verified, not one per thread, so expect the check to run for minutes rather than seconds.
  -x : Configuration presets.
  
       1==Constant stress; one thread per physical core. 10 minute duration

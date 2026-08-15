@@ -37,8 +37,8 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1–A12, B1, B2, B3, B5, B6, C1–C8, C10, C11, D1, D2, D3, D5, E1, E2, F1–F15, G1–G9, H1, H2,
-H7, J1, J2 and J7 are fixed** — see the
+**A1–A12, B1–B8, C1–C13, D1, D2, D3, D5, E1, E2, F1–F15, G1–G9, H1, H2,
+H7, J1, J2 and J7 are fixed** — sections B and C are complete — see the
 `Fixed` notes on those entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
 bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
 failure; A4–A6 and F1 were the false-pass family of Appendix B item 2, where the configuration itself
@@ -424,6 +424,67 @@ citation into that file reads 8, 20 or 24 lines low depending on which of the th
 contract both `Evaluate` and `Failed()` depend on, its dispatch section states the rule A12 broke, and its
 bit-exactness section no longer names A11 as an open gap. **A13 is untouched**, and is now the only entry
 left in section A.
+
+B4, B7, B8, C9, C12 and C13 close sections B and C. B4, B7 and B8 are one function between them, and the
+first two are the same defect twice: `GenerateValues` used storage that outlives the thing it describes. Its
+self-check counter was a `ui16` declared once for the whole function, so it reached its limit inside the
+first entry of a thread's range and never re-entered the loop for any of the rest — at twelve threads,
+twelve of the 512 entries were verified and 500 were written to `cpu.values` unchecked (B4). Its error signal
+was two sentinel words written into `value[2][0]` and `value[3][0]`, storage belonging to entry 0, which
+whichever thread owns entry 0 overwrites wholesale on its way past — so a fault found by a thread that
+finished earlier was erased, and `W` wrote the file and returned success on a run that had already failed
+(B7). The counter is now declared per entry, is a `ui32` because 65,536 does not fit a `ui16` (B8), and the
+error is a global `generateError` flag set with `_InterlockedOr8` before the thread clears its completion
+bit, so it is ordered ahead of the bit `wmain` waits on and nothing can overwrite it.
+
+**B4 is the one fix in this batch with a user-visible cost, and it is the whole point of the entry.**
+Verifying all 512 entries rather than one per thread is 33.5 million ladder runs where it was 12: measured
+on AVX-512 hardware at 40.9 µs a ladder — 42.7 µs on the AVX2 arm, 80.5 µs on the SSE arm — `W` goes from
+about three seconds to roughly 340 seconds on four threads, 86 on sixteen and 21 on sixty-four. That is the
+price of the guarantee the help text has always given, so the help text and `README.md` now also say that
+every entry is verified and that the check runs for minutes rather than seconds. Reducing
+`VALUES_SELF_CHECK_ITERATIONS` is the lever if that is judged too slow; it is one constant in `CPU.h`, and
+lowering it is a decision about how much verification `W` performs, not about which entries it covers.
+
+C9, C12 and C13 are the arena's remainder. C9 was two symptoms of one assumption — that class 0 is the
+class that has memory: `allocMem[1]` defaulted to 1 byte, so `Mn8` gave the second class a slice of one
+byte rather than of nothing, and the allocation block was entered on `blockSize[0]` alone, so `Ms8` — which
+names the second class — allocated nothing at all while the banner reported the memory it had asked for and
+every thread ran the register-resident kernels. Both entries now default to 0, either class having a size
+enters the block, and a class that has threads and no memory is refused by C4's record check with `-18`.
+C12 rounds the per-thread record count down to a multiple of 8 rather than 4, which is what puts every
+slice in every sub-array on a 64-byte line: four is what the cursor needs, eight is what the cache line
+needs, and the ALU sub-array's 8-byte element is the binding constraint. C13 gives `RESULTS_ARRAYS` a
+destructor that frees the arena and the benchmark counters, as GCS p2 requires and as `GLOBAL_CFG` already
+did for its bitmaps, and a second `B` on one command line now frees the counters before allocating them
+again instead of leaking the first block.
+
+Verified off-target in the manner of the earlier batches, all three harnesses transcribing the loops
+verbatim. The `GenerateValues` loop was run pre- and post-fix at 1, 4, 12, 16, 33 and 64 threads: the old
+form verifies exactly one entry per thread at 65,535 iterations and leaves the other 500 of 512 at zero
+(2.3 % of the table, matching B4's estimate), the new form runs all 512 at exactly 65,536. B7's ordering
+was reproduced directly — the faulting thread made to finish before the owner of entry 0 begins — over 200
+trials: the sentinel is erased in every one of them, the flag survives every one. The arena layout was
+walked for all 31 unit selections over eight topologies, including hybrid mixes, non-power-of-two sizes and
+a 128-thread machine: the multiple-of-4 rounding leaves 1,046 slices off a cache line, the multiple-of-8
+rounding leaves none, with no slice overlapping another or reaching past the allocation in either case. The
+memory-configuration switch was tabulated for `Mc`, `Mt`, `Mn`, `Ms` and `Mn`+`Ms` on three topologies,
+which is what shows `Ms8` changing from a silent register-resident run to either a real memory-backed run
+or an honest `-18`, and `Mc`, `Mt` and `Mn Ms` unchanged. The Windows-specific halves — `_InterlockedOr8`,
+the destructor's `mfree`, `wprintf` — were reviewed, not executed; the MSVC build still has to confirm them.
+No job kernel is touched, so **`cpu.values` does not need regenerating** — though a file written by an
+earlier build was, by B4, mostly unverified when it was written, and regenerating it is worth the minutes.
+
+Two files moved, both modestly. `CPU.h` gained 35 in four places: five at `:75` for the `allocMem` default,
+nine at `:143` for `RESULTS_ARRAYS`' initialised pointers and its destructor, seven at `:157` for the
+`generateError` declaration, and fourteen in and above `GenerateValues` — so a citation reads 5 lines low
+from `:75` to `:142`, 14 low to `:156`, 21 low from there to `GenerateValues`, and 35 low below it, on top
+of every earlier shift. `CPU.cpp` gained 20: three at the `B` case, four in the `W` path's error test and
+thirteen in the arena block, so a citation into `wmain` reads 3 low above the `W` case, 7 low between it and
+the arena block, and 20 low below the arena. `en-GB.h` and `README.md` each gained two documentation lines,
+and `CLAUDE.md` was updated to match: its `W`, exit-code, `GenerateValues` and arena sections describe the
+new iteration count and its cost, the flag that replaced the sentinels, the multiple-of-8 rounding and the
+destructor.
 
 Every other entry below still stands.
 
@@ -864,7 +925,24 @@ threads share the byte:
 
 * **Fix:** `_InterlockedAnd8(&((chptr)threadBits)[tcfg->threadByte], ~threadBit);`
 
-### B4. The advertised 65 535-iteration self-check runs for only one index per thread — **Medium**
+### B4. The advertised 65 535-iteration self-check runs for only one index per thread — **Medium** — *Fixed*
+
+> **Fixed**, exactly as recommended: `i` is declared inside the outer loop, one counter per entry, and is a
+> `ui32` because B8's corrected limit does not fit a `ui16`. Every one of the 512 entries now runs the full
+> `VALUES_SELF_CHECK_ITERATIONS` before `W` will write the file.
+>
+> Measured rather than assumed, by transcribing both forms of the loop into a harness and counting the
+> iterations each entry actually receives, at 1, 4, 12, 16, 33 and 64 threads. The old form verifies exactly
+> one entry per thread — 12 of 512 at twelve threads, 2.3 % of the table, which is the entry's estimate — and
+> leaves every other entry at zero iterations; the new form runs all 512 at exactly 65,536, at every thread
+> count.
+>
+> **This is a real slowdown, and it is the cost of the guarantee.** The check goes from 12 ladder runs to
+> 33.5 million. Timed on AVX-512 hardware with the kernels compiled from this repository, one
+> `RunGoldenLadder` costs 40.9 µs on the AVX-512 arm, 42.7 µs on the AVX2 arm and 80.5 µs on the SSE arm, so
+> `W` takes roughly 340 seconds on four threads, 172 on eight, 86 on sixteen and 21 on sixty-four, where it
+> used to take about three regardless. `en-GB.h` and `README.md` now say so beside the promise. The
+> iteration count is one named constant in `CPU.h` if that trade is ever judged the wrong way round.
 
 `CPU.h:235` declares `ui16 i = 0;` *outside* the per-core loop and `CPU.h:261` uses it as the validation
 counter without resetting it. After the first core in a thread's range, `i == 65535` and the inner loop never
@@ -974,7 +1052,24 @@ the FP chains permanently to NaN and be reported as a hardware failure.
 * **Fix:** verify `bytesProc == RESULTS_BUF_SIZE` on both reads and both writes; prepend a header with a magic
   value, a format version, and a hash of the kernel constants and build settings.
 
-### B7. A detected generation error can be overwritten and lost — **Medium**
+### B7. A detected generation error can be overwritten and lost — **Medium** — *Fixed*
+
+> **Fixed** with the dedicated flag the entry asks for. `generateError` (`CPU.h`) is a `vsi8` of its own,
+> set with `_InterlockedOr8` — the same interlocked byte write the completion bitmap uses — and read by the
+> `W` path once every thread has joined. Both sentinel writes are gone, and with them the commented-out
+> `if(!coreNum)` that had been the only hint anybody noticed the storage was shared.
+>
+> The interlocked write is not only for the write itself: it is a full barrier on MSVC, and each thread
+> performs it before clearing its completion bit, so a flag set by any thread is visible to the `wmain` that
+> observed that thread's bit clear. The sentinels had no such ordering, on top of not surviving.
+>
+> Reproduced before and after, by transcribing the loop and forcing the ordering the entry describes — the
+> faulting thread completes before the thread that owns entry 0 begins — over 200 trials: the sentinel is
+> erased in all 200, so `W` writes a file and returns 1 on a run that detected a computational error, and
+> the flag survives all 200.
+>
+> The general rule this leaves behind is in `CLAUDE.md`: nothing but a result belongs in a result plane, and
+> a new signal between the workers and `wmain` needs storage of its own.
 
 `CPU.h:283–284` signals failure by writing sentinels into thread 0's slot:
 
@@ -989,7 +1084,13 @@ error is silently discarded and a corrupt `cpu.values` is written and reported a
 
 * **Fix:** use a dedicated `volatile` flag with an interlocked write rather than repurposing result storage.
 
-### B8. Help text says 65 536 iterations; the code performs 65 535 — **Low**
+### B8. Help text says 65 536 iterations; the code performs 65 535 — **Low** — *Fixed*
+
+> **Fixed** in the code rather than in the documentation: the limit is now
+> `VALUES_SELF_CHECK_ITERATIONS`, a named constant of 65,536, and the counter is a `ui32` — a `ui16` cannot
+> reach 65,536, so raising the limit without widening the counter would have made the comparison
+> permanently true and the loop endless. The constant is what the help text quotes, so the two can no longer
+> drift apart silently; B4 is what makes the figure describe every entry rather than one per thread.
 
 `en-GB.h:50` / `README.md:41` versus `CPU.h:261` (`i < 65535`).
 
@@ -1282,7 +1383,28 @@ guarantees it is non-zero. The same variable is used unchecked at `CPU.cpp:503,5
   map the `U` argument had already emptied.)
 * **Impact:** integer divide-by-zero exception.
 
-### C9. `allocMem[1]` defaults to 1 byte, and `Ms` alone allocates nothing — **Medium**
+### C9. `allocMem[1]` defaults to 1 byte, and `Ms` alone allocates nothing — **Medium** — *Fixed*
+
+> **Fixed** at both ends, and both halves turn out to be the same assumption: that class 0 is the class
+> that has memory.
+>
+> `allocMem[1]` and `blockSize[1]` default to 0 rather than to 1 byte, so a class the command line does not
+> name is given nothing rather than an unusable slice of one byte. The allocation block is entered when
+> *either* class has a size, so `Ms8` — which names the second class — allocates the arena it asked for
+> instead of skipping the block entirely while the banner reported the memory. A class that has threads and
+> no memory then meets C4's per-class record check and is refused with `-18`, which is the honest outcome
+> for `Mn8` on a machine whose cores are all class 1: the run the user typed cannot be performed, so it is
+> not performed under another name. `en-GB.h` and `README.md` say that `N` and `S` each cover one class.
+>
+> Tabulated pre- and post-fix for `Mc8`, `Mt128`, `Mn8`, `Ms8` and `Mn8 Ms4` on three topologies — 16 SMT
+> threads, a hybrid 8 + 16, and 6 non-SMT threads. `Mc`, `Mt` and `Mn8 Ms4` are unchanged in all three.
+> `Ms8` changes from "no arena allocated, banner reports 128MB" to a real memory-backed run where the
+> machine has no class-0 core, and to `-18` where it has. `Mn8` was already refused by the 1-byte slice
+> dividing down to zero records, and is now refused for the reason that is true.
+>
+> The entry's first bullet — threads dropping onto `JobCycle[0][…]` with their arena pointers already
+> written over their results — was closed by C4's `-18` check before this; what remained was that the check
+> was never reached in the `Ms` case, because the block it sits in was skipped.
 
 `CPU.h:42` initialises `si64 allocMem[2] = { 0, 1 };`. Two consequences:
 
@@ -1322,13 +1444,49 @@ accompanying indexing errors.
 threads the counters wrap and the loop cannot terminate. Latent behind the 64-core ceiling (G3), but the
 buffers are sized for 512.
 
-### C12. Per-thread slices are not cache-line aligned — **Low**
+### C12. Per-thread slices are not cache-line aligned — **Low** — *Fixed*
+
+> **Fixed** by rounding the per-thread record count down to a multiple of 8 (`& ~0x07ull`) rather than of 4,
+> which is a one-character change to C4's mask and reaches every sub-array at once. The reasoning is that a
+> thread's base within a sub-array is its record offset scaled by that sub-array's element size, and the
+> smallest element in the arena is the ALU sub-array's 8 bytes: 8 records is therefore a whole number of
+> 64-byte lines there, and *a fortiori* in the 16-, 32- and 64-byte vector views. It also lands the ALU
+> sub-array's own base on a line, that base being the vector records of every thread scaled by 8 bytes or
+> more. `malloc64` supplies the 64-byte alignment of the arena itself.
+>
+> Rounding rather than padding is deliberate: padding each slice to a line would leave gaps the record
+> offset would have to skip, and `bos` is the one cursor shared by all five pointer views. The cost is at
+> most seven records per thread — 504 bytes at the widest record — where the whole point of the mode is
+> multi-megabyte slices.
+>
+> Measured by walking the layout for all 31 unit selections over eight topologies, including hybrid class
+> mixes, sizes that are not powers of two, a 4 KB minimum slice and a 128-thread machine: the multiple-of-4
+> rounding leaves 1,046 slices starting mid-line, the multiple-of-8 rounding leaves none. Neither overlaps a
+> slice with another or reaches past the allocation, which is what confirms the change did not buy alignment
+> with an overrun.
+>
+> `-18`'s message now reports `recSize << 3` as the minimum a slice must hold, since that is what a slice
+> must now hold.
 
 `CPU.cpp:521–549` divides the block size by the record size with no rounding to 64 bytes, so adjacent threads
 share a cache line at every slice boundary. For a tool whose memory mode exists specifically to exercise the
 cache hierarchy, the resulting false sharing is a measurement artefact.
 
-### C13. The arena is never freed — **Low**
+### C13. The arena is never freed — **Low** — *Fixed*
+
+> **Fixed** with a destructor on `RESULTS_ARRAYS` — `~RESULTS_ARRAYS(void) { mfree(p, iter); }` — which is
+> the shape `GLOBAL_CFG` already uses for its bitmaps, and the only shape that covers `wmain`'s dozen-odd
+> early returns without a free on each of them. `p` and `iter` are given explicit null initialisers rather
+> than relying on the static zero-initialisation `resArray` happens to receive, so the destructor is safe by
+> construction; `mdealloc` ignores a null pointer, so a run that allocated neither frees neither.
+>
+> The repeated-`B` leak the entry names is closed separately, where it happens: the `B` case frees
+> `resArray.iter` before allocating it, so `PITC.exe B B` allocates one block rather than two. It is the one
+> allocation in the program a single command line can perform twice.
+>
+> Only the two pointers this entry names are covered. `wstrOutput` (`CPU.cpp`) is a local of `wmain` with
+> the same missing free and is not part of this entry; it is one allocation, of at most a few hundred
+> kibibytes, released at process exit like the rest.
 
 `resArray.p` (`CPU.cpp:517`) and `resArray.iter` (`CPU.cpp:93`) have no matching `mfree`. Harmless at process
 exit, but GCS rule p2 requires explicit alignment-aware allocators *with matching frees*. Repeating `B` on the
@@ -3195,7 +3353,7 @@ verified by execution rather than by reading.
 | `PITC.exe O8[results.txt]` | UTF-8 BOM followed by ANSI code-page bytes (**F6**) |
 | `PITC.exe Uc!.!!...!` | Selects a different core set than written; cores 0–1 unreachable (**F2**) |
 | `PITC.exe Mc65536` / `Mc-1` | Null-pointer crash with no diagnostic (**C5**) |
-| `PITC.exe Mn8 Ua` / `Ms8 Ua` | Threads silently drop out of memory-backed mode (**C9**) |
+| ~~`PITC.exe Mn8 Ua` / `Ms8 Ua`~~ | ~~Threads silently drop out of memory-backed mode~~ — `Ms8` allocates the arena it asks for, and a class left without memory is refused with `-18` (**C9**, fixed) |
 | Any `Mc*` run with ALU + a vector unit | Each thread overruns its arena slice by up to 3 records (**C4**) |
 | ~~`-1`/`-3`/`-4`/`-6`/`-8` on a CPU without SMT~~ | ~~Undefined shift in `SetSMTLoading`; zero threads, empty table, **exit code 0**~~ — one thread per physical core (**G1**, fixed) |
 | ~~Any run on a hybrid P/E-core CPU~~ | ~~`groupCount` becomes 2 for a single populated group, so `SetSMTLoading` shifts by 64~~ — `groupCount` counts populated groups (**G4**, fixed) |
