@@ -883,6 +883,157 @@ static void SetSMTLoading(void) {
 }
 //--- Processor topology ---//
 
+//--- Command-line parsing ---//
+// Every numeric option was read by a bare wcstol whose stopChar was never examined, so an option carrying no
+// value, or a negative one, produced a configuration the run then graded ".Pass." against: a zero-length
+// test, a zero pulse on-time, a zero or wrapped allocation. The index advance was truncated to a ui8 as well,
+// so a value longer than 255 characters moved the parse index backwards and the option loop could not
+// terminate (ISSUES.MD F4). The two readers below are the only route a number takes into cfg, and neither
+// hands back a value it has not range-checked
+
+// Bounds every numeric option is validated against. They are deliberately generous: the point is to reject a
+// missing, negative or wrapped value rather than to second-guess a legitimate one. OPT_MEM_MB_MAX is what
+// keeps the byte count inside an si64 after the '<< 20' and after the per-thread multiply of MAX_THREADS
+constexpr csi64 OPT_MEM_MB_MAX   = 16777216;   // Memory request, in MiB (16TiB)
+constexpr csi64 OPT_PULSE_MS_MAX = 86400000;   // Pulse on- and off-times, in milliseconds (24 hours)
+constexpr cfl64 OPT_DELAY_MAX    = 86400.0;    // Start-up delay, in seconds (24 hours)
+constexpr cfl64 OPT_DURATION_MAX = 31536000.0; // Test duration, in seconds (365 days)
+
+/// Reads a whole number from an option argument and range-checks it
+/// @param str Argument being parsed
+/// @param j Index of the option's letter; left on the last character of the value when one was read
+/// @param low Lowest accepted value
+/// @param high Highest accepted value
+/// @param value Receives the value; untouched unless the read succeeds
+/// @return true only if a value was present, complete and within range
+static cbool ParseWholeNumber(cwchptrc str, ui32 &j, csi64 low, csi64 high, si64 &value) {
+   cwchptrc first = &str[j + 1];
+   wchptr   stopChar;
+
+   // wcstoll skips leading whitespace, and would then take its value from beyond the field this option names.
+   // A value has to begin where the option says it begins
+   if(*first != L'-' && *first != L'+' && (*first < L'0' || *first > L'9')) return false;
+
+   csi64 result = wcstoll(first, &stopChar, 10);
+
+   // An overflowing field returns LLONG_MAX or LLONG_MIN, which every bound here is narrow enough to reject
+   if(stopChar == first || result < low || result > high) return false;
+
+   value = result;
+   j     = ui32(stopChar - str) - 1; // The enclosing loop's ++j lands on the character that ended the value
+
+   return true;
+}
+
+/// Reads a decimal value from an option argument and range-checks it
+/// @param str Argument being parsed
+/// @param j Index of the option's letter; left on the last character of the value when one was read
+/// @param low Lowest accepted value
+/// @param high Highest accepted value
+/// @param value Receives the value; untouched unless the read succeeds
+/// @return true only if a value was present, complete and within range
+static cbool ParseDecimal(cwchptrc str, ui32 &j, cfl64 low, cfl64 high, fl64 &value) {
+   cwchptrc first = &str[j + 1];
+   wchptr   stopChar;
+
+   // As above, and it additionally keeps the "inf" and "nan" spellings wcstod accepts out of a tic count
+   if(*first != L'-' && *first != L'+' && (*first < L'0' || *first > L'9')) return false;
+
+   cfl64 result = wcstod(first, &stopChar);
+
+   if(stopChar == first || !(result >= low) || !(result <= high)) return false;
+
+   value = result;
+   j     = ui32(stopChar - str) - 1;
+
+   return true;
+}
+
+/// Classifies one character of a 'Uc' or 'Ut' core-utilisation map.
+///
+/// "Any other character enables the core" cannot be reconciled with the documented spellings 'Uc!.!!...!a'
+/// and 'Uc!.!!...!e', whose trailing letter is a further 'U' sub-option rather than the ninth core: the map
+/// consumed every remaining character of the argument, so neither example could be written at all
+/// (ISSUES.MD F2). The enabling characters are named here instead, and anything else ends the map and is
+/// handed back to the 'U' loop as the sub-option it is
+/// @param ch Character to classify
+/// @return 0 to disable the core, 1 to enable it, 2 if the character is not part of a map
+static cui8 CoreMapChar(cwchar ch) {
+   switch(ch) {
+   case L'.': case L',': case L'_': case L'-': case L'0':
+      return 0;
+   case L'!': case L'*': case L'#': case L'+': case L'1': case L'x': case L'X':
+      return 1;
+   default:
+      return 2;
+   }
+}
+
+/// Applies a 'Uc' (one character per physical core) or 'Ut' (one per virtual core) map to cfg.coreMap.
+///
+/// The map is the whole of the selection: cfg.coreMap is cleared before the characters are read, so a core
+/// the map does not name is not utilised. Neither option used to clear it, so the characters only modified
+/// whatever the topology walk had left there, and a map shorter than the machine kept the remainder.
+///
+/// Every index comes from the topology rather than from the character's position in the argument. 'Ut'
+/// numbers the virtual cores group by group, so character n is bit n & 63 of group n >> 6. It used to set bit
+/// j of coreMap[(j - 1) >> 3], which addresses a 64-bit word as though it held eight cores, disagrees with
+/// its own bit index from the eighth character on, is off by two at the first -- j is 2 there, so cores 0 and
+/// 1 could not be named at all -- and shifts by 64 or more from the 64th (ISSUES.MD F2, C10). 'Uc' numbers
+/// the physical cores and sets or clears each one's whole span of virtual cores, read from the sibling
+/// bitmaps one core at a time, which is exact for a hybrid part and for any SMT width. Both mask with the
+/// cores the machine reported, so a character naming a core that does not exist cannot enter the map the
+/// banner prints
+/// @param str Argument being parsed
+/// @param j Index of the map's first character; left on the last character the map consumed
+/// @param physical true for 'Uc', false for 'Ut'
+static void ParseCoreMap(cwchptrc str, ui32 &j, cbool physical) {
+   ui32 pos = j;
+   ui8  g;
+
+   for(g = 0; g < cfg.sys.groupCount; ++g) cfg.coreMap[g] = 0;
+
+   if(physical) {
+      ui64 firsts = cfg.sys.coreSibling[0][0]; // EnumerateTopology refuses a machine of no groups, with -23
+      ui8  group  = 0;
+      ui8  state;
+
+      for(; (state = CoreMapChar(str[pos])) < 2; ++pos) {
+         while(!firsts && group + 1u < ui32(cfg.sys.groupCount)) firsts = cfg.sys.coreSibling[0][++group];
+         if(!firsts) continue; // A map naming more cores than the machine holds; the surplus changes nothing
+
+         cui64 first = LowestSetBit64(firsts);
+         cui64 last  = LowestSetBit64(cfg.sys.coreSibling[1][group] & ~(first - 1ull));
+         // 'last | (last - first)' is every bit from the core's first virtual core to its last -- the same
+         // expression SetSMTLoading expands a physical core with. A first bit the enumeration could not pair
+         // leaves 'last' at 0, where the span is the one virtual core it did report, rather than the
+         // 2^64 - first the subtraction would otherwise wrap to
+         cui64 span  = (last ? last | (last - first) : first) & (cfg.sys.coreMap[0][group] | cfg.sys.coreMap[1][group]);
+
+         if(state) cfg.coreMap[group] |= span;
+         firsts ^= first;
+      }
+   } else {
+      ui32 index = 0;
+      ui8  state;
+
+      for(; (state = CoreMapChar(str[pos])) < 2; ++pos, ++index) {
+         cui32 group = index >> 6;
+
+         if(group >= ui32(cfg.sys.groupCount)) continue; // As above: a character beyond the machine's last core
+
+         if(state)
+            cfg.coreMap[group] |= (1ull << (index & 0x03F)) & (cfg.sys.coreMap[0][group] | cfg.sys.coreMap[1][group]);
+      }
+   }
+
+   // The enclosing 'U' loop's ++j must land on the character that ended the map, which is where the
+   // documented 'Uc!.!!...!a' spelling puts its next sub-option. A map of no characters at all leaves j on
+   // the 'c' or 't' that introduced it, and the loop then re-reads the character that ended it
+   j = pos - 1;
+}
+//--- Command-line parsing ---//
+
 // Print computational failure data
 static void Failed(cui64 coreNum, vchptrc threadByte, cui8 unit) {
    // threadByte addresses the byte holding eight threads' completion bits, so zeroing it told wmain that all

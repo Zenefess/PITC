@@ -6,6 +6,8 @@ This software is primarily for testing the idle stability of CPUs, but also prov
 
 Command-line options
 --------------------
+ Options are applied in the order given: where two of them set the same property, the last one wins. 'B' and the presets reset the processing units and the memory configuration, so give either of them before any 'I' or 'M' option; 'Ts' clears the pulse off-time, so give ']' after 'S' where both are used.
+
  B  : Run the benchmark. Options after 'B' override defaults; eg. pitc.exe B Iaf mt1024 !!! Cache use not yet implemented !!!
  
       Utilises the ALU and largest vector unit of all (virtual) cores in the system, level 3 cache, and 8MB memory per thread for 60 seconds.
@@ -35,7 +37,8 @@ Command-line options
  Ux : Set core usage options. One of the first two options (C,T) can be stacked with the one of the remaining (A,E,O); eg. Uc!.!!...!a
  
       C==Binary sequence map of physical cores to utilise, T==Binary sequence map of virtual cores to utilise
-         Format for core utilisation map is: ','/'.'/'_'==Core disabled, Any other character==Core enabled
+         Core disabled: '.' ',' '_' '-' '0'  |  Core enabled: '!' '*' '#' '+' '1' 'x' 'X'  |  Any other character ends the map
+         The map is the whole selection: a core it does not name is not utilised, and an empty selection is refused
       A==Symmetric Multi-Threading; forces utilisation of every virtual core of each active physical core
       E==Only utilise the first virtual core of each active physical core, O==Only utilise the last virtual core of each active physical core
          A physical core carrying a single virtual core is kept by both; on a hybrid CPU that is every efficiency core

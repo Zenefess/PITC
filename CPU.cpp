@@ -16,12 +16,14 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    VALUES_HEADER header;
    ptr   outFile;
    ui64  mask;
-   DWORD bytesProc = 0;
    int   c = 1, d;
    si16  threadCount[3] = { 0, 0, 0 }; // 0=First core class, 1=Second core class, 2=Total
    si16  i;
    si16  k;     // Indexes value[] over every selected core, so it counts to MAX_THREADS, not to 255
-   ui8   j;
+   // Indexes the characters of one argument. As a ui8 it wrapped on any argument longer than 255 characters,
+   // and every numeric option advanced it by a ui8-truncated delta -- a value field longer than 255 moved it
+   // backwards, and the option loop could then never terminate (ISSUES.MD F4)
+   ui32  j;
    ui8   outUTF = 0;
 
    setlocale(LC_ALL, "");
@@ -53,6 +55,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          switch(argv[i][0]) {
          case L'b': // Run benchmark: All virtual cores, constant computation, ALU + largest vector unit, L3 cache, 8MB memory per virtual core, for 60 seconds
          case L'B':
+            if(argv[i][1] && argv[i][1] != L' ') { wprintf(wstrMessage[37], argv[i]); return -25; }
             resArray.iter = zalloc1d64(si64, cfg.sys.vCoreCount);
             cfg.tics        = timer.siFrequency * 60;
             cfg.SMTLoad     = 3;
@@ -95,6 +98,11 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                case L'X':
                   cfg.procUnits |= 0x010;
                   break;
+               // A letter naming no unit used to leave the selection at whatever the letters around it had
+               // set, so 'Iq' ran the defaults and 'Iaq' silently dropped nothing at all (ISSUES.MD F9)
+               default:
+                  wprintf(wstrMessage[38], argv[i][j], argv[i]);
+                  return -25;
                }
             }
             break;
@@ -104,58 +112,84 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             // lstrcpynW's third argument is the capacity of the destination, not the length of the source:
             // an argument longer than wstrLang would otherwise be copied over the globals that follow it
             lstrcpynW(wstrLang, &argv[i][1], min(c, si32(_countof(wstrLang))));
-            if(lstrcmpiW(wstrLang, L"en-US")) {
+            // lstrcmpiW returns 0 when the two codes match, so testing its result directly selected a
+            // language exactly when the argument did *not* name it -- and since both arms select English,
+            // every input landed there regardless (ISSUES.MD F7). A second language makes that fatal rather
+            // than invisible, so the comparison is corrected before one is added
+            if(!lstrcmpiW(wstrLang, L"en-GB") || !lstrcmpiW(wstrLang, L"en-US")) {
                wstrInstructions = wstrInstructions_English;
                wstrMessage      = wstrMessage_English;
                wstrInterface    = wstrInterface_English;
+            } else { // A language this build does not carry is worth saying; it is not worth stopping for
+               wprintf(wstrMessage[39], wstrLang);
+               lstrcpynW(wstrLang, L"en-GB", si32(_countof(wstrLang)));
             }
-            if(lstrcmpiW(wstrLang, L"en-GB")) {
-               wstrInstructions = wstrInstructions_English;
-               wstrMessage      = wstrMessage_English;
-               wstrInterface    = wstrInterface_English;
-            };
             break;
          case L'm': // Set amount of memory (in MB) to utilise during test
          case L'M':
             cfg.memConfig   = 0;
             cfg.allocMem[0] = 0;
             for(j = 1; argv[i][j] && argv[i][j] != L' '; ++j) {
-               wchptr stopChar;
+               si64 megabytes;
+
+               // wcstol returns a 32-bit long on Windows, so 'Mt3000000' overflowed before the '<< 20'; the
+               // reader below is 64-bit and refuses a value that will not survive the shift (ISSUES.MD F4)
                switch(argv[i][j]) {
                case L'c': // For each virtual core
                case L'C':
+                  if(!ParseWholeNumber(argv[i], j, 0, OPT_MEM_MB_MAX, megabytes)) {
+                     wprintf(wstrMessage[35], argv[i][j], argv[i], si64(0), OPT_MEM_MB_MAX); return -24;
+                  }
                   cfg.memConfig   = 1;
-                  cfg.allocMem[0] = si64(wcstol(&argv[i][j + 1], &stopChar, 10)) << 20;
-                  j += ui8(stopChar - &argv[i][j] - 1);
+                  cfg.allocMem[0] = megabytes << 20;
                   break;
                // The two classes are the CPU's non-SMT and SMT cores, or its efficiency and performance
                // cores where it is hybrid; CoreClass (CPU.h) decides which, and the letters cannot say
                case L'n': // For each core of the first class
                case L'N':
+                  if(!ParseWholeNumber(argv[i], j, 0, OPT_MEM_MB_MAX, megabytes)) {
+                     wprintf(wstrMessage[35], argv[i][j], argv[i], si64(0), OPT_MEM_MB_MAX); return -24;
+                  }
                   cfg.memConfig   = 2;
-                  cfg.allocMem[0] = si64(wcstol(&argv[i][j + 1], &stopChar, 10)) << 20;
-                  j += ui8(stopChar - &argv[i][j] - 1);
+                  cfg.allocMem[0] = megabytes << 20;
                   break;
                case L's': // For each virtual core of the second class
                case L'S':
+                  if(!ParseWholeNumber(argv[i], j, 0, OPT_MEM_MB_MAX, megabytes)) {
+                     wprintf(wstrMessage[35], argv[i][j], argv[i], si64(0), OPT_MEM_MB_MAX); return -24;
+                  }
                   cfg.memConfig   = 2;
-                  cfg.allocMem[1] = si64(wcstol(&argv[i][j + 1], &stopChar, 10)) << 20;
-                  j += ui8(stopChar - &argv[i][j] - 1);
+                  cfg.allocMem[1] = megabytes << 20;
                   break;
                case L't': // Equally split amongst all utilised virtual cores
                case L'T':
+                  if(!ParseWholeNumber(argv[i], j, 0, OPT_MEM_MB_MAX, megabytes)) {
+                     wprintf(wstrMessage[35], argv[i][j], argv[i], si64(0), OPT_MEM_MB_MAX); return -24;
+                  }
                   cfg.memConfig   = 0;
-                  cfg.allocMem[0] = si64(wcstol(&argv[i][j + 1], &stopChar, 10)) << 20;
-                  j += ui8(stopChar - &argv[i][j] - 1);
+                  cfg.allocMem[0] = megabytes << 20;
+                  break;
+               default:
+                  wprintf(wstrMessage[38], argv[i][j], argv[i]);
+                  return -25;
                }
             }
             break;
          case L'o': // Output results to file
          case L'O':
-            for(c = 1; argv[i][c] && argv[i][c] != ' '; ++c) {
+            for(c = 1; argv[i][c] && argv[i][c] != L' '; ++c) {
                switch(argv[i][c]) {
+               // The '6' is examined at c + 1 without advancing onto it, and c only moves once the character
+               // is known to be there. For the argument 'O1' the old '++c' landed on the terminating null,
+               // after which the enclosing ++c stepped past it and the loop condition read out of bounds
+               // (ISSUES.MD F10)
                case L'1':
-                  if(argv[i][++c] == L'6') outUTF = 2;
+                  if(argv[i][c + 1] != L'6') {
+                     wprintf(wstrMessage[38], argv[i][c], argv[i]);
+                     return -25;
+                  }
+                  outUTF = 2;
+                  ++c;
                   break;
                case L'8':
                   outUTF = 1;
@@ -165,11 +199,27 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                   outUTF = 0;
                   break;
                case L'[':
-                  for(d = ++c; argv[i][c] && argv[i][c] != L']' && c < 1024; ++c);
-                  if(!lstrcpynW(wstrOut, &argv[i][d], c++ - 1)) {
-                     wprintf(wstrMessage[9], wstrOut);
+                  // The count was 'c - 1', which is the length of the name only when '[' immediately follows
+                  // the 'O'; 'O16[results.txt]' therefore produced the name "results.txt]". lstrcpynW's third
+                  // argument is a destination capacity, so the count of a name spanning [d, c) is c - d + 1,
+                  // and the scan stops one short of wstrOut's capacity rather than at a fixed 1024 offset
+                  // into the argument. Advancing c past the ']' inside the call, as 'c++' did, skipped the
+                  // character after it as well (ISSUES.MD F5)
+                  for(d = ++c; argv[i][c] && argv[i][c] != L']' && c - d < 1023; ++c);
+                  // An unterminated, empty or over-long name is the invalid-filename condition -8 documents.
+                  // lstrcpynW answered a different question -- it fails only on a bad pointer -- so 'O[]'
+                  // used to copy nothing, return a valid pointer, and disable file output silently, while
+                  // the branch that was supposed to catch it printed "Unable to create file" and no name at
+                  // all (ISSUES.MD F14)
+                  if(argv[i][c] != L']' || c == d) {
+                     wprintf(wstrMessage[9], argv[i]);
                      return -8;
                   }
+                  lstrcpynW(wstrOut, &argv[i][d], c - d + 1);
+                  break;
+               default:
+                  wprintf(wstrMessage[38], argv[i][c], argv[i]);
+                  return -25;
                }
             }
             break;
@@ -194,21 +244,30 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                case L'T':
                   cfg.procSync |= 0x08;
                   break;
+               default:
+                  wprintf(wstrMessage[38], argv[i][j], argv[i]);
+                  return -25;
                }
             }
             break;
          case L't': // Set timing options
          case L'T':
             for(j = 1; argv[i][j] && argv[i][j] != L' '; ++j) {
-               wchptr stopChar;
+               si64 milliseconds;
+               fl64 seconds;
+
                switch(argv[i][j]) {
                case L'[': // Fixed pulse: on time / Sweeping pulse: cycle time
-                  cfg.onTime = ui32(wcstol(&argv[i][j + 1], &stopChar, 10));
-                  j += ui8(stopChar - &argv[i][j] - 1);
+                  if(!ParseWholeNumber(argv[i], j, 0, OPT_PULSE_MS_MAX, milliseconds)) {
+                     wprintf(wstrMessage[35], argv[i][j], argv[i], si64(0), OPT_PULSE_MS_MAX); return -24;
+                  }
+                  cfg.onTime = ui32(milliseconds);
                   break;
                case L']': // Fixed pulse off-time
-                  cfg.offTime = ui32(wcstol(&argv[i][j + 1], &stopChar, 10));
-                  j += ui8(stopChar - &argv[i][j] - 1);
+                  if(!ParseWholeNumber(argv[i], j, 0, OPT_PULSE_MS_MAX, milliseconds)) {
+                     wprintf(wstrMessage[35], argv[i][j], argv[i], si64(0), OPT_PULSE_MS_MAX); return -24;
+                  }
+                  cfg.offTime = ui32(milliseconds);
                   break;
                case L'c': // Constant thread execution
                case L'C':
@@ -217,8 +276,10 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                   break;
                case L'd': // Set start-up delay
                case L'D':
-                  cfg.delayTime = ui32(wcstod(&argv[i][j + 1], &stopChar) * 1000.0);
-                  j += ui8(stopChar - &argv[i][j] - 1);
+                  if(!ParseDecimal(argv[i], j, 0.0, OPT_DELAY_MAX, seconds)) {
+                     wprintf(wstrMessage[36], argv[i][j], argv[i], 0.0, OPT_DELAY_MAX); return -24;
+                  }
+                  cfg.delayTime = ui32(seconds * 1000.0);
                   break;
                case L'f': // Fixed pulse-width thread execution
                case L'F':
@@ -233,9 +294,17 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                   break;
                case L't': // Test duration
                case L'T':
-                  cfg.tics = si64((fl64)timer.siFrequency * wcstod(&argv[i][j + 1], &stopChar));
-                  j += ui8(stopChar - &argv[i][j] - 1);
+                  // A duration of zero still reaches the -13 check below, which names the condition exactly;
+                  // what this rejects is the missing, negative and non-numeric value that used to arrive
+                  // there as a silent zero, or as a duration of some other length entirely (ISSUES.MD F4)
+                  if(!ParseDecimal(argv[i], j, 0.0, OPT_DURATION_MAX, seconds)) {
+                     wprintf(wstrMessage[36], argv[i][j], argv[i], 0.0, OPT_DURATION_MAX); return -24;
+                  }
+                  cfg.tics = si64(fl64(timer.siFrequency) * seconds);
                   break;
+               default:
+                  wprintf(wstrMessage[38], argv[i][j], argv[i]);
+                  return -25;
                }
             }
             break;
@@ -247,20 +316,13 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                case L'A':
                   cfg.SMTLoad = 3;
                   break;
+               // Both maps are read by ParseCoreMap (CPU.h), which indexes the map by the topology rather
+               // than by the character's position in the argument, clears the map before applying it, and
+               // stops at the first character that is not part of a map -- so a further 'U' sub-option can
+               // follow one, as the documented 'Uc!.!!...!a' spelling requires (ISSUES.MD F2, C10)
                case L'c': // Binary sequence map of physical cores to utilise (eg. x..x.xxx)
                case L'C':
-                  for(++j; argv[i][j] && argv[i][j] != L' '; ++j) {
-                     switch(argv[i][j]) {
-                     case L'.': // Physical core not to be utilised
-                     case L',':
-                     case L'_':
-                        cfg.coreMap[(j - 1) >> 3] &= ~(0x03ull << (j << 1)); ///--- Modify to account for non-SMT CPUs !!!
-                        break;
-                     default:  // Physical core to be utilised
-                        cfg.coreMap[(j - 1) >> 3] |= 0x03ull << (j << 1); ///--- Modify to account for non-SMT CPUs !!!
-                        break;
-                     }
-                  }
+                  ParseCoreMap(argv[i], ++j, true);
                   break;
                case L'e': // Only utilise the first virtual core of each active physical core
                case L'E':
@@ -272,54 +334,52 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                   break;
                case L't': // Binary sequence map of virtual cores to utilise (eg. xx..x.x...xx.xxx)
                case L'T':
-                  for(++j; argv[i][j] && argv[i][j] != L' '; ++j) {
-                     switch(argv[i][j]) {
-                     case L'.': // Virtual core not to be utilised
-                     case L',':
-                     case L'_':
-                        cfg.coreMap[(j - 1) >> 3] &= ~(0x01ull << j);
-                        break;
-                     default:  // Virtual core to be utilised
-                        cfg.coreMap[(j - 1) >> 3] |= 0x01ull << j;
-                        break;
-                     }
-                  }
+                  ParseCoreMap(argv[i], ++j, false);
                   break;
+               default:
+                  wprintf(wstrMessage[38], argv[i][j], argv[i]);
+                  return -25;
                }
             }
             break;
          case L'w':
-         case L'W': // Write new "cpu.values" file
+         case L'W': { // Write new "cpu.values" file
             union { ui64 _64; ui32 _32[2]; } randNum;
+
+            if(argv[i][1] && argv[i][1] != L' ') { wprintf(wstrMessage[37], argv[i]); return -25; }
 
             // The values written below describe the five register-resident kernels only, so nothing in the
             // file would ever contradict a JobMem* or JobALU_* kernel that had drifted away from its
             // counterpart -- every memory-backed run would simply report the difference as a CPU fault.
             // Prove the whole family agrees before generating anything (ISSUES.MD B5)
-            j = ValidateKernelFamilies();
-            if(j) { wprintf(wstrMessage[30], wstrKernelName[j]); return -22; }
+            cui8 badKernel = ValidateKernelFamilies();
+            if(badKernel) { wprintf(wstrMessage[30], wstrKernelName[badKernel]); return -22; }
 
-            for(i = 0; i < MAX_THREADS; ++i) {
-               for(j = 0; j < 15; ++j) {
+            // Both loops below indexed the argument list with i and the seed lanes with j, the two indices
+            // the enclosing option loop is walking argv with. The case returns before either is read again,
+            // so nothing came of it, but the reuse is what made 'W' unable to appear beside another option
+            // at all; local counters cost nothing and remove the coupling (ISSUES.MD F12)
+            for(si16 t = 0; t < MAX_THREADS; ++t) {
+               for(ui8 lane = 0; lane < 15; ++lane) {
                   rand_s(randNum._32); rand_s(&randNum._32[1]);
-                  value[0][i]._fl64[j] = fl64(randNum._64) / 2048.0;
+                  value[0][t]._fl64[lane] = fl64(randNum._64) / 2048.0;
                }
-               rand_s(&value[0][i].raw32[30]); rand_s(&value[0][i].raw32[31]);
+               rand_s(&value[0][t].raw32[30]); rand_s(&value[0][t].raw32[31]);
             }
             memcpy_s(value[3], RESULTS_BUF_SIZE, value[0], RESULTS_BUF_SIZE);
 
-            for(i = 0; i < cfg.sys.vCoreCount; ++i) {
-               threadData[i].threadByte = i >> 3;
-               threadData[i].threadBit  = i & 0x07;
+            for(si16 t = 0; t < cfg.sys.vCoreCount; ++t) {
+               threadData[t].threadByte = t >> 3;
+               threadData[t].threadBit  = t & 0x07;
 
-               SetThreadRunning(i); // Interlocked: a thread spawned earlier may be clearing this same byte
+               SetThreadRunning(t); // Interlocked: a thread spawned earlier may be clearing this same byte
 
                // _beginthreadex reports failure with 0, and hands back a handle this thread owns and must
                // close; _beginthread's is closed by the CRT when the thread exits, so it is never valid to
                // hold. A thread that never starts never clears its bit, hanging the wait loop below forever
-               cHANDLE thread = (HANDLE)_beginthreadex(0, 0, GenerateValues, &threadData[i], 0, 0);
+               cHANDLE thread = (HANDLE)_beginthreadex(0, 0, GenerateValues, &threadData[t], 0, 0);
 
-               if(!thread) { ClearThreadRunning(i); wprintf(wstrMessage[23], i); return -19; }
+               if(!thread) { ClearThreadRunning(t); wprintf(wstrMessage[23], t); return -19; }
 
                CloseHandle(thread);
             }
@@ -364,7 +424,16 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             CloseHandle(outFile);
 
             return 1;
+         }
          case L'-': // Configuration presets
+            // The memory and unit preamble below used to be applied before the digit was examined, so a
+            // preset that names nothing -- 'PITC.exe -a' -- still rewrote procUnits, memConfig and allocMem
+            // on its way to being ignored, and a run that looked like a default one was not one
+            // (ISSUES.MD F9). A trailing character is refused for the same reason: '-5x' is not preset 5
+            if(argv[i][1] < L'0' || argv[i][1] > L'9' || (argv[i][2] && argv[i][2] != L' ')) {
+               wprintf(wstrMessage[37], argv[i]);
+               return -25;
+            }
             cfg.memConfig   = 1;
             cfg.allocMem[0] = 8388608;
             cfg.procUnits   = (cfg.sys.cpuAVX512 ? 0x011 : cfg.sys.cpuAVX2 ? 0x09 : 0x05);
@@ -435,12 +504,21 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                cfg.onTime      = 4000;
                cfg.offTime     = 4000;
             }
+            break;
+         // An argument naming no option at all used to fall out of the switch and run the defaults without a
+         // word -- 'PITC.exe Zzz' tested the CPU it was not asked to test, and every mistyped option was a
+         // silently different configuration from the one on the command line (ISSUES.MD F9)
+         default:
+            wprintf(wstrMessage[37], argv[i]);
+            return -25;
          }
       }
    } else { // Display instructions
-    wprintf(wstrInstructions);
-    system("pause");
-    return 2;
+      // system("pause") blocked the documented way of reading the option reference on a keypress, so a CI
+      // job, a scheduled task or 'PITC.exe | more' hung until it was killed -- and it reached cmd.exe through
+      // the PATH to do it. A console program that has printed its usage is finished (ISSUES.MD F15)
+      wprintf(L"%s", wstrInstructions);
+      return 2;
    }
 
    // Requested processing unit checks. Both dispatch and arena sizing reduce a unit selection to the ALU bit
@@ -519,11 +597,19 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
 
    // Count virtual cores to be used
    SetSMTLoading();
-   for(j = 0; j < cfg.sys.groupCount; ++j) {
+   for(j = 0; j < ui32(cfg.sys.groupCount); ++j) {
       threadCount[0] += (si16)PopulationCount64(cfg.sys.coreMap[0][j] & cfg.coreMap[j]);
       threadCount[1] += (si16)PopulationCount64(cfg.sys.coreMap[1][j] & cfg.coreMap[j]);
    }
    threadCount[2] = threadCount[0] + threadCount[1];
+
+   // A 'U' map naming no core at all leaves nothing to divide the memory request between, and threadCount[2]
+   // is the divisor two of the three memory configurations use unchecked (ISSUES.MD C8). The enumeration
+   // already refuses a machine reporting no cores (-23), so this is the one remaining route to that divisor
+   // being zero -- and the run it would otherwise reach prints an empty results table and returns 0, which
+   // reads as a clean pass of a CPU that was never touched. Reachable in practice only since the 'U' maps
+   // began to work (F2): the map could not previously be cleared
+   if(!threadCount[2]) { wprintf(wstrMessage[40]); return -26; }
 
    timer.Update();
 
@@ -534,12 +620,15 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          wprintf(wstrMessage[10], wstrOut);
          return -9;
       }
+      // Both byte-order marks go through WriteBlock for the reason every other write in the program does:
+      // WriteFile reports a partial write as success, and a half-written mark makes the file's encoding
+      // unreadable to anything that opens it
       switch(outUTF) {
       case 1: // UTF-8
-         WriteFile(outFile, outUTF8header, 3, &bytesProc, 0);
+         if(!WriteBlock(outFile, outUTF8header, 3)) { wprintf(wstrMessage[11], wstrOut); CloseHandle(outFile); return -10; }
          break;
       case 2: // UTF-16
-         WriteFile(outFile, &outUTF16header, 2, &bytesProc, 0);
+         if(!WriteBlock(outFile, &outUTF16header, 2)) { wprintf(wstrMessage[11], wstrOut); CloseHandle(outFile); return -10; }
       }
    }
 
@@ -661,7 +750,11 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    c = swprintf(wstrOutput, wstrInterface[0]);
    for(i = 0, j = 0; i < 8; ++i) if(cfg.procUnits & (0x01ull << i)) { c += swprintf(&wstrOutput[c], L" %s", wstrUnitsCPU[i]); ++j; }
    for(; j < 3; j++) c += swprintf(&wstrOutput[c], L"    ");
-   c += swprintf(&wstrOutput[c], wstrInterface[1], (cfg.allocMem[0] + cfg.allocMem[1]) >> 20, cfg.delayTime);
+   // cfg.allocMem[0] is the whole of the allocation in every memory configuration: the switch above leaves it
+   // holding the total, and allocMem[1] is a per-thread size that has already been counted into it. Adding
+   // the two reported 'Mn8 Ms4' as the true total plus 4MB, and stayed invisible in the other two
+   // configurations only because allocMem[1]'s default of 1 byte vanishes under the shift (ISSUES.MD F8)
+   c += swprintf(&wstrOutput[c], wstrInterface[1], cfg.allocMem[0] >> 20, cfg.delayTime);
    if(cfg.procSync & 0x060) c += swprintf(&wstrOutput[c], wstrInterface[cfg.procSync & 0x020 ? 2 : 3], cfg.onTime);
    c += swprintf(&wstrOutput[c], wstrInterface[4]);
    for(i = 0, j = 0; i < 8; ++i) if(cfg.procSync & (0x01ull << i)) { c += swprintf(&wstrOutput[c], L" %s", wstrSyncCPU[i]); ++j; }
@@ -682,7 +775,11 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       c += swprintf(&wstrOutput[c], L"\n               ");
    }
    c -= 15;
-   wprintf(wstrOutput);
+   // wstrOutput is built at run time, so passing it as the format string makes every '%' it ever comes to
+   // hold a conversion specifier reading arguments that were never passed. Nothing can put one there today,
+   // but wstrOut -- a filename straight off the command line -- is already interpolated into messages
+   // elsewhere, and one edit is all it would take (ISSUES.MD F11)
+   wprintf(L"%s", wstrOutput);
    printf("\n");
 
    // Spawn child processes
@@ -726,7 +823,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          // A thread that never starts never clears its completion bit, hanging the wait loop below forever
          if(!thread) { ClearThreadRunning(d); wprintf(wstrMessage[23], d); return -19; }
 
-         if(NextSelectedCore(mask, coreGroup, j)) {
+         if(NextSelectedCore(mask, coreGroup, ui8(j))) {
             affinity.Mask  = mask;
             affinity.Group = ui16(coreGroup);
          }
@@ -787,10 +884,13 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    c += swprintf(&wstrOutput[c], L"\n");
 
    // Write outputs to console and/or file
-   wprintf(&wstrOutput[d]);
+   wprintf(L"%s", &wstrOutput[d]); // A run-time buffer is never a format string (ISSUES.MD F11)
    if(wstrOut[0]) {
       if(outUTF == 2) { // UTF-16 encoding
-         if(!WriteFile(outFile, wstrOutput, c, &bytesProc, 0)) {
+         // WriteFile's third argument is a byte count and c is a count of wide characters, so a UTF-16
+         // results file held exactly the first half of the report and ended mid-character. The 8-bit path
+         // below was correct only because there one character really is one byte (ISSUES.MD F3)
+         if(!WriteBlock(outFile, wstrOutput, ui32(c) * ui32(sizeof(wchar)))) {
             wprintf(wstrMessage[11], wstrOut);
             CloseHandle(outFile);
             return -10;
@@ -799,15 +899,20 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          // The conversion used to write the narrow string into wstrOutput itself, starting at wide-character
          // index c, which asks a 2c-byte buffer to hold 3c bytes -- and asks it while it is still reading the
          // wide string it is overwriting (ISSUES.MD C7). A separate allocation is the only spelling of this
-         // that cannot overlap its own source. wcstombs with a null destination reports the length the
-         // conversion needs, which a multi-byte locale makes larger than the character count c is
-         csize_t narrowLen = wcstombs(0, wstrOutput, 0);
-         chptr   strNarrow = (narrowLen == csize_t(-1) ? 0 : (chptr)zalloc64(narrowLen + 1u));
+         // that cannot overlap its own source.
+         // It converted through wcstombs, which uses the locale setlocale(LC_ALL, "") installed -- on most
+         // Windows installations the system ANSI code page. The '8' option therefore wrote ANSI bytes behind
+         // a UTF-8 byte-order mark, and every non-ASCII character in the file was mojibake to anything that
+         // believed the mark (ISSUES.MD F6). WideCharToMultiByte names the encoding the option asked for,
+         // reports the exact byte count that encoding needs, and reports a character it cannot represent as a
+         // failure rather than as the (size_t)-1 that used to be handed to WriteFile as a length.
+         // The character count c is passed rather than -1, so no terminating null reaches the file
+         cui32 codePage  = (outUTF == 1 ? CP_UTF8 : CP_ACP);
+         csi32 narrowLen = WideCharToMultiByte(codePage, 0, wstrOutput, c, 0, 0, 0, 0);
+         chptr strNarrow = (narrowLen > 0 ? (chptr)zalloc64(csize_t(narrowLen)) : 0);
 
-         // (size_t)-1 is what wcstombs returns for a character the locale cannot represent, and it was never
-         // examined: the length it does not describe was then handed to WriteFile as a byte count
-         if(!strNarrow || wcstombs(strNarrow, wstrOutput, narrowLen + 1u) == csize_t(-1) ||
-            !WriteFile(outFile, strNarrow, DWORD(narrowLen), &bytesProc, 0)) {
+         if(!strNarrow || WideCharToMultiByte(codePage, 0, wstrOutput, c, strNarrow, narrowLen, 0, 0) != narrowLen ||
+            !WriteBlock(outFile, strNarrow, ui32(narrowLen))) {
             wprintf(wstrMessage[11], wstrOut);
             mfree1(strNarrow);
             CloseHandle(outFile);

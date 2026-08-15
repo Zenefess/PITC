@@ -37,7 +37,7 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1–A7, A9, A10, B1, B2, B3, B5, B6, C1–C7, C11, D1, D2, D3, D5, E1, E2, F1, G1–G9, H1, H2,
+**A1–A7, A9, A10, B1, B2, B3, B5, B6, C1–C8, C10, C11, D1, D2, D3, D5, E1, E2, F1–F15, G1–G9, H1, H2,
 H7, J1, J2 and J7 are fixed** — see the
 `Fixed` notes on those entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
 bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
@@ -337,6 +337,61 @@ three passes, and the known-constraints bullet that named G9 as live now says wh
 `Mn`/`Ms` keep their spelling. G8 then added 29 more to `CPU.h` — 949 now 978 — all of them at
 `SetSMTLoading`, so citations below it read 145 low in total against the source before this pair of commits:
 `Failed()`, `Evaluate` and `GenerateValues`, and so A7, B4, B5, B7 and B8.
+
+F2–F15 are the command-line batch, and the whole of section F is now closed. Four of them are one story:
+**nothing the user typed was checked before it became the configuration under test.** A numeric option with no
+value, or a negative one, produced a zero-length test, a zero on-time or a zero allocation and reported
+`.Pass.` for it (F4); an option letter naming nothing at all was skipped in silence, so `Iq`, `-a` and `Zzz`
+each ran a configuration nobody asked for (F9); the two `U` core maps wrote to a word index and a bit index
+that disagreed from the eighth character on and were off by two at the first, so manual core selection — one
+of six advertised option groups — produced a different core set from the one written (F2); and both
+documented `Uc` spellings could not be written at all, because the map consumed the rest of the argument.
+The answer is the same in each case: a `//--- Command-line parsing ---//` group in `CPU.h` holding
+`ParseWholeNumber`, `ParseDecimal`, `CoreMapChar` and `ParseCoreMap`, and a `default` arm on every switch that
+reads a letter. Three exit codes are added — `-24` for a value, `-25` for an option, `-26` for a `U` map that
+selects nothing — and `wstrMessage_*` grew from 35 entries to 42.
+
+**C8 and C10 came with F2**, and C8 out of necessity rather than opportunity: a map that clears `cfg.coreMap`
+before applying its characters is what makes an empty selection expressible, so the fix that made the maps
+work is the fix that made C8's unchecked divisor reachable. It is refused with `-26` before the division.
+C10's undefined shift has no expression left to appear in.
+
+The other seven are independent and small. F3 and F6 are the results file: a UTF-16 report was truncated to
+half its length by a character count handed to `WriteFile` as a byte count, and a UTF-8 one contained locale
+ANSI bytes behind a UTF-8 mark. F5, F10 and F14 are the `O` option's three arithmetic and diagnostic errors,
+and together they make it possible to write a correctly named UTF-16 results file for the first time —
+`O[results.txt]16` and `O16[results.txt]` now agree. F7 corrects an inverted `lstrcmpiW`, which matters before
+a second language is added rather than after. F8, F11, F12 and F15 are a mis-reported total, a run-time buffer
+used as a format string, a loop variable shared with the argument scan, and a `system("pause")` that hung the
+documented way of reading the option reference in any non-interactive session. No job kernel is touched, so
+**`cpu.values` does not need regenerating**.
+
+Two behaviours change in ways a user will notice, both deliberate. A mistyped option is now fatal rather than
+ignored, because the failure it replaces is a stress run that reports `.Pass.` for a configuration other than
+the requested one. And a `U` core map is now the whole of the selection — a core the map does not name is not
+utilised — which needs the enabling characters named rather than assumed, so that a map can end and a further
+`U` sub-option can follow it. `en-GB.h` and `README.md` document both, along with F13's option-order rule.
+
+Verified off-target in the manner of the earlier batches: the four new parsing functions were transcribed
+verbatim into a harness with a stand-in topology and driven over six synthetic machines — 4 × 2-way SMT,
+4 × 4-way, 8 × 1-way and two-group parts of 32 + 4 cores — plus 20 numeric cases. The checks cover the first
+and last core of each map, both documented trailing-sub-option spellings, a map longer than the machine has
+cores, the characters that cross a processor-group boundary (character 64 for `Ut`, physical core 33 for
+`Uc`), an all-disabled map, a 300-character numeric field, and `Mt3000000` — the value `wcstol` overflowed.
+The Windows-specific half (`WideCharToMultiByte`, `WriteBlock`, the exit paths) was reviewed rather than
+executed, and the MSVC build still has to confirm it.
+
+Two files moved. `CPU.cpp` gained 101 — 823 now 924 — spread across every option case, so no single offset
+describes it: re-derive citations into `wmain` rather than adjusting them. `CPU.h` gained 151, all of them in
+one block at `:886` between `SetSMTLoading` and `Failed()`, so a citation below `SetSMTLoading` reads 151 lines
+low — `Failed()`, `Evaluate` and `GenerateValues`, and so A7, B4, B5, B7 and B8, on top of every earlier shift.
+`en-GB.h` gained thirteen: three exit codes and four documentation lines in the instruction table, and six
+messages at the end of the array, 35 entries now 41 — `wstrMessage[9]` is reused rather than added to, F14
+being the entry that says it names the wrong condition. `CLAUDE.md` and `README.md` were updated to match —
+`CLAUDE.md`'s exit-code section names the three new codes, a new `Command-line parsing` subsection describes
+the four functions and the three invariants of the core maps, its localisation section no longer says the `L`
+option is inverted, and the known-constraints bullet that named `Uc`/`Ut` as unusable is replaced by one
+saying what a `U` map now means.
 
 Every other entry below still stands.
 
@@ -1133,7 +1188,18 @@ row plus 160 per AVX2 row, so `c` passes 21 845 at about 100 threads and 32 768 
 * **Fix:** size `wstrOutput` from `threadCount[2]`, use the bounded `swprintf_s`, and convert into a separate
   allocation.
 
-### C8. Division by zero when the core map selects nothing — **Medium**
+### C8. Division by zero when the core map selects nothing — **Medium** — *Fixed*
+
+> **Fixed, with F2**, and taken with it out of necessity rather than opportunity: a `U` map that clears
+> `cfg.coreMap` before applying its characters is what makes an empty selection expressible at all, so the
+> fix that made the maps work is the fix that made this reachable. `wmain` now refuses a selection of no
+> cores immediately after the population count, with the new exit code `-26`, before the
+> `cfg.allocMem[0] / threadCount[2]` this entry cites and before the two later uses of the same count.
+>
+> The divide-by-zero was the visible half. The other half is that the *other* two memory configurations do
+> not divide, so an empty map reaching them produced no exception at all — no thread created, an empty
+> results table, and exit code 0, which reads as a clean pass of a CPU that was never touched. Both are
+> closed by the one guard.
 
 `CPU.cpp:499` — `resArray.blockSize[0] = resArray.blockSize[1] = cfg.allocMem[0] / (cui64)threadCount[2];`.
 `threadCount[2]` is computed at `CPU.cpp:473–476` by popcount over the user-modifiable core map, and nothing
@@ -1160,7 +1226,12 @@ guarantees it is non-zero. The same variable is used unchecked at `CPU.cpp:503,5
 * **Impact:** the run silently differs from the reported configuration; some or all threads drop out of
   memory-backed mode.
 
-### C10. `Uc` / `Ut` can shift by 64 or more — **Medium**
+### C10. `Uc` / `Ut` can shift by 64 or more — **Medium** — *Fixed*
+
+> **Fixed, with F2.** Neither expression survives: `ParseCoreMap` (`CPU.h`) derives the word from the
+> character's index (`n >> 6`) and the bit from `n & 63`, and stops at the first character that is not part
+> of a map, so no shift count can reach 64 however long the map is. The entry's cross-reference to "F1" is to
+> **F2**, which is where the accompanying indexing errors are recorded.
 
 `CPU.cpp:288,291,311,314` — `0x03ull << (j << 1)` and `0x01ull << j`, with `j` walking the map characters
 unbounded. `Uc` reaches an undefined shift count at the 32nd character and `Ut` at the 64th. See F1 for the
@@ -1650,7 +1721,42 @@ sub-option such as a duration or a start-up delay.
   duration gets a tenth of the load they asked for.
 * **Fix:** clear bits 4–6 only when the argument actually contains `C`, `F` or `S`.
 
-### F2. The `Uc` and `Ut` core-map options are unusable — **High**
+### F2. The `Uc` and `Ut` core-map options are unusable — **High** — *Fixed*
+
+> **Fixed.** Both maps are now read by one function, `ParseCoreMap` (`CPU.h`), and every index in it comes
+> from the topology rather than from the character's position in the argument. `Ut` numbers the virtual cores
+> of the machine group by group, so character *n* is bit `n & 63` of group `n >> 6` — which is the first
+> character controlling core 0, one word holding 64 cores rather than eight, and no shift count able to reach
+> 64. `Uc` numbers the *physical* cores and sets or clears each one's whole span of virtual cores, taken from
+> the `cfg.sys.coreSibling` pair one core at a time, so it is exact at any SMT width and on a hybrid part,
+> where `0x03ull << (j << 1)` assumed two virtual cores per core and a fixed stride. Both mask with the cores
+> the enumeration reported, so a character naming a core the machine does not have cannot enter the map the
+> banner prints, and both clear `cfg.coreMap` first: the map is the whole of the selection, and a core it
+> does not name is not utilised.
+>
+> **The map now ends at the first character that is not part of one**, which is what makes the documented
+> `Uc!.!!...!s` and `Uc!.!!...!a` spellings writable at all — previously the map consumed the rest of the
+> argument and no further `U` sub-option could follow it. That needs the enabling characters to be named
+> rather than assumed, so "any other character enables the core" becomes an explicit set: `.` `,` `_` `-` `0`
+> disable, `!` `*` `#` `+` `1` `x` `X` enable, anything else ends the map. `en-GB.h` and `README.md` say so,
+> and the help text's example is corrected to `Uc!.!!...!e` — its trailing `s` named a sub-option that has
+> been `E` since before this audit, while the same line's "(S, O)" contradicted the two lines under it.
+>
+> **C10 is closed with it** — there is no unbounded shift left — and the out-of-bounds read the entry's last
+> paragraph describes goes with it: `ParseCoreMap` leaves the index on the last character it consumed, so the
+> enclosing loop's `++j` lands on the terminator rather than stepping past the end of the argument.
+>
+> **C8 came with it too, out of necessity.** An empty selection was previously hard to express, because the
+> characters could only modify the full map the enumeration had left; a map that clears first makes
+> `Ut........` reach the unchecked `cfg.allocMem[0] / threadCount[2]` divisor C8 names. `wmain` now refuses a
+> selection of no cores with the new exit code `-26` before that division — which also removes the other half
+> of C8's impact, a run that prints an empty results table and returns 0.
+>
+> Verified off-target: `ParseWholeNumber`, `ParseDecimal`, `CoreMapChar` and `ParseCoreMap` were transcribed
+> verbatim into a harness with a stand-in topology and driven over six machines — 4×2-way, 4×4-way, 8×1-way,
+> and two-group parts of 32 + 4 cores — checking the first and last core of each map, both documented
+> trailing-sub-option spellings, a map longer than the machine, and the character that crosses the group
+> boundary (character 64 for `Ut`, physical core 33 for `Uc`).
 
 `CPU.cpp:283–318`. Three independent errors:
 
@@ -1681,7 +1787,14 @@ characters only modify whatever topology enumeration produced, and `SetSMTLoadin
 * **Impact:** manual core selection — one of the six advertised option groups — does not work, and silently
   produces a different core set from the one the user wrote.
 
-### F3. The UTF-16 results file is truncated to half its length — **High**
+### F3. The UTF-16 results file is truncated to half its length — **High** — *Fixed*
+
+> **Fixed.** The write goes through `WriteBlock` (`CPU.h`) with `c * sizeof(wchar)` as its byte count, so the
+> whole report reaches the file and a partial write is reported rather than accepted — `WriteFile` returns
+> success for a short write, which is the second half of the same defect. The two byte-order marks above it
+> now go through `WriteBlock` for that reason as well: a half-written mark makes the file's encoding
+> unreadable to anything that opens it. `bytesProc`, the `DWORD` the four raw calls shared, has no user left
+> and is gone.
 
 `CPU.cpp:661`:
 
@@ -1696,7 +1809,28 @@ at `CPU.cpp:668` is correct, because there `c` narrow characters really are `c` 
 * **Trigger:** `PITC.exe O16[results.txt] …` (any run writing a UTF-16 results file).
 * **Fix:** `WriteFile(outFile, wstrOutput, c * sizeof(wchar), &bytesProc, 0);`
 
-### F4. Numeric arguments are never validated and the index advance can wrap — **High**
+### F4. Numeric arguments are never validated and the index advance can wrap — **High** — *Fixed*
+
+> **Fixed.** Two readers in `CPU.h`, `ParseWholeNumber` and `ParseDecimal`, are now the only route a number
+> takes into `cfg`, and neither returns a value it has not checked. Each requires the value to *begin* where
+> the option says it does — a digit or a sign, not the whitespace `wcstoll` would otherwise skip over to find
+> a value in the next field — compares `stopChar` against that first character, and range-checks the result
+> before assigning it. Every option names its bounds: `OPT_MEM_MB_MAX` (16TiB, which is what keeps the byte
+> count inside an `si64` after the `<< 20` and after the per-thread multiply), `OPT_PULSE_MS_MAX` (24 hours),
+> `OPT_DELAY_MAX` (24 hours) and `OPT_DURATION_MAX` (365 days). A failed read prints the option, the argument
+> and the bounds, and returns the new exit code `-24`.
+>
+> That closes each bullet of the entry: `Tt`, `T[` and `Mc` with no value are refused instead of yielding 0;
+> `Tt-5`, `T[-100` and `Mc-1` are refused as out of range, rather than becoming a negative duration, a
+> 4.29 × 10⁹ ms on-time or a negative allocation; `Mt3000000` is read by `wcstoll` and survives the shift
+> where the 32-bit `wcstol` overflowed before it. `Tt0` still reaches the existing `-13`, which names that
+> condition exactly and better. A character following a value is left to the enclosing option loop, which is
+> what `Mc8t16` needs and what F9's `default` arm now catches when it names nothing.
+>
+> The index advance is the other half. `j` is a `ui32` rather than a `ui8`, and the readers set it absolutely
+> — `ui32(stopChar - str) - 1` — rather than adding a `ui8`-truncated delta, so a value field longer than 255
+> characters can no longer move it backwards into a non-terminating parse. The one place `j` still meets a
+> `ui8` parameter, `NextSelectedCore`'s thread class, is cast explicitly.
 
 Every numeric option follows the same pattern, e.g. `CPU.cpp:240–241`:
 
@@ -1717,7 +1851,12 @@ j += ui8(stopChar - &argv[i][j] - 1);
 * **Fix:** validate `stopChar != &argv[i][j + 1]`, range-check every value, widen `j`, and use `wcstoll` for
   byte counts.
 
-### F5. `O`'s filename length is miscalculated and trailing options are swallowed — **Medium**
+### F5. `O`'s filename length is miscalculated and trailing options are swallowed — **Medium** — *Fixed*
+
+> **Fixed.** The count is `c - d + 1`, and `c` is left on the `]` for the enclosing loop's `++c` to step
+> past, so both rows of the entry's table now produce `results.txt` with the encoding they name. The scan's
+> bound is `c - d < 1023` — one short of `wstrOut`'s capacity — rather than a fixed offset of 1024 into the
+> argument, which is a bound on the wrong string once anything precedes the `[`.
 
 `CPU.cpp:200–205`:
 
@@ -1740,7 +1879,14 @@ Both documented spellings misbehave:
   encoding is selected, F3 truncates it.
 * **Fix:** use `c - d + 1` as the count and do not advance `c` past `]` inside the call.
 
-### F6. The UTF-8 option writes locale ANSI bytes behind a UTF-8 BOM — **Medium**
+### F6. The UTF-8 option writes locale ANSI bytes behind a UTF-8 BOM — **Medium** — *Fixed*
+
+> **Fixed.** Both 8-bit paths convert with `WideCharToMultiByte`, under `CP_UTF8` for `O8` and `CP_ACP` for
+> the `A` (non-UTF) option, so the file's contents are the encoding its byte-order mark claims and neither
+> depends on the locale `setlocale(LC_ALL, "")` happened to install. The call also reports the exact byte
+> count the encoding needs, and reports a character it cannot represent as a failure — where `wcstombs`
+> returned `(size_t)-1`, which the surrounding code had to test for by hand. The character count is passed
+> rather than -1, so no terminating null reaches the file, and the write goes through `WriteBlock` with F3.
 
 `CPU.cpp:488–490` emits a UTF-8 BOM for `outUTF == 1`, but the conversion at `CPU.cpp:667` is `wcstombs`,
 which uses the locale set by `setlocale(LC_ALL, "")` at `CPU.cpp:29` — on most Windows installations the
@@ -1749,28 +1895,56 @@ character (a future translation, or a path in an error line) is mojibake.
 
 * **Fix:** use `WideCharToMultiByte(CP_UTF8, …)` for the UTF-8 path.
 
-### F7. The `L` option always selects English — **Medium**
+### F7. The `L` option always selects English — **Medium** — *Fixed*
+
+> **Fixed.** The two inverted tests become one `if(!lstrcmpiW(wstrLang, L"en-GB") || !lstrcmpiW(wstrLang,
+> L"en-US"))`, and the stray `;` is gone with the block it followed. A code this build does not carry now
+> prints `wstrMessage[40]` and leaves the interface in en-GB rather than selecting it by accident: the
+> observable behaviour of `Len-GB` is unchanged, and every *other* input says what happened. The `wstrLang`
+> global is reset to `en-GB` on that path so the banner and any later comparison agree with the interface
+> actually in use.
 
 `CPU.cpp:142,147` — `if(lstrcmpiW(wstrLang, L"en-US"))` — `lstrcmpiW` returns 0 when the strings are **equal**,
 so both conditions are true exactly when the code is *not* the one named. Every input lands on English. Also
 note the stray `;` after the second block's closing brace at `CPU.cpp:151`. Already flagged in `CLAUDE.md`;
 must be fixed before a second language is added.
 
-### F8. Reported "Memory allocated" double-counts in the split configuration — **Medium**
+### F8. Reported "Memory allocated" double-counts in the split configuration — **Medium** — *Fixed*
+
+> **Fixed.** The banner prints `cfg.allocMem[0] >> 20`. All three arms of the `memConfig` switch leave
+> `allocMem[0]` holding the whole of the allocation — mode 0 never modifies it, mode 1 multiplies it by the
+> thread count, mode 2 assembles it from both class sizes — so the total is one field, and `allocMem[1]` is a
+> per-thread size that has already been counted into it.
 
 `CPU.cpp:574` prints `(cfg.allocMem[0] + cfg.allocMem[1]) >> 20`. In `memConfig == 2` (`CPU.cpp:508`)
 `allocMem[0]` has already been overwritten with the *total* while `allocMem[1]` still holds the per-SMT-core
 size, so `Mn8 Ms4` reports the true total plus 4 MB. In the other modes `allocMem[1]` is its default 1 byte,
 which vanishes under `>> 20`.
 
-### F9. Unknown options, letters and presets are silently ignored — **Medium**
+### F9. Unknown options, letters and presets are silently ignored — **Medium** — *Fixed*
+
+> **Fixed.** The top-level switch and the inner switches for `I`, `M`, `O`, `S`, `T` and `U` all have a
+> `default` arm that names the offending character and the argument it came from, and returns the new exit
+> code `-25`. `B` and `W` reject a trailing character for the same reason. The `-` preset now tests its digit
+> *before* the memory and unit preamble, and refuses a trailing character with it, so `-a` and `-5x` no
+> longer rewrite `procUnits`, `memConfig` and `allocMem` on their way to being ignored.
+>
+> This is deliberately fatal rather than a warning. The failure it replaces is a run that stresses a
+> different CPU configuration from the one on the command line and reports `.Pass.` for it, which is the
+> class of defect this tool exists to avoid; a mistyped option is worth stopping for. Two messages are added,
+> one taking the whole argument and one taking a sub-option character.
 
 The top-level `switch(argv[i][0])` at `CPU.cpp:90` has no `default`, and neither do the inner switches for
 `I`, `M`, `S`, `T`, `U` or `-`. `PITC.exe -5x`, `PITC.exe Iq`, `PITC.exe Zzz` and a mistyped `PITC.exe -a` all
 run with defaults and no warning. `case L'-'` additionally applies its memory/unit preamble
 (`CPU.cpp:370–372`) *before* testing the digit, so an invalid preset still changes the configuration.
 
-### F10. `O1` reads one character past the argument's terminator — **Low**
+### F10. `O1` reads one character past the argument's terminator — **Low** — *Fixed*
+
+> **Fixed.** The `6` is examined at `c + 1` without advancing onto it, and `c` is only incremented once the
+> character is known to be there, so the argument `O1` leaves the index on its own terminator for the
+> enclosing `++c` to step past. `O1` followed by anything else is now the unrecognised-option error F9 adds
+> rather than a silently ignored encoding request.
 
 `CPU.cpp:190–192`:
 
@@ -1782,25 +1956,60 @@ case L'1':
 For the argument `O1`, `++c` lands on the terminating NUL (in bounds), but the enclosing loop's `++c` then
 advances past it and the loop condition `argv[i][c]` reads out of bounds.
 
-### F11. `wprintf` is called with a runtime-built buffer as the format string — **Low**
+### F11. `wprintf` is called with a runtime-built buffer as the format string — **Low** — *Fixed*
+
+> **Fixed.** Both sites, and the instruction text at the no-argument path, are now `wprintf(L"%s", …)`. The
+> third is the same pattern for the same reason: `wstrInstructions` is a pointer the `L` option reassigns,
+> not a literal, so a translation carrying a `%` would be read as a conversion specifier.
 
 `CPU.cpp:588,658` pass `wstrOutput` directly as the format. No `%` can reach that buffer today (it holds only
 `!`/`.` core-map characters, hex digits and fixed text), but the pattern is one edit away from a format-string
 bug — and `wstrOut`, the user-supplied output filename, is already interpolated elsewhere.
 
-### F12. `W` reuses the enclosing loop variable — **Low**
+### F12. `W` reuses the enclosing loop variable — **Low** — *Fixed*
+
+> **Fixed.** Both loops take local counters — `t` over the threads and `lane` over the seed lanes — and the
+> kernel-family check takes a local `badKernel` rather than the argument index `j`, so the case no longer
+> writes to anything the enclosing option loop is walking `argv` with. The case body is a block, which is
+> what lets those locals be declared where they are used.
+>
+> `W` remains terminal by design: it returns 1 as soon as the file is written, so options *after* it are
+> still not read. That is the documented meaning of exit code 1 and is left alone; what the fix removes is
+> the corruption of the parse state, which was the part that could not be reasoned about.
 
 `CPU.cpp:326` runs `for(i = 0; i < MAX_THREADS; ++i)` using `i`, the argument-loop index. Harmless only because
 the case always returns, but it means `W` can never be combined with any other option.
 
-### F13. Option order changes the result in undocumented ways — **Low**
+### F13. Option order changes the result in undocumented ways — **Low** — *Fixed*
+
+> **Fixed by documenting the rule, which was the entry's first suggestion.** `en-GB.h` and `README.md` now
+> open the option reference with it: options are applied in the order given and the last one to set a
+> property wins; `B` and the presets reset the processing units and the memory configuration, so either
+> belongs before any `I` or `M`; and `Ts` clears the pulse off-time, so `]` belongs after `S` where both are
+> used. Defining a precedence instead was rejected because the help text already documents left-to-right for
+> `B` ("Options after 'B' override defaults"), so every existing command line depends on it.
+>
+> One of the entry's examples is smaller than it was: `B Tt120` and `Tt120 B` now differ only in the
+> duration, F1 having stopped a `T` argument that names no mode from rewriting the timing mode. `Ts]500` vs
+> `T]500s` and `-1 Iav` vs `Iav -1` are unchanged, and are what the documented rule is for.
 
 Options are applied in argv order with no precedence rules. `B Tt120` and `Tt120 B` differ; `-1 Iav` and
 `Iav -1` differ; `Ts]500` and `T]500s` differ (`Ts` zeroes `offTime`, so whichever comes last wins). `case L'-'`
 unconditionally overwrites `procUnits`, `memConfig` and `allocMem`, so a preset always discards an earlier `I`
 or `M`. Worth documenting, or worth defining a precedence.
 
-### F14. The invalid-filename error prints the wrong message and an empty name — **Low**
+### F14. The invalid-filename error prints the wrong message and an empty name — **Low** — *Fixed*
+
+> **Fixed.** The branch now tests the condition it was written for rather than `lstrcpynW`'s return value,
+> which answers a different question: an unterminated `[`, an empty name, or a name longer than `wstrOut`
+> holds is the invalid-filename condition `-8` documents. `O[]` therefore exits with `-8` instead of
+> completing with file output silently disabled.
+>
+> `wstrMessage[9]` is **rewritten in place** rather than superseded. Its old text, *"Unable to create file
+> \"%s\"."*, duplicated `wstrMessage[10]` — which is what the `CreateFileW` failure at `-9` actually prints —
+> so once this branch stopped using it the entry had no caller at all. It now names the invalid filename and
+> quotes the whole argument that carried it, which is the one input that can say what was wrong; `wstrOut`,
+> the argument the old call passed, is a zero-initialised global that `lstrcpynW` has just failed to fill.
 
 `CPU.cpp:202–205`:
 
@@ -1821,7 +2030,11 @@ not a failure. `PITC.exe O[]` gives `d == c == 2`, so the call copies zero chara
 returns a valid pointer. `wstrOut[0]` is then 0, the guard at `CPU.cpp:481` is false, and the run completes
 with **file output silently disabled** — no file, no warning, exit code 0.
 
-### F15. `system("pause")` makes the no-argument path hang outside an interactive console — **Low**
+### F15. `system("pause")` makes the no-argument path hang outside an interactive console — **Low** — *Fixed*
+
+> **Fixed.** The call is gone; the no-argument path prints the option reference and returns 2. That removes
+> the block on a keypress in a CI job, a scheduled task or a piped invocation, and with it a dependency on
+> resolving `cmd.exe` through the `PATH` in order to print help text.
 
 `CPU.cpp:444`:
 
