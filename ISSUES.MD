@@ -37,8 +37,8 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1, A2, A3, A4, A5, A6, A9, A10, B1, B2, B3, C1, E1, E2 and F1 are fixed** — see the `Fixed` notes on those
-entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
+**A1, A2, A3, A4, A5, A6, A9, A10, B1, B2, B3, C1–C6, E1, E2 and F1 are fixed** — see the `Fixed` notes on
+those entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
 bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
 failure; A4–A6 and F1 were the false-pass family of Appendix B item 2, where the configuration itself
 guaranteed that no work was done, or no time was spent doing it. Rejecting those configurations also closed
@@ -56,6 +56,20 @@ scheduler tick; `timeBeginPeriod` was rejected as a machine-wide change to the i
 and `<timeapi.h>`, whose presence named E2, is gone. Neither entry changes a job kernel, so `cpu.values`
 does not need regenerating. E3, E4's benchmark half, and E6–E12 are untouched.
 
+C2–C5 are the arena-layout family, and they are one edit: the `switch` that used to compute `records[]` and
+four ALU offsets now yields only a record size and a record's vector width, and the sizing, the rounding,
+the guards and the one ALU-base expression follow it. C2's missing multiplier turns out to fire on *any*
+topology with non-SMT threads — an SMT-disabled or non-SMT CPU is the worst case, not a safe one — while
+C3 needs both classes populated; C4's round-down to a multiple of 4 stops the one-to-three-record overrun
+that every memory-backed run on a CPU below AVX-512 performed, preset `-0` included on every CPU; C5 adds a
+pre-flight size check and a null check on one shared exit code. Together they make the arena tile exactly
+for every unit set, thread-class mix and `M` mode tested — 31 hand-written configurations and a 1 341-case
+sweep, of which the pre-fix code fails 23 and 856 respectively.
+Two new exit codes, `-17` and `-18`, are documented in `wstrInstructions_English`, and `wstrMessage_*` grew
+from 20 entries to 23. C6 is unrelated to those and is the clamp its entry recommends. **C7–C13 are
+untouched**, and C9 in particular is now visible rather than silent: `Mn8` with no `Ms` exits with `-18`
+instead of quietly running the register code path.
+
 A9, A10 and C1 are the malformed-`I`-string family, and one pre-flight rule closes all three: a unit
 selection must name at least one processing unit (`-15`) and at most one of FPU/SSE4.1/AVX2/AVX-512 (`-16`).
 That removes the `JobCycle` index overrun, the arena sized in bytes rather than records, the empty results
@@ -69,6 +83,13 @@ three more files: `CPU.cpp` by twelve lines (nine of them ahead of the memory-al
 C8–C13 are all below the edits), `CPU_job_cycles.h` by six at the dispatch table, and `en-GB.h` by five.
 Citations into those files read correspondingly low, and several were already stale before these fixes — as
 the preamble says, re-confirm every line number against the current source before acting on an entry.
+
+C2–C6 shifted two files again. In `CPU.cpp` the `L` option gained two comment lines at `:141`, so every
+citation past it — C2–C13, D1, E11, F2–F15 among them — reads two lines low on top of the twelve A9/A10/C1
+already added; the arena block itself grew from 76 lines to 93, all of it between `:518` and `:611`, so
+citations *below* the arena read nineteen lines low in total. `en-GB.h` gained five lines: two exit codes in
+the instruction table and three messages, the latter at the end of the array. `CLAUDE.md` was updated to
+match, so its arena, exit-code and localisation sections describe the code as it now stands.
 
 E1 and E2 shifted two more. `CPU.h` lost its `<timeapi.h>` include at line 15 and gained a 62-line
 pulse-timing group before `SetSMTLoading`, so citations between those two points read one line high and
@@ -577,7 +598,33 @@ region with SSE seed values.
 * **Fix:** seed only the sub-array the dispatcher will actually use, or reject multi-vector `I` strings (see
   also A9).
 
-### C2. The ALU sub-array offset drops the element-size factor on the non-SMT term — **High**
+### C2. The ALU sub-array offset drops the element-size factor on the non-SMT term — **High** — *Fixed*
+
+> **Fixed.** None of the four arms that placed the ALU sub-array computes the offset itself now. The `switch`
+> yields only two numbers — `recSize`, the per-record byte cost, and `vecUnits`, the vector portion of a
+> record in the 8-byte units `resArray.alu` is indexed by — and one expression after it advances the base:
+> `resArray.alu = (si64ptrc)resArray.p + vecRecords * vecUnits`, where `vecRecords` is
+> `records[0] * threadCount[0] + records[1] * threadCount[1]`. The multiplier now applies to the whole count,
+> as this entry asks, and it cannot be dropped from one term again because no term is written out separately.
+> `case 3` (ALU + FPU, N = 1) is unchanged in effect.
+>
+> **The trigger is wider than stated below.** The multiplier was missing from the *non-SMT* term, so the
+> defect fires whenever `threadCount[0] > 0` — it does not need both classes populated. A CPU with no SMT at
+> all, or one with SMT disabled in firmware, puts **every** thread in class 0 and is therefore the *worst*
+> case, not a safe one: with `Iax Mc8` on 16 non-SMT threads the ALU base landed at 128 × `records` bytes
+> where the vector sub-array alone needs 1 024 × `records`, so the ALU sub-array sat almost entirely inside
+> it. Only a uniform-SMT topology (`threadCount[0] == 0`), which is what the author's own machine reports,
+> masks it — which is presumably why it survived.
+>
+> Verified by compiling this block verbatim over a shimmed Win32 layer and checking the layout it produces:
+> 31 hand-written configurations covering the shipped command lines, plus a sweep of 1 341 combinations of
+> the 9 reachable unit sets, 12 topologies (uniform SMT, uniform non-SMT and ten mixes) and the three `M`
+> modes at several sizes. The pre-fix code fails 23 of the 31 and 856 of the 1 341 — 777 hand two threads
+> overlapping slices (C2 and C3) and 347 produce a record count the cursor walks past the end of (C4), the
+> two sets overlapping — including 79 uniform-SMT configurations, so even the topology that masks C2 is not
+> safe once C4 is counted. The fixed code passes all 31 and all 1 341: no slice leaves the allocation, no
+> two slices overlap, every record count is a usable multiple of 4, and every thread's seed values are still
+> intact after the seeding pass — that read-back being exactly what the false `!Fail!` came from.
 
 `CPU.cpp:535,542,549`:
 
@@ -600,7 +647,15 @@ N = 1 there.
 * **Impact:** the ALU sub-array base lands inside the vector sub-array; the two overlap and corrupt each
   other, producing `!Fail!` on healthy hardware.
 
-### C3. Arena slices for non-SMT and SMT threads overlap — **High**
+### C3. Arena slices for non-SMT and SMT threads overlap — **High** — *Fixed*
+
+> **Fixed** by the first of the two remedies below: `bos` is initialised once, in the outer loop's init
+> clause, and runs across both passes — `for(k = 0, m = 0, bos = 0; m < 2; ++m)` with the inner loop reduced
+> to `for(l = 0; l < threadCount[m]; ++k, ++l, bos += resArray.records[m])`. The two remedies this entry
+> offers are the same thing — after the non-SMT pass a running `bos` holds exactly
+> `records[0] * threadCount[0]` — and hoisting was chosen because it needs no second expression to keep in
+> step with the loop. With C2 fixed as well, the arena tiles exactly: for every unit set, both sub-arrays and
+> both thread classes, the slices partition the block with no gap and no overlap.
 
 `CPU.cpp:552–553`:
 
@@ -618,7 +673,28 @@ at an offset already given to a non-SMT thread.
   both report `!Fail!` — a false positive that looks exactly like a real memory-subsystem fault.
 * **Fix:** hoist `bos` out of the inner loop, or seed the SMT pass with `records[0] * threadCount[0]`.
 
-### C4. `records[]` is never rounded to a multiple of 4, so the kernels write past the slice — **High**
+### C4. `records[]` is never rounded to a multiple of 4, so the kernels write past the slice — **High** — *Fixed*
+
+> **Fixed** exactly as recommended: `resArray.records[m] = (resArray.blockSize[m] / recSize) & ~0x03ull`,
+> and a resulting count of 0 is rejected — but only for a thread class that actually has threads, since
+> `records[1]` is meaningless when `threadCount[1]` is 0. The rejection is a new exit code, `-18`, with a
+> message naming both the bytes per thread available and the `4 × recSize` the selected units need.
+>
+> This is what the round-down is worth in practice. The default `Mc8` gives 116 508 records for ALU+AVX-512,
+> which is already a multiple of 4 and walks exactly to the end of the slice; but it gives 209 715 for
+> ALU+AVX2 and 349 525 for ALU+SSE, and preset `-0`'s `Mc2` gives 87 381 — so every memory-backed run on a
+> CPU below AVX-512, `B` and presets `-1`–`-9` alike, walked 1 record (AVX2) or 3 records (SSE) past the end
+> of every thread's slice on every pass, as did preset `-0` on every CPU. The overrun is
+> `(4 - recCount mod 4) mod 4` records: the cursor's last value is the smallest multiple of 4 that is at
+> least `recCount - 4`, which lands *beyond* `recCount - 4` whenever the count is not a multiple of 4. The
+> degenerate `recCount < 4` case is now unreachable too: it is rejected rather than pinned at `i = 0` writing
+> four records into a shorter slice.
+>
+> One reachable configuration changes verdict rather than behaviour. `Mn8` with no `Ms` on an all-SMT
+> machine leaves `allocMem[1]` at its 1-byte default (C9), so the SMT threads get 0 records; that run used
+> to allocate an arena of `1 × threadCount[1]` bytes and hand every thread the *register* code path with its
+> pointers already overwritten, and now exits with `-18` instead. C9 itself — the 1-byte default and `Ms`
+> alone allocating nothing — is untouched.
 
 Every `JobCycleMem*` function touches `offset … offset+3` (`CPU_job_cycles.h:23–27`), and the cursor at
 `CPU_methods.h:63` advances in steps of four:
@@ -639,7 +715,25 @@ writes four records.
   the last thread the overrun leaves the allocation entirely.
 * **Fix:** `records[m] &= ~3ull;` after the division, and reject a resulting count of 0.
 
-### C5. `malloc64` is never checked for failure — **High**
+### C5. `malloc64` is never checked for failure — **High** — *Fixed*
+
+> **Fixed** with both halves this entry asks for, sharing one exit code, `-17`, the way `-11` already serves
+> three unsupported-unit messages. Before the allocation is attempted, a request that is zero or negative, or
+> larger than `GlobalMemoryStatusEx`'s `ullAvailPhys`, is rejected; afterwards, `resArray.p` is tested
+> against null before the pointer-seeding loop can dereference it. The size check is skipped if
+> `GlobalMemoryStatusEx` itself fails, so an unavailable API cannot refuse a valid run.
+>
+> That covers the three unchecked inputs the entry lists. `Mc65536` (4 TiB on 64 threads) and `Mc-1` are both
+> refused before `malloc64` is called — the negative value because `<<= 20` and the multiply by the thread
+> count keep it negative, which the `<= 0` test catches. The `si64` overflow the entry raises is not
+> reachable in the current parser: `wcstol` caps a 32-bit `long` at 2 147 483 647, so `<< 20` gives at most
+> 2.25 × 10^15 bytes and ×512 threads at most 1.15 × 10^18, inside `si64`. It becomes reachable if `M` ever
+> moves to `wcstoll`, and the checks above bound it either way. Verified by driving this block over a shimmed
+> allocator: all three cases now return `-17`, where the pre-fix code was killed by a null-pointer write in
+> the seeding loop in each of them.
+>
+> Only the arena is covered. `B`'s `resArray.iter = zalloc1d64(...)` (`CPU.cpp:93`) is a different allocator
+> and a different (4 KiB) allocation; it is still unchecked and is still leaked on a repeated `B` (C13).
 
 `CPU.cpp:517`:
 
@@ -657,7 +751,17 @@ negative value (F4), and `blockSize[m] * threadCount[m]` at `CPU.cpp:503,508` ca
 * **Fix:** check the result and return a documented error code; validate the request against
   `GlobalMemoryStatusEx` first.
 
-### C6. A long `L` language code overflows `wstrLang[6]` — **High**
+### C6. A long `L` language code overflows `wstrLang[6]` — **High** — *Fixed*
+
+> **Fixed** with the one-line clamp this entry gives:
+> `lstrcpynW(wstrLang, &argv[i][1], min(c, si32(_countof(wstrLang))))`. A longer code is now truncated to the
+> five characters the buffer holds rather than written past it — `Lde-DE-formal` leaves `de-DE` in
+> `wstrLang`, `Lzh-Hans-CN-x-private` leaves `zh-Ha`. Both still resolve to English, because the option's
+> comparison is inverted (F7) and English is the only table in the tree; truncation therefore changes no
+> observable behaviour today, and the note in `CLAUDE.md` says to widen `wstrLang` if a language code ever
+> needs more room. Verified by compiling the option's parse arm verbatim against a shim with `lstrcpynW`'s
+> documented semantics and `wstrLang` as a real global: ASan reports a global-buffer-overflow on the pre-fix
+> arm for both of those arguments and none on the fixed one.
 
 `CPU.cpp:140–141`:
 
