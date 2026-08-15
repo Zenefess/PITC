@@ -11,6 +11,7 @@
 #define _CRT_RAND_S
 
 #include <iostream>
+#include <string.h> // memcmp, for the byte-exact comparisons in ValidateKernelFamilies
 #include <windows.h>
 #include <process.h>
 #include "memory management.h"
@@ -144,6 +145,119 @@ extern void JobMemALU(si64ptrc);      extern void JobMemFPU(fl64ptrc);          
 extern void JobMemSSE(fl64x2ptrc);    extern void JobMemALU_SSE(fl64x2ptrc, si64ptrc);
 extern void JobMemAVX2(fl64x4ptrc);   extern void JobMemALU_AVX2(fl64x4ptrc, si64ptrc);
 extern void JobMemAVX512(fl64x8ptrc); extern void JobMemALU_AVX512(fl64x8ptrc, si64ptrc);
+
+//--- Job kernel cross-check ---//
+// The eighteen job kernels are written out by hand across four translation units, with no shared
+// implementation, and until now nothing required them to agree. "cpu.values" records only what the five
+// register-resident kernels produce, so a JobMem* or JobALU_* kernel that had drifted from its counterpart
+// was never compared against anything: it was graded against a reference for arithmetic it does not
+// perform, and every memory-backed run -- which is to say every preset, every 'B' and every 'M' -- reported
+// the difference as silicon at fault (ISSUES.MD B5). 'W' now proves the whole family agrees before it
+// writes a file, which is where the invariant is established and the only place it can still be corrected
+
+// Names of the kernels the check walks, in the order it walks them; index 0 is "nothing disagreed".
+// These are identifiers rather than prose, so the table is not part of the translated strings
+cwchar wstrKernelName[14][20] = {
+   L"",
+   L"JobALU_FPU",    L"JobMemALU",    L"JobMemFPU",    L"JobMemALU_FPU",
+   L"JobALU_SSE",    L"JobMemSSE",    L"JobMemALU_SSE",
+   L"JobALU_AVX2",   L"JobMemAVX2",   L"JobMemALU_AVX2",
+   L"JobALU_AVX512", L"JobMemAVX512", L"JobMemALU_AVX512"
+};
+
+/// Runs one seed through every job kernel the CPU can execute, and requires each memory-array and combined
+/// variant to reproduce its register-resident counterpart exactly. Each JobMem* kernel is handed four
+/// records carrying the same seed, so all four must come back equal to the single register result -- which
+/// checks the record indexing as well as the arithmetic. The comparison is a byte compare: a golden value
+/// is a bit pattern, and every floating-point spelling of "equal" this codebase has reached for has at some
+/// point compared something other than every bit (ISSUES.MD A1~A3, A11)
+/// @return 0 if every kernel agreed; otherwise the wstrKernelName index of the first that did not
+static cui8 ValidateKernelFamilies(void) {
+   RESULTS seed = {}; // Zeroed first, so every lane stays defined if the seeding below is ever narrowed
+   fl64x8  refAVX512, memAVX512[4];
+   fl64x4  refAVX2,   memAVX2[4];
+   fl64x2  refSSE,    memSSE[4];
+   fl64    refFPU,    memFPU[4];
+   si64    refALU,    memALU[4];
+   fl64x8  regAVX512;
+   fl64x4  regAVX2;
+   fl64x2  regSSE;
+   fl64    regFPU;
+   si64    regALU;
+   ui8     k;
+
+   // The seed KernelFingerprint probes with: a magnitude the FP chains settle from within two steps, and a
+   // plain integer for the ALU lane
+   for(k = 0; k < 15; ++k) seed._fl64[k] = fl64(0x0123456789ABCull >> (k & 0x03)) + fl64(k);
+   seed.raw[15] = 0x0123456789ABCDEF;
+
+   //--- ALU and FPU: the scalar paths every x64 CPU carries ---//
+   refALU = seed.alu;   JobALU(refALU);
+   refFPU = seed.fpu;   JobFPU(refFPU);
+
+   regFPU = seed.fpu;   regALU = seed.alu;   JobALU_FPU(regFPU, regALU);
+   if(memcmp(&regFPU, &refFPU, sizeof(fl64)) || regALU != refALU) return 1;
+
+   for(k = 0; k < 4; ++k) memALU[k] = seed.alu;
+   JobMemALU(memALU);
+   for(k = 0; k < 4; ++k) if(memALU[k] != refALU) return 2;
+
+   for(k = 0; k < 4; ++k) memFPU[k] = seed.fpu;
+   JobMemFPU(memFPU);
+   for(k = 0; k < 4; ++k) if(memcmp(&memFPU[k], &refFPU, sizeof(fl64))) return 3;
+
+   for(k = 0; k < 4; ++k) { memFPU[k] = seed.fpu;   memALU[k] = seed.alu; }
+   JobMemALU_FPU(memFPU, memALU);
+   for(k = 0; k < 4; ++k) if(memcmp(&memFPU[k], &refFPU, sizeof(fl64)) || memALU[k] != refALU) return 4;
+
+   //--- SSE: reached on every CPU, being the golden ladder's fallback ---//
+   refSSE = seed.sse;   JobSSE(refSSE);
+
+   regSSE = seed.sse;   regALU = seed.alu;   JobALU_SSE(regSSE, regALU);
+   if(memcmp(&regSSE, &refSSE, sizeof(fl64x2)) || regALU != refALU) return 5;
+
+   for(k = 0; k < 4; ++k) memSSE[k] = seed.sse;
+   JobMemSSE(memSSE);
+   for(k = 0; k < 4; ++k) if(memcmp(&memSSE[k], &refSSE, sizeof(fl64x2))) return 6;
+
+   for(k = 0; k < 4; ++k) { memSSE[k] = seed.sse;   memALU[k] = seed.alu; }
+   JobMemALU_SSE(memSSE, memALU);
+   for(k = 0; k < 4; ++k) if(memcmp(&memSSE[k], &refSSE, sizeof(fl64x2)) || memALU[k] != refALU) return 7;
+
+   //--- AVX2 and AVX-512: gated exactly as RunGoldenLadder gates them ---//
+   if(cfg.sys.cpuAVX2) {
+      refAVX2 = seed.avx;   JobAVX2(refAVX2);
+
+      regAVX2 = seed.avx;   regALU = seed.alu;   JobALU_AVX2(regAVX2, regALU);
+      if(memcmp(&regAVX2, &refAVX2, sizeof(fl64x4)) || regALU != refALU) return 8;
+
+      for(k = 0; k < 4; ++k) memAVX2[k] = seed.avx;
+      JobMemAVX2(memAVX2);
+      for(k = 0; k < 4; ++k) if(memcmp(&memAVX2[k], &refAVX2, sizeof(fl64x4))) return 9;
+
+      for(k = 0; k < 4; ++k) { memAVX2[k] = seed.avx;   memALU[k] = seed.alu; }
+      JobMemALU_AVX2(memAVX2, memALU);
+      for(k = 0; k < 4; ++k) if(memcmp(&memAVX2[k], &refAVX2, sizeof(fl64x4)) || memALU[k] != refALU) return 10;
+   }
+
+   if(cfg.sys.cpuAVX512) {
+      refAVX512 = seed.avx512;   JobAVX512(refAVX512);
+
+      regAVX512 = seed.avx512;   regALU = seed.alu;   JobALU_AVX512(regAVX512, regALU);
+      if(memcmp(&regAVX512, &refAVX512, sizeof(fl64x8)) || regALU != refALU) return 11;
+
+      for(k = 0; k < 4; ++k) memAVX512[k] = seed.avx512;
+      JobMemAVX512(memAVX512);
+      for(k = 0; k < 4; ++k) if(memcmp(&memAVX512[k], &refAVX512, sizeof(fl64x8))) return 12;
+
+      for(k = 0; k < 4; ++k) { memAVX512[k] = seed.avx512;   memALU[k] = seed.alu; }
+      JobMemALU_AVX512(memAVX512, memALU);
+      for(k = 0; k < 4; ++k) if(memcmp(&memAVX512[k], &refAVX512, sizeof(fl64x8)) || memALU[k] != refALU) return 13;
+   }
+
+   return 0;
+}
+//--- Job kernel cross-check ---//
 
 //--- "cpu.values" file format ---//
 // A 64-byte header followed by the two RESULTS[MAX_THREADS] blocks: the input seeds, then the golden

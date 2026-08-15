@@ -37,7 +37,8 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1–A7, A9, A10, B1, B2, B3, B6, C1–C6, D1, D2, D3, D5, E1, E2, F1, H1 and H2 are fixed** — see the
+**A1–A7, A9, A10, B1, B2, B3, B5, B6, C1–C6, D1, D2, D3, D5, E1, E2, F1, H1, H2, H7, J1, J2 and J7 are
+fixed** — see the
 `Fixed` notes on those entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
 bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
 failure; A4–A6 and F1 were the false-pass family of Appendix B item 2, where the configuration itself
@@ -151,9 +152,9 @@ edit, which `CLAUDE.md` previously had to ask the author to remember. The kernel
 running the golden ladder over a fixed seed, so it tracks the kernels rather than a revision constant
 somebody has to bump; the ladder itself is now a single `RunGoldenLadder` shared by both halves of
 `GenerateValues` and by the fingerprint, which makes the "same pattern in both halves" invariant structural.
-`RESULTS` is untouched, and the header is verified 64 bytes with no padding. **B4, B5, B7, B8 and H3–H7 are
+`RESULTS` is untouched, and the header is verified 64 bytes with no padding. **B4, B7, B8 and H3–H6 are
 untouched**; H3 in particular is now the visible remainder of H1's area, and H5 and H6 were already largely
-overtaken by commit `39f0d4b`.
+overtaken by commit `39f0d4b`. B5 and H7 are closed by the batch below.
 
 `CPU.h` is 101 lines longer than it was — 410 now 511 — and moved in three steps: one include at `:18`, a
 132-line `"cpu.values" file format` group between the `Job*` externs and the thread-completion bitmap, and
@@ -166,6 +167,31 @@ read — every C, E and F entry in `wmain` past that point. `en-GB.h` gained sev
 instruction table and five messages at the end of the array. `CLAUDE.md` was updated to match: its build,
 golden-value-model, `GenerateValues` and exit-code sections now describe the format and the two guards as
 they stand.
+
+J1, J2, J7, B5 and H7 are the job-kernel batch, and four of the five are one rewrite. J1 and J2 had to be
+taken together because either one alone changes every golden value: the shift predicate becomes `i < 8`, so
+the right-shift arm executes for the first time, and the chain moves into `ui64` so that its wraparound is
+defined by the language rather than by a project setting. J7 adds the running accumulator its entry
+proposes, which raises single-ULP fault detection in the FP kernels from 21 % to 62 %; the measurement that
+drove the design is that the sensitivity is lost at *one* rounding — the fourth root that opens every step —
+and not gradually, so the accumulator's value is that it reaches the result without passing through one.
+B5 is the check that keeps all of this honest: `ValidateKernelFamilies` requires the thirteen memory-array
+and combined kernels to reproduce their five register-resident counterparts byte for byte, and `W` runs it
+before generating anything. That mattered immediately — the eighteen kernels were edited together, and the
+check is what establishes that they still agree. H7 deletes the two `Win32` configurations and adds an
+x64 `#error` to `CPU_build.h`, which is also what makes J2's guarantee unconditional.
+
+The four `CPU_jobs_*.cpp` files were regenerated from a single description of the arithmetic rather than
+edited eighteen times by hand, which is the practical answer to **J6** even though that entry stays open:
+the generator is not in the repository, but its output is what B5's check now verifies at run time. Two
+knock-on tidies came with it — the SSE unit's longest line drops from 195 columns to 121, inside the GCS
+180 hard cap it had been breaking, and same-line statements are separated by three spaces per `r4`. One
+exit code is added, `-22`, and `wstrMessage_*` grew from 30 entries to 31.
+
+**Any `cpu.values` from before this batch must be regenerated with `W`.** Every golden value changes. The
+header's `KernelFingerprint` detects that on its own and reports `-21`, so a stale file is refused rather
+than blamed on the CPU — which is the guard doing exactly what B6 added it for. **J3, J4, J5, J6 and B4,
+B7, B8 remain open.**
 
 Every other entry below still stands.
 
@@ -577,7 +603,28 @@ runs again.
   if the integrity of the results pass 65,536 iterations"*) is not delivered.
 * **Fix:** declare `i` inside the outer loop.
 
-### B5. `W` validates only 5 of the 16 job kernels — never the ones the test actually uses — **Medium**
+### B5. `W` validates only 5 of the 16 job kernels — never the ones the test actually uses — **Medium** — *Fixed*
+
+> **Fixed.** `ValidateKernelFamilies` (`CPU.h`) runs one seed through every kernel the CPU can execute and
+> requires each memory-array and combined variant to reproduce its register-resident counterpart byte for
+> byte. `W` calls it before it generates anything and refuses with `-22`, naming the kernel that
+> disagreed, so a divergence is reported as the defect it is instead of being written into `cpu.values` as
+> though it were correct. Each `JobMem*` kernel is handed four records carrying the same seed and all four
+> must come back equal to the single register-resident result, which checks the record indexing as well as
+> the arithmetic. The AVX2 and AVX-512 families are gated exactly as `RunGoldenLadder` gates them.
+>
+> The comparison is `memcmp`, not any arithmetic test, for the reason **A1**–**A3** and **A11** give: a
+> golden value is a bit pattern, and every floating-point spelling of "equal" this codebase has reached for
+> has at some point compared something other than every bit.
+>
+> Checked for vacuity rather than assumed to work: a divergence injected into each of the thirteen
+> non-reference kernels in turn — separately in the ALU half and the vector half, and in records other than
+> the first — is caught in all thirteen cases and named correctly. A divergence in one of the five
+> reference kernels is caught too, as a disagreement reported against whichever variant it is compared
+> with.
+>
+> This checks the eighteen kernels against *each other*; what pins them to the file is still
+> `KernelFingerprint`. The two are complementary, and neither replaces the other.
 
 `CPU.h:241–258` exercises `JobAVX512`, `JobAVX2`, `JobSSE`, `JobFPU` and `JobALU` — the register-resident,
 single-unit kernels. It never runs any `JobMem*` variant and never runs any `Job ALU_*` variant, yet those are
@@ -1871,7 +1918,20 @@ the "kernels are not optimised" invariant is not being enforced. `<EnableFiberSa
 `swprintf` calls (C7) and the `lstrcpynW` overflow (C6), removing stack cookies from the released binary is the
 wrong trade for a tool that parses user input.
 
-### H7. The `Win32` configurations are broken — **Low**
+### H7. The `Win32` configurations are broken — **Low** — *Fixed*
+
+> **Fixed** by deletion, as this entry recommends. Both `Win32` configurations are gone in full — their
+> `ProjectConfiguration` entries, their `Label="Configuration"` property groups, their property-sheet
+> imports and their item-definition groups — leaving `CPU.vcxproj` offering `Debug|x64` and `Release|x64`
+> only.
+>
+> `CPU_build.h`, which all four kernel units and `CPU.h` include, additionally `#error`s when it is
+> compiled for anything but x64, so the configurations cannot be reintroduced by accident and the sources
+> cannot be driven from another build system on x86 either. That closes the J2 half of this entry
+> structurally rather than by leaving it to the project file.
+>
+> The `Win32Proj` keyword in the globals property group is unrelated to the platform — it identifies the
+> project *type*, and is what Visual Studio emits for an x64 console application — so it stays.
 
 `Debug|Win32` and `Release|Win32` (`CPU.vcxproj:85–112`) lack `LanguageStandard`, `IncludePath`, `TargetName`,
 `EnableEnhancedInstructionSet` and every per-file override. Selecting either in the IDE produces a cascade of
@@ -2077,7 +2137,19 @@ conventions are live in one tree.
 
 ## J. Job kernels
 
-### J1. The right-shift arm of every ALU chain is dead code — **High**
+### J1. The right-shift arm of every ALU chain is dead code — **High** — *Fixed*
+
+> **Fixed** with the predicate `i < 8`, so the shift reverses direction halfway through the loop and both
+> arms execute. Every ALU variant in all four `CPU_jobs_*.cpp` files is affected. This changes every golden
+> value, so `cpu.values` must be regenerated — which the header's `KernelFingerprint` now enforces rather
+> than trusts: a file left over from the old kernels is rejected with `-21`.
+>
+> Verified behaviourally rather than by reading the source. The kernels were compiled off-target and their
+> output compared against two reference models of the chain, one carrying the intended `i < 8` bound and
+> one the old `i < 32`. `JobALU` and `JobMemALU` match the first on 500 of 500 seeds and the second on 0 of
+> 500, which is the evidence that the right-shift arm now executes. Reading the disassembly is *not*
+> sufficient here: unsigned division by a constant lowers to a multiply-high and a `shr`, and signed
+> division to a `sar`, so both spellings show shift instructions whichever arm is live.
 
 Every ALU kernel contains, inside `for(ui8 i = 0; i < 16; ++i)`:
 
@@ -2096,7 +2168,22 @@ y = ((i < 32 ? y << 1 : y >> 1) ^ -1) / 7 - 294939;
 * **Fix:** decide the intended predicate (e.g. `i < 8`) and regenerate `cpu.values` — this changes every golden
   value, so do it together with J2.
 
-### J2. The ALU chains' determinism rests on C++20 semantics that one configuration does not request — **Medium**
+### J2. The ALU chains' determinism rests on C++20 semantics that one configuration does not request — **Medium** — *Fixed*
+
+> **Fixed** as this entry asks: the chain arithmetic is performed in `ui64` and reinterpreted only for
+> output. Each kernel binds an alias over the value it was handed — `ui64 &v = (ui64&)x;` in the register
+> variants, `ui64ptrc v = (ui64ptrc)x;` in the memory ones — so the multiply, both shifts, the XOR and the
+> closing subtraction are modular by definition rather than by language mode. Aliasing is what the memory
+> variants need: re-typing the arena in place keeps every operand a load and a store, where copying the
+> records into locals would have quietly removed the memory traffic those kernels exist to generate.
+> Accessing a `si64` object through a `ui64` lvalue is permitted — they are the signed and unsigned
+> variants of one type — so the alias is not a strict-aliasing violation.
+>
+> The XOR operand becomes `~0ull` with the type change; it is the same bit pattern `-1` was.
+> `LanguageStandard` stays `stdcpplatest` on both surviving configurations, but nothing in the ALU chain
+> now depends on it, and the `Win32` configurations that did not set it are gone (H7). The signed
+> right-shift the entry does not mention — also implementation-defined before C++20 — is a logical shift
+> now that the value is unsigned, and J1 made that arm reachable for the first time.
 
 `x` and `y` are `si64`, and the chains rely on wraparound behaviour throughout:
 
@@ -2154,7 +2241,53 @@ sources shows they *are* consistent today: the four ALU constant groups `789/13+
 every variant, and the trailing post-loop multiply matches). Nothing enforces that, and B5 shows `W` does not
 check it either. A single shared macro or template would remove the class of defect entirely.
 
-### J7. The floating-point kernels absorb most single-ULP transient faults — **Medium**
+### J7. The floating-point kernels absorb most single-ULP transient faults — **Medium** — *Fixed*
+
+> **Fixed** by the mechanism this entry proposes — every intermediate folded into a running accumulator —
+> after re-measuring the chain to find out where the sensitivity is actually lost.
+>
+> It is not lost gradually. It is lost at the *first* rounding after the fault. Each step opens with
+> `sqrt(sqrt(x / c))`, and the fourth root divides a relative perturbation by four, so a one-ULP fault is
+> quantised away before anything downstream can act on it. Everything after that root is strongly
+> *expansive*: the `1.0 - t` cancellation gives the settled orbit a measured relative gain of about 5.7 per
+> four lines, and a perturbation that survives the first root is never absorbed afterwards — it grows
+> monotonically to the end of the run. So the 4-in-5 absorption is one rounding, not a slow decay, and no
+> amount of downstream amplification can recover it.
+>
+> The accumulator therefore has to reach the result without passing through a root. `acc` starts at 1.0,
+> takes `acc = (acc + x) / (|acc - x| + 0.01)` after every step, and is folded into the value once, at the
+> end, with `x *= acc`. Its own shape is expansive rather than contracting — the `|acc - x|` cancellation
+> is the same amplifier the value chain already relies on — so a perturbation entering it grows instead of
+> decaying, and it issues no instruction class the kernels did not already use (add, subtract, abs,
+> divide). It is applied identically in all eighteen kernels, and the memory variants carry one accumulator
+> per record.
+>
+> Re-measured with this entry's own experiment — one bit flipped at each of the 256 chain steps, over many
+> seeds of the form `W` generates:
+>
+> | Kernel | Flipped bit | Before | After |
+> |--------|-------------|-------:|------:|
+> | FPU | mantissa LSB (1 ULP) | 21.2 % | **61.8 %** |
+> | FPU | mantissa bit 1 | 41.1 % | **79.4 %** |
+> | FPU | mid mantissa (bit 26) | 100 % | 100 % |
+> | FPU | mantissa MSB (bit 51) | 100 % | 100 % |
+> | FPU | exponent (bit 62) | 100 % | 100 % |
+>
+> The 21.2 % baseline is this entry's 18.9 %, re-measured over a different seed set. The remaining 38 % is
+> not reachable while the nested root stays: the perturbation has to survive one gain-¼ rounding before any
+> accumulator can see it, and eight other accumulator shapes — reciprocal, multiplicative, ratio-coupled,
+> cascaded — measured between 21 % and 39 %. Removing the root would buy the rest at the cost of the
+> latency-bound property this entry warns against trading away.
+>
+> Numerical safety decided the constant. Over 5,000,000 seeds `acc` stays within `2^0 … 2^10.8` and the
+> result within `2^-1.9 … 2^17.1`, roughly 60x clear of the double exponent range, and no seed yields a
+> zero, an infinity or a NaN — any of which the AVX-512 path's floating-point comparison (**A11**) would
+> mishandle. Detection is flat at 58–62 % for guard terms from `1e-5` to `1e-1`, so the choice is not
+> perched on a tuned value; `0.01` gives the tightest magnitude bound of those.
+>
+> The SSE, AVX2 and AVX-512 kernels still reproduce the scalar `JobFPU` chain element-wise, bit for bit, so
+> a `cpu.values` written on one vector width remains valid on another. This changes every golden value:
+> regenerate with `W`.
 
 Each FP step is `x = sqrt(k) / (abs(1.0 - sqrt(sqrt(x / c))) + e)` (`CPU_jobs_standard.cpp:34–37`, and the
 same arithmetic in the SSE, AVX2 and AVX-512 units). The nested `sqrt(sqrt(...))` is a fourth root, whose

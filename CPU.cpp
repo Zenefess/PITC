@@ -328,6 +328,13 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          case L'W': // Write new "cpu.values" file
             union { ui64 _64; ui32 _32[2]; } randNum;
 
+            // The values written below describe the five register-resident kernels only, so nothing in the
+            // file would ever contradict a JobMem* or JobALU_* kernel that had drifted away from its
+            // counterpart -- every memory-backed run would simply report the difference as a CPU fault.
+            // Prove the whole family agrees before generating anything (ISSUES.MD B5)
+            j = ValidateKernelFamilies();
+            if(j) { wprintf(wstrMessage[30], wstrKernelName[j]); return -22; }
+
             for(i = 0; i < MAX_THREADS; ++i) {
                for(j = 0; j < 15; ++j) {
                   rand_s(randNum._32); rand_s(&randNum._32[1]);

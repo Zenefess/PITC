@@ -10,6 +10,19 @@
 
 #include "typedefs.h"
 
+//--- Target architecture ---//
+// PITC is x64 only. The kernels use _mm_set1_epi64x and the 512-bit intrinsics, none of which exist on x86,
+// and the topology, affinity and arena code is written against 64-bit masks throughout. The Win32
+// configurations that used to sit in CPU.vcxproj carried none of the settings the x64 ones do -- no
+// LanguageStandard, no per-file ISA or optimisation overrides -- so selecting one produced a cascade of
+// errors and, had it linked, an executable named CPU.exe running arithmetic the golden values do not
+// describe. They are gone (ISSUES.MD H7); this rejects a build configured for x86 by any other route
+
+#if !defined(_M_X64) && !defined(_M_AMD64) && !defined(__x86_64__)
+   #error "PITC targets x64 only. See CPU.vcxproj and ISSUES.MD H7."
+#endif
+//--- Target architecture ---//
+
 //--- Floating-point model ---//
 // Every golden value in "cpu.values" is the output of a chain of divides and square roots, so the model the
 // kernels are compiled under is part of the definition of a correct result. /fp:fast reassociates, and
