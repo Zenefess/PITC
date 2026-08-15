@@ -72,7 +72,12 @@ al32 struct GLOBAL_CFG { // 112 bytes
    } sys;
    declare1d64z(ui64, coreMap, MAX_THREADS); // Bitmap of available virtual cores
    si64 tics        = 0;        // Global time limit
-   si64 allocMem[2] = { 0, 1 }; // Amount(s) of memory allocated for threads
+   // Both classes default to nothing requested. The second used to default to 1 byte, which is neither zero
+   // nor a usable size: 'Mn8' alone left it there, so the class-1 threads were given a 1-byte slice, divided
+   // down to zero records, and dropped onto the register code path with their arena pointers already written
+   // over their results (ISSUES.MD C9). A class that is given no memory now holds 0, which the per-class
+   // record check in wmain refuses with -18 instead of running a configuration nobody asked for
+   si64 allocMem[2] = { 0, 0 }; // Amount(s) of memory allocated for threads, per core class
    ui32 onTime      = 100;      // Computation duration (in ms)
    ui32 offTime     = 900;      // Sleep duration (in ms)
    ui32 delayTime   = 2000;     // Start-up delay duration (in ms)
@@ -140,10 +145,19 @@ al32 struct RESULTS_ARRAYS { // 96 bytes
    fl64x2ptr sse;
    fl64ptr   fpu;
    si64ptr   alu;
-   ptr       p;    // Master pointer
-   si64ptr   iter; // Total iterations performed per thread
-   ui64 blockSize[2] = { 0, 1 }; // Memory per thread, per core class
+   // The two owned allocations, and the only two members the destructor below frees; they are initialised
+   // here rather than relying on the static zero-initialisation resArray happens to receive
+   ptr       p    = 0; // Master pointer
+   si64ptr   iter = 0; // Total iterations performed per thread
+   ui64 blockSize[2] = { 0, 0 }; // Memory per thread, per core class
    ui64 records[2]   = { 0, 0 }; // Memory records per thread, per core class
+
+   // The arena and the benchmark's iteration counters are the program's two run-length allocations, and
+   // neither had a matching free (ISSUES.MD C13); GCS rule p2 requires one for every aligned allocation.
+   // wmain leaves by more than a dozen returns, so the frees belong to the object that owns the pointers --
+   // the same reason GLOBAL_CFG's destructor owns its bitmaps. mdealloc ignores a null pointer, so a run
+   // that allocated neither is as safe as one that allocated both
+   ~RESULTS_ARRAYS(void) { mfree(p, iter); }
 };
 
 // Global variables
@@ -155,6 +169,13 @@ al64 CLASS_TIMER timer;
      declare1d64z(vui64, threadBits, MAX_THREADS_WORDS);
      declare1d64z(wchar, wstrOut, 1024);
      RESULTS_ARRAYS resArray;
+     // Set by any GenerateValues thread whose self-check disagrees, and read by 'W' once every thread has
+     // joined. The failure used to be signalled by writing two sentinel values into value[2][0] and
+     // value[3][0], which whichever thread owns entry 0 then overwrote wholesale with its own results -- so a
+     // real computational error was discarded and "cpu.values" written as though the run had passed
+     // (ISSUES.MD B7). A flag of its own cannot be overwritten by anybody's results, and the interlocked
+     // write orders it ahead of the completion bit the reader is waiting on
+     vsi8 generateError = 0;
 
 #include "translations.h"
 
@@ -1092,6 +1113,12 @@ static inline cui8 Evaluate(csi16 thread, csi8 unit) {
    return 0;
 }
 
+// Number of times every generated entry is re-derived and compared before "cpu.values" may be written. The
+// help text and README have always promised this figure; the loop below ran one short of it, and ran it for
+// only the first entry of each thread's range (ISSUES.MD B4, B8). It does not fit a ui16 -- a counter of that
+// width can never reach it, and the comparison would never end -- so the counter is a ui32
+constexpr cui32 VALUES_SELF_CHECK_ITERATIONS = 65536;
+
 // Generates output values. __stdcall and ui32-returning to match _beginthreadex's start-address signature
 static ui32 __stdcall GenerateValues(ptr dataPtr) {
    RESULTS         resultCopy;
@@ -1104,10 +1131,15 @@ static ui32 __stdcall GenerateValues(ptr dataPtr) {
    csi16 entryCount = si16(entries[0] + (threadNum == cfg.sys.vCoreCount - 1 ? entries[1] : 0));
    si16  coreNum    = si16(threadNum * entries[0]);
    csi16 range      = si16(coreNum + entryCount);
-   ui16  i          = 0;
    cui8  threadMask = ui8(~(1u << tcfg->threadBit)); // Clears this thread's completion bit, preserving the other 7
 
-   for(resultCopy = value[2][coreNum]; coreNum < range; ++coreNum) {
+   for(; coreNum < range; ++coreNum) {
+      // Declared here, one per entry: as a variable of the whole function it was never reset, so every entry
+      // after the first in this thread's range met a counter already at its limit, skipped the self-check
+      // entirely, and was written to "cpu.values" unverified. Across a dozen threads that left about 2% of
+      // the table checked, in place of the whole of it (ISSUES.MD B4)
+      ui32 i = 0;
+
       value[2][coreNum] = value[3][coreNum];
 
       RunGoldenLadder(value[3][coreNum]);
@@ -1115,14 +1147,17 @@ static ui32 __stdcall GenerateValues(ptr dataPtr) {
       // Test computatational integrity. The self-check has to walk the same ladder as the generation above,
       // lane for lane, or it grades every entry against a different function; one shared ladder is what
       // makes that structural rather than a pair of blocks that have to be kept identical by hand
-      for(resultCopy = value[2][coreNum]; i < 65535; ++i) {
+      for(resultCopy = value[2][coreNum]; i < VALUES_SELF_CHECK_ITERATIONS; ++i) {
          RunGoldenLadder(value[2][coreNum]);
 
          if(Evaluate(coreNum, -1) == 1) {
-            //if(!coreNum) {
-            value[3][0].raw[0] = 0x05555555555555555;
-            value[2][0].raw[0] = 0x0AAAAAAAAAAAAAAAA;
-            //}
+            // Recorded in a flag of its own, interlocked so that it is ordered ahead of the completion bit
+            // this thread clears below. The two sentinel values that used to stand in for it were written
+            // into value[2][0] and value[3][0] -- storage that belongs to entry 0, and that whichever thread
+            // owns entry 0 overwrites wholesale on its way past. A computational error detected before that
+            // thread got there was erased by it, and 'W' then wrote the file and reported success on a run
+            // that had already failed (ISSUES.MD B7)
+            _InterlockedOr8((vchptr)&generateError, 1);
             break;
          }
 

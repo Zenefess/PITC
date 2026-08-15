@@ -56,6 +56,9 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          case L'b': // Run benchmark: All virtual cores, constant computation, ALU + largest vector unit, L3 cache, 8MB memory per virtual core, for 60 seconds
          case L'B':
             if(argv[i][1] && argv[i][1] != L' ') { wprintf(wstrMessage[37], argv[i]); return -25; }
+            // 'B' may be given twice on one command line, and each occurrence allocated a fresh block over
+            // the pointer to the last one, leaking it; mdealloc ignores the null of the first (ISSUES.MD C13)
+            mfree1(resArray.iter);
             resArray.iter = zalloc1d64(si64, cfg.sys.vCoreCount);
             cfg.tics        = timer.siFrequency * 60;
             cfg.SMTLoad     = 3;
@@ -385,8 +388,12 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             }
             while(ThreadsRunning()) Sleep(100);
 
-            // Test for computational error
-            if(value[3][0].raw[0] == 0x05555555555555555 && value[2][0].raw[0] == 0x0AAAAAAAAAAAAAAAA) {
+            // Test for computational error. Read from a flag of its own rather than from the two sentinel
+            // values that used to be written into entry 0's results, which the thread that owns entry 0
+            // overwrote with its own output -- discarding the error and writing the file regardless
+            // (ISSUES.MD B7). Every thread has cleared its completion bit by here, and each of them set the
+            // flag with an interlocked write before doing so, so a set flag cannot still be in flight
+            if(generateError) {
                wprintf(wstrMessage[5]);
                return -4;
             }
@@ -647,7 +654,11 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       cfg.allocMem[0] = resArray.blockSize[0] * threadCount[0] + (resArray.blockSize[1] * threadCount[1]);
    }
 
-   if(resArray.blockSize[0]) {
+   // Either class having been given a size is a memory-backed run. Testing the first alone meant 'Ms8', which
+   // names the second class, allocated nothing at all: the banner reported the memory it had asked for while
+   // every thread ran the register-resident kernels (ISSUES.MD C9). A class that has threads but no memory is
+   // caught by the per-class record check below, which is where a request of nothing belongs
+   if(resArray.blockSize[0] || resArray.blockSize[1]) {
       MEMORYSTATUSEX memStatus = { ui32(sizeof(MEMORYSTATUSEX)) };
       cbool memStatusValid     = GlobalMemoryStatusEx(&memStatus) ? true : false;
       ui64  os, bos, recSize, vecUnits;
@@ -674,15 +685,24 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       }
 
       // Every JobCycleMem* call processes 4 records and the cursor in ComputationPulse advances in steps of
-      // 4, so a count that is not a multiple of 4 is walked up to 3 records past the end of the slice
-      resArray.records[0] = (resArray.blockSize[0] / recSize) & ~0x03ull;
-      resArray.records[1] = (resArray.blockSize[1] / recSize) & ~0x03ull;
+      // 4, so a count that is not a multiple of 4 is walked up to 3 records past the end of the slice.
+      // The count is rounded to a multiple of 8 rather than 4 so that every slice begins on a cache line
+      // (ISSUES.MD C12): a thread's base in each sub-array is its record offset scaled by that sub-array's
+      // element size, and the ALU sub-array's is the smallest at 8 bytes, so 8 records is what makes both
+      // offsets a whole number of 64-byte lines for every unit combination the switch above lists. It also
+      // lands the ALU sub-array itself on a line, its base being the vector records of every thread scaled
+      // by 8 bytes or more. Without it adjacent threads share the line at each boundary, and the false
+      // sharing is measured as the cache behaviour this mode exists to exercise
+      resArray.records[0] = (resArray.blockSize[0] / recSize) & ~0x07ull;
+      resArray.records[1] = (resArray.blockSize[1] / recSize) & ~0x07ull;
 
       // A slice too small for a single call cannot be processed at all: a count of 0 also drops the thread
-      // onto the register code path, with value[1][k].p0~p4 already overwritten with arena pointers
+      // onto the register code path, with value[1][k].p0~p4 already overwritten with arena pointers. It is
+      // also where a class given no memory at all arrives -- 'Mn8' names the first class and leaves the
+      // second holding nothing (ISSUES.MD C9)
       for(m = 0; m < 2; ++m)
          if(threadCount[m] && !resArray.records[m]) {
-            wprintf(wstrMessage[20], si64(resArray.blockSize[m]), si64(recSize << 2));
+            wprintf(wstrMessage[20], si64(resArray.blockSize[m]), si64(recSize << 3));
             return -18;
          }
 
@@ -753,7 +773,8 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    // cfg.allocMem[0] is the whole of the allocation in every memory configuration: the switch above leaves it
    // holding the total, and allocMem[1] is a per-thread size that has already been counted into it. Adding
    // the two reported 'Mn8 Ms4' as the true total plus 4MB, and stayed invisible in the other two
-   // configurations only because allocMem[1]'s default of 1 byte vanishes under the shift (ISSUES.MD F8)
+   // configurations only because allocMem[1] then defaulted to a single byte, which vanished under the
+   // shift (ISSUES.MD F8; that default is 0 since C9)
    c += swprintf(&wstrOutput[c], wstrInterface[1], cfg.allocMem[0] >> 20, cfg.delayTime);
    if(cfg.procSync & 0x060) c += swprintf(&wstrOutput[c], wstrInterface[cfg.procSync & 0x020 ? 2 : 3], cfg.onTime);
    c += swprintf(&wstrOutput[c], wstrInterface[4]);
