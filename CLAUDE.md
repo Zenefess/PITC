@@ -51,11 +51,13 @@ thread reports `!Fail!`. `W` self-validates by re-running the kernels 65,535 tim
 file on any mismatch.
 
 Exit codes are meaningful and documented in `en-GB.h` (`wstrInstructions_English`): negative = error,
-`0` = stability test completed, `1` = values file written, `2` = instructions displayed. `-11` … `-16` are the
+`0` = stability test completed, `1` = values file written, `2` = instructions displayed. `-11` … `-18` are the
 pre-flight rejections in `wmain` — an unsupported vector unit, more than one `S` pulse shape, a test duration
-of zero or less, a zero pulse on-time, an `I` string naming no processing unit, and an `I` string naming more
-than one of FPU/SSE4.1/AVX2/AVX-512. Add a code and the table in `wstrInstructions_English` and the message in
-`wstrMessage_*` have to grow with it.
+of zero or less, a zero pulse on-time, an `I` string naming no processing unit, an `I` string naming more
+than one of FPU/SSE4.1/AVX2/AVX-512, a memory request the machine cannot satisfy (`-17`, shared by the
+pre-flight size check and a failed `malloc64`), and a per-thread slice too small to hold one call's four
+records (`-18`). Add a code and the table in `wstrInstructions_English` and the message in `wstrMessage_*`
+have to grow with it.
 
 ## Architecture
 
@@ -174,12 +176,30 @@ Requesting memory (`M`, or any preset) switches every thread from register-resid
 working over a RAM arena — this is what exercises load/store units and the cache hierarchy.
 
 `wmain` allocates one 64-byte-aligned block (`malloc64`) for the whole run and hands each thread a slice via
-`value[1][k].p0..p4`. The `switch(cfg.procUnits & 0x01F)` that computes `resArray.records[]` is the arena
-layout: the divisor is the per-record byte cost of the selected units (8 for ALU-only, 40 for ALU+AVX2, 72 for
-ALU+AVX-512, …), and for the `ALU_` combinations the ALU sub-array is placed *after* the vector sub-array by
-advancing `resArray.alu`. Change the unit set or the record size and this switch must change with it, and keep
-its `default:` arm: without one, an index with no case leaves `records[]` holding the *byte* count assigned
-just above the switch, and each thread then walks eight times its slice (ISSUES.MD A10).
+`value[1][k].p0..p4`. The `switch(cfg.procUnits & 0x01F)` is the arena layout. It yields two numbers:
+`recSize`, the per-record byte cost of the selected units (8 for ALU-only, 40 for ALU+AVX2, 72 for
+ALU+AVX-512, …), and `vecUnits`, the same record's *vector* portion counted in the 8-byte units
+`resArray.alu` is indexed by. Whenever the ALU bit is set the two satisfy `recSize == (vecUnits + 1) * 8`,
+and that identity is what makes the ALU sub-array — placed *after* the vector sub-array by advancing
+`resArray.alu` by `vecRecords * vecUnits` — tile the block exactly. The multiplier applies to the record
+count of **both** thread classes: applying it to the SMT term alone dropped the ALU base inside the vector
+sub-array on any topology with non-SMT threads (ISSUES.MD C2). Change the unit set or the record size and
+this switch must change with it, and keep its `default:` arm — without one an index with no case leaves
+`recSize` uninitialised (ISSUES.MD A10).
+
+Three rules follow the switch and must survive any edit to it:
+
+- **Record counts are rounded down to a multiple of 4** (`& ~0x03ull`). Every `JobCycleMem*` call processes
+  records `offset … offset+3` and the cursor in `ComputationPulse` steps by 4, so an odd count is walked up
+  to three records past the end of the slice (ISSUES.MD C4).
+- **A count of 0 is rejected** with `-18` rather than run. Zero records also drops the thread onto the
+  *register* code path (`JobCycle[recCount ? 1 : 0]`) with `p0`–`p4` already overwritten by arena pointers.
+- **`bos`, the running per-thread record offset, counts across both thread classes.** It is initialised once,
+  outside the `m` loop; restarting it at the first SMT thread handed every SMT thread a slice a non-SMT
+  thread already owned (ISSUES.MD C3).
+
+The size of the request is checked against `GlobalMemoryStatusEx` and the result of `malloc64` against null,
+both `-17`: every pointer handed to a thread is derived from that one allocation (ISSUES.MD C5).
 
 Of the five pointers handed to each thread, `p0`–`p3` are four views of the *same* arena address at different
 element strides (only `p4` is advanced past them, and only for the `ALU_` combinations). The seeding loop must
@@ -263,11 +283,15 @@ manual. The rules that bite most often when editing here:
 ## Localisation
 
 `translations.h` selects a language by pointing three globals at one header's string tables; `en-GB.h` is the
-only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[18]`
+only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[23]`
 and `wstrInterface_*[13]`, then extending both `translations.h` and the `L` case in `CPU.cpp`.
 
 Note the `L` option's selection logic is inverted (`if(lstrcmpiW(...))` is truthy when the codes *differ*), so
-every input currently resolves to English. Fix that when adding a second language. Some strings are still
+every input currently resolves to English. Fix that when adding a second language. The code itself is copied
+into `wstrLang[6]`, and the copy is clamped to that capacity — `lstrcpynW`'s third argument is the size of the
+*destination*, so passing the argument's length overran the globals that follow it (ISSUES.MD C6). A longer
+code is therefore truncated to five characters; widen `wstrLang` if a language ever needs more. Some strings
+are still
 hard-coded outside the tables — `wstrUnitsCPU`, `wstrSyncCPU` and `wstrPass` in `CPU.h` (the last is flagged
 `///--- Modify for translation ---///`).
 

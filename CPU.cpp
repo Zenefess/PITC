@@ -138,7 +138,9 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          case L'l': // Set language
          case L'L':
             for(c = 1; argv[i][c] && argv[i][c] != L' ' && c < 1024; ++c);
-            lstrcpynW(wstrLang, &argv[i][1], c);
+            // lstrcpynW's third argument is the capacity of the destination, not the length of the source:
+            // an argument longer than wstrLang would otherwise be copied over the globals that follow it
+            lstrcpynW(wstrLang, &argv[i][1], min(c, si32(_countof(wstrLang))));
             if(lstrcmpiW(wstrLang, L"en-US")) {
                wstrInstructions = wstrInstructions_English;
                wstrMessage      = wstrMessage_English;
@@ -529,51 +531,68 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    }
 
    if(resArray.blockSize[0]) {
-      ui64 os, bos;
-      ui8  l, m;
+      MEMORYSTATUSEX memStatus = { ui32(sizeof(MEMORYSTATUSEX)) };
+      cbool memStatusValid     = GlobalMemoryStatusEx(&memStatus) ? true : false;
+      ui64  os, bos, recSize, vecUnits;
+      ui8   l, m;
 
-      resArray.records[0] = resArray.blockSize[0]; resArray.records[1] = resArray.blockSize[1];
+      // Bytes per record for the selected unit set, and the size of a record's vector portion in the 8-byte
+      // units resArray.alu is indexed by; the two always satisfy recSize == (vecUnits + 1) * 8 whenever the
+      // ALU bit is set, which is what makes the two sub-arrays tile the arena exactly. 'default' catches a
+      // unit selection with no processing bit set: wmain rejects that before reaching here, so the arm is
+      // unreachable, but without it recSize would be read uninitialised. Change the unit set or a record's
+      // layout and this switch must change with it
+      switch(cfg.procUnits & 0x01F) {
+      default: case 1: case 2:                                                 recSize =  8; vecUnits = 0; break;
+      case 3:                                                                  recSize = 16; vecUnits = 1; break;
+      case 4: case 6:                                                          recSize = 16; vecUnits = 0; break;
+      case 5: case 7:                                                          recSize = 24; vecUnits = 2; break;
+      case 8: case 10: case 12: case 14:                                       recSize = 32; vecUnits = 0; break;
+      case 9: case 11: case 13: case 15:                                       recSize = 40; vecUnits = 4; break;
+      case 16: case 18: case 20: case 22: case 24: case 26: case 28: case 30:  recSize = 64; vecUnits = 0; break;
+      case 17: case 19: case 21: case 23: case 25: case 27: case 29: case 31:  recSize = 72; vecUnits = 8;
+      }
+
+      // Every JobCycleMem* call processes 4 records and the cursor in ComputationPulse advances in steps of
+      // 4, so a count that is not a multiple of 4 is walked up to 3 records past the end of the slice
+      resArray.records[0] = (resArray.blockSize[0] / recSize) & ~0x03ull;
+      resArray.records[1] = (resArray.blockSize[1] / recSize) & ~0x03ull;
+
+      // A slice too small for a single call cannot be processed at all: a count of 0 also drops the thread
+      // onto the register code path, with value[1][k].p0~p4 already overwritten with arena pointers
+      for(m = 0; m < 2; ++m)
+         if(threadCount[m] && !resArray.records[m]) {
+            wprintf(wstrMessage[20], si64(resArray.blockSize[m]), si64(recSize << 2));
+            return -18;
+         }
+
+      // Every pointer handed to a thread below is derived from this one allocation, so a request the machine
+      // cannot supply, or a failure to satisfy one it can, would be a null-pointer write in each of them
+      if(cfg.allocMem[0] <= 0 || (memStatusValid && cui64(cfg.allocMem[0]) > memStatus.ullAvailPhys)) {
+         wprintf(wstrMessage[21], cfg.allocMem[0] >> 20, si64(memStatus.ullAvailPhys >> 20));
+         return -17;
+      }
 
       resArray.avx = (fl64x4ptrc)(resArray.avx512 = (fl64x8ptrc)(resArray.p = malloc64(cfg.allocMem[0])));
       resArray.alu = (si64ptrc)(resArray.fpu = (fl64ptrc)(resArray.sse = (fl64x2ptrc)resArray.avx));
-      // 'default' catches a unit selection with no processing bit set. wmain rejects that before reaching
-      // here, so the arm is unreachable; it divides by 8 because index 0 dispatches to JobCycleMemALU, which
-      // walks 8-byte records. Without it, records[] would keep the block size in bytes assigned above
-      switch(cfg.procUnits & 0x01F) {
-      default: case 1: case 2:
-         resArray.records[0] /= 8; resArray.records[1] /= 8;
-         break;
-      case 3:
-         resArray.records[0] /= 16; resArray.records[1] /= 16;
-         resArray.alu = (si64ptrc)resArray.p + (resArray.records[0] * threadCount[0] + resArray.records[1] * threadCount[1]);
-         break;
-      case 4: case 6:
-         resArray.records[0] /= 16; resArray.records[1] /= 16;
-         break;
-      case 5: case 7:
-         resArray.records[0] /= 24; resArray.records[1] /= 24;
-         resArray.alu = (si64ptrc)resArray.p + (resArray.records[0] * threadCount[0] + resArray.records[1] * threadCount[1] * 2);
-         break;
-      case 8: case 10: case 12: case 14:
-         resArray.records[0] /= 32; resArray.records[1] /= 32;
-         break;
-      case 9: case 11: case 13: case 15:
-         resArray.records[0] /= 40; resArray.records[1] /= 40;
-         resArray.alu = (si64ptrc)resArray.p + (resArray.records[0] * threadCount[0] + resArray.records[1] * threadCount[1] * 4);
-         break;
-      case 16: case 18: case 20: case 22: case 24: case 26: case 28: case 30:
-         resArray.records[0] /= 64; resArray.records[1] /= 64;
-         break;
-      case 17: case 19: case 21: case 23: case 25: case 27: case 29: case 31:
-         resArray.records[0] /= 72; resArray.records[1] /= 72;
-         resArray.alu = (si64ptrc)resArray.p + (resArray.records[0] * threadCount[0] + resArray.records[1] * threadCount[1] * 8);
+      if(!resArray.p) {
+         wprintf(wstrMessage[22], cfg.allocMem[0] >> 20);
+         return -17;
       }
+
+      // The ALU sub-array is placed after the vector sub-array, so its base advances past the vector records
+      // of every thread of both classes; the element-size multiplier applies to that whole count
+      cui64 vecRecords = resArray.records[0] * ui64(threadCount[0]) + resArray.records[1] * ui64(threadCount[1]);
+
+      if(vecUnits) resArray.alu = (si64ptrc)resArray.p + vecRecords * vecUnits;
 
       // resArray.avx512, .avx, .sse and .fpu are four views of one address with different element strides, so
       // seeding two of them would leave each overwriting the other's records. wmain has already rejected any
-      // selection naming more than one of FPU/SSE4.1/AVX2/AVX-512, so at most one of p0~p3 is written below
-      for(k = 0, m = 0; m < 2; ++m)
-         for(l = 0, bos = 0; l < threadCount[m]; ++k, ++l, bos += resArray.records[m]) {
+      // selection naming more than one of FPU/SSE4.1/AVX2/AVX-512, so at most one of p0~p3 is written below.
+      // bos is the running record offset into the arena: it counts across both thread classes, because
+      // restarting it at the first SMT thread would hand every SMT thread a slice a non-SMT thread already has
+      for(k = 0, m = 0, bos = 0; m < 2; ++m)
+         for(l = 0; l < threadCount[m]; ++k, ++l, bos += resArray.records[m]) {
             value[1][k].p0 = &resArray.avx512[bos];
             value[1][k].p1 = &resArray.avx[bos];
             value[1][k].p2 = &resArray.sse[bos];

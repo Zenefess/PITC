@@ -27,7 +27,9 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n-13 : Test duration of zero or less requested"
  "\n-14 : Pulse on-time of zero requested"
  "\n-15 : No processing unit requested"
- "\n-16 : More than one non-ALU processing unit requested\n"
+ "\n-16 : More than one non-ALU processing unit requested"
+ "\n-17 : Unable to allocate the requested amount of memory"
+ "\n-18 : Insufficient memory per thread for the requested processing unit(s)\n"
  "\nCommand-line options   ---   Example: pitc.exe I3x Mc8 Spt Tcd8.0t3600 Ua"
  "\n--------------------"
  "\n B  : Run the benchmark. Options after 'B' override defaults; eg. pitc.exe B Iaf mt1024 !!! CACHE USE NOT YET IMPLEMENTED !!!"
@@ -67,7 +69,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      9==Staggered fixed-width pulsed stress on all virtual cores. 4 hour duration"
  "\n      0==Synchronised fixed-width pulsed stress on all virtual cores, using ALU & SSE code-paths with 2MB memory per core. 1 hour duration\n\n";
 
-cwchptrc wstrMessage_English[20] = {
+cwchptrc wstrMessage_English[23] = {
    L"\nSuccessfully wrote results to \"%s\" file.\n\n",
    L"\n\nNew \"cpu.values\" file generated.\n\n",
    L"\n\n\"cpu.values\" file not found. Generate via 'W' command-line option.\n\n",
@@ -87,7 +89,10 @@ cwchptrc wstrMessage_English[20] = {
    L"\nTest duration must be greater than zero.\n",
    L"\nPulse on-time must be greater than zero.\n",
    L"\nAt least one processing unit must be selected via the 'I' option; eg. Ia\n",
-   L"\nOnly one of the 'I' options F, S, V and X can be active; they are mutually exclusive.\n"
+   L"\nOnly one of the 'I' options F, S, V and X can be active; they are mutually exclusive.\n",
+   L"\nOnly %lld bytes of memory per thread; the requested processing unit(s) require at least %lld.\n",
+   L"\nRequested %lldMB of memory, but only %lldMB is available.\n",
+   L"\nUnable to allocate %lldMB of memory.\n"
 };
 
 cwchptrc wstrInterface_English[13] = {
