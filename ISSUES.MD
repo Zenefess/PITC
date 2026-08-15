@@ -2393,15 +2393,13 @@ verified by execution rather than by reading.
    together they are the reason a green PITC run currently cannot be trusted.~~ **Done.** The three
    configuration faults are refused before any thread is created, and a `T` argument no longer discards the
    requested timing mode.
-3. ~~**B1, B2, B3** — make `W` produce a complete, correct `cpu.values` on every topology and every ISA level.~~
-   **Done.**
+3. ~~**B1, B2, B3** — make `W` produce a complete, correct `cpu.values` on every topology and every ISA level.~~ **Done.**
 4. ~~**A9, A10, C1** — reject or handle every `procUnits` combination the parser can produce.~~ **Done.**
-5. ~~**E1, E2** — fix the sweep-mode hang and raise the timer resolution, so pulse timing means what it says.~~
-   **Done.**
+5. ~~**E1, E2** — fix the sweep-mode hang and raise the timer resolution, so pulse timing means what it says.~~ **Done.**
 6. ~~**C2, C3, C4, C5, C6** — the memory-safety set.~~ **Done.**
 7. ~~**A7, D1, D2, D3, D5** — the concurrency set; A7 corrupts the report exactly when it matters most.~~ **Done.**
-8. **H1, H2, B6** — pin the floating-point model, stop the Debug/Release divergence, and version the
-   `cpu.values` format so a toolchain change can never be mistaken for a hardware fault.
+8. ~~**H1, H2, B6** — pin the floating-point model, stop the Debug/Release divergence, and version the
+   `cpu.values` format so a toolchain change can never be mistaken for a hardware fault. **Done.**
 9. **J1, J2, J7, B5** — decide the intended ALU shift behaviour, move the chains to unsigned arithmetic,
    consider whether the FP kernels' 1-ULP blindness is acceptable, and
    extend `W` to validate the `JobMem*` and `JobALU_*` kernels; regenerate golden values once, together.
