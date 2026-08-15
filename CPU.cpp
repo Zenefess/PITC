@@ -128,13 +128,15 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                   cfg.allocMem[0] = si64(wcstol(&argv[i][j + 1], &stopChar, 10)) << 20;
                   j += ui8(stopChar - &argv[i][j] - 1);
                   break;
-               case L'n': // For each non-SMT core
+               // The two classes are the CPU's non-SMT and SMT cores, or its efficiency and performance
+               // cores where it is hybrid; CoreClass (CPU.h) decides which, and the letters cannot say
+               case L'n': // For each core of the first class
                case L'N':
                   cfg.memConfig   = 2;
                   cfg.allocMem[0] = si64(wcstol(&argv[i][j + 1], &stopChar, 10)) << 20;
                   j += ui8(stopChar - &argv[i][j] - 1);
                   break;
-               case L's': // For each SMT virtual core
+               case L's': // For each virtual core of the second class
                case L'S':
                   cfg.memConfig   = 2;
                   cfg.allocMem[1] = si64(wcstol(&argv[i][j + 1], &stopChar, 10)) << 20;
@@ -619,7 +621,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       // seeding two of them would leave each overwriting the other's records. wmain has already rejected any
       // selection naming more than one of FPU/SSE4.1/AVX2/AVX-512, so at most one of p0~p3 is written below.
       // bos is the running record offset into the arena: it counts across both thread classes, because
-      // restarting it at the first SMT thread would hand every SMT thread a slice a non-SMT thread already has
+      // restarting it at the first class-1 thread would hand each of them a slice a class-0 thread already has
       for(k = 0, m = 0, bos = 0; m < 2; ++m)
          for(l = 0; l < threadCount[m]; ++k, ++l, bos += resArray.records[m]) {
             value[1][k].p0 = &resArray.avx512[bos];
