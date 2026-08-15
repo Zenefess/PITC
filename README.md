@@ -18,7 +18,8 @@ Command-line options
       Recognises ISO 639-1 language codes; eg. Len-GB
  Mx : Set amount of memory to utilise during test. Values are in MebiBytes; eg. Mt128
  
-      C==Per virtual core, N==Per non-SMT core, S==Per SMT virtual core, T=Total split amongst all virtual cores
+      C==Per virtual core, N==Per first-class core, S==Per second-class virtual core, T=Total split amongst all virtual cores
+         The two core classes are the CPU's non-SMT and SMT cores; on a hybrid CPU they are its efficiency and performance cores
  Ox : Results file output options. A filename can be stacked with any of the remaining options; eg. O[results.txt]16
  
       []=Filename, A=Non-UTF ASCII, 8=UTF-8, 16=UTF-16
@@ -37,6 +38,7 @@ Command-line options
          Format for core utilisation map is: ','/'.'/'_'==Core disabled, Any other character==Core enabled
       A==Symmetric Multi-Threading; forces utilisation of every virtual core of each active physical core
       E==Only utilise the first virtual core of each active physical core, O==Only utilise the last virtual core of each active physical core
+         A physical core carrying a single virtual core is kept by both; on a hybrid CPU that is every efficiency core
  W  : Write new "cpu.values" file.
  
       File will only be created if the integrity of the results pass 65,536 iterations.

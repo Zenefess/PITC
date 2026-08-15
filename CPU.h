@@ -31,28 +31,44 @@ constexpr auto MAX_THREADS_WORDS = (MAX_THREADS_BYTES + 7) >> 3;
 // divide by 64. A group carrying fewer than 64 virtual cores makes them differ (ISSUES.MD G3)
 constexpr auto MAX_GROUPS = 64;
 
-al32 struct GLOBAL_CFG { // 104 bytes
+//--- Core classes ---//
+// Everything the program records about a core, and every choice it makes per core, is split two ways: two
+// core maps, two sibling bitmaps, two cache records, two physical core counts, two memory sizes ('Mn'/'Ms')
+// and two thread classes in the spawn loop. Class 1 is the wider core of the two, class 0 the narrower.
+//
+// What "wider" means depends on the machine, and until now the code assumed it always meant the same thing:
+// the class came from the core's own sibling count, so it read "non-SMT / SMT" and nothing said that on a
+// hybrid part it actually means "efficiency / performance" -- nor that the same part with SMT disabled in
+// firmware puts every core, P and E alike, into class 0, with one set of cache sizes standing in for both
+// (ISSUES.MD G9). The rule is now the OS's own EfficiencyClass wherever the machine reports more than one of
+// them, and the sibling count only for the machines that description fits; cfg.sys.hybrid says which applied
+
+al32 struct GLOBAL_CFG { // 112 bytes
    struct _C_D_ { ui32 L1Code, L1Data, L2; };
    struct {
       struct {
-         declare2d64z(ui64, coreMap, 2, MAX_THREADS); // Bitmaps of available virtual cores; 0=Non-SMT cores, 1=SMT cores
+         declare2d64z(ui64, coreMap, 2, MAX_THREADS); // Bitmaps of available virtual cores, per core class
          // One bit per physical core, taken from the sibling mask the enumeration reports for that core: its
          // lowest set bit, and its highest. A physical core without SMT sets the same bit in both maps, so
          // "one virtual core per physical core" keeps it either way. SetSMTLoading masks with one of these
          // rather than rebuilding the sibling layout from a core count and a stride, which is what excluded
          // every non-SMT core and shifted by 64 on a CPU reporting no SMT at all (ISSUES.MD G1, G2)
          declare2d64z(ui64, coreSibling, 2, MAX_THREADS); // Bitmaps of one virtual core per physical core; 0=First, 1=Last
-         _C_D_ cache[2];     // Sizes of L1 code & data and L2 caches; 0=Non-SMT cores, 1=SMT cores
+         _C_D_ cache[2];     // Sizes of L1 code & data and L2 caches, per core class
          ui32  cacheL3;      // Size of L3 cache per core complex
-         si16  coreCount[2]; // Number of physical cores: 0==Non-SMT, 1==SMT
+         si16  coreCount[2]; // Number of physical cores, per core class
       };
       si16 vCoreCount = 0;     // Total number of virtual processors
       ui8  groupCount = 0;     // Number of virtual processor groups
-      ui8  SMT        = 0;     // Number of virtual cores per physical core
+      // Virtual cores per physical core, of each core class. A machine's two classes need not share one SMT
+      // width -- a hybrid part's performance cores carry two virtual cores each and its efficiency cores one
+      // -- and a single maximum described neither of them (ISSUES.MD G9)
+      ui8  SMT[2]     = { 0, 0 };
+      bool hybrid     = false; // Classes are efficiency/performance cores rather than non-SMT/SMT cores
       bool cpuSSE4_1  = false; // CPU supports the SSE 1.0~4.1 instruction sets
       bool cpuAVX2    = false; // CPU supports the AVX 1.0~2.0 instruction sets
       bool cpuAVX512  = false; // CPU supports the AVX512F instruction set
-      ///--- 3 bytes unused
+      ///--- 7 bytes unused
    } sys;
    declare1d64z(ui64, coreMap, MAX_THREADS); // Bitmap of available virtual cores
    si64 tics        = 0;        // Global time limit
@@ -63,7 +79,7 @@ al32 struct GLOBAL_CFG { // 104 bytes
    ui8  procUnits   = 0x04;     // 0==ALU, 1==FPU, 2==SSE4.1, 3==AVX, 4==AVX512, 5==L1 cache, 6==L2 cache, 7==L3 cache
    ui8  procSync    = 0x02A;    // 0==Round-robin, 1==Parallel 2==Staggered, 3==Synchronised, 4==Constant, 5==Fixed pulse, 6==Sweeping pulse, 7==Benchmark
    ui8  SMTLoad     = 0;        // Only utilise the specified virtual core(s) of each active physical core; 0=Unchanged, 1=First, 2=Last, 3=All
-   ui8  memConfig   = 0;        // 0=Total equally split, 1=Per core, 2=non-SMT/SMT split
+   ui8  memConfig   = 0;        // 0=Total equally split, 1=Per core, 2=Split per core class
 
    ~GLOBAL_CFG(void) { mfree(coreMap, sys.coreMap, sys.coreSibling); }
 }; typedef GLOBAL_CFG *const GLOBAL_CFGptrc;
@@ -126,8 +142,8 @@ al32 struct RESULTS_ARRAYS { // 96 bytes
    si64ptr   alu;
    ptr       p;    // Master pointer
    si64ptr   iter; // Total iterations performed per thread
-   ui64 blockSize[2] = { 0, 1 }; // Memory per thread; Non-SMT, SMT
-   ui64 records[2]   = { 0, 0 }; // Memory records per thread; Non-SMT, SMT
+   ui64 blockSize[2] = { 0, 1 }; // Memory per thread, per core class
+   ui64 records[2]   = { 0, 0 }; // Memory records per thread, per core class
 };
 
 // Global variables
@@ -539,24 +555,176 @@ static inline cui64 HighestSetBit64(cui64 mask) {
 typedef       SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *const SLPIEXptrc;
 typedef const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *const cSLPIEXptrc;
 
+/// Running state of the topology walk, carried across its three passes
+struct TOPOLOGY_SCAN { // 12 bytes
+   si32 vCores  = 0;     // Virtual cores accepted into the maps
+   si32 dropped = 0;     // Virtual cores refused for want of a thread slot
+   ui8  effLow  = 0x0FF; // Lowest EfficiencyClass any processor core reported; 0x0FF if no core was seen
+   ui8  effHigh = 0;     // Highest EfficiencyClass any processor core reported
+   ///--- 2 bytes unused
+}; typedef TOPOLOGY_SCAN *const TOPOLOGY_SCANptrc;
+
+/// Files one physical core into one of the program's two core classes. The narrower class is 0 and the wider
+/// 1, and which property makes a core "wider" is the machine's to say: a conventional CPU is split by SMT
+/// width, a hybrid one by core design.
+///
+/// The sibling count alone, which is what this used to be, sorts an Intel P/E-core part correctly and names
+/// it wrongly -- the E-cores land in a class labelled "non-SMT" and the P-cores in one labelled "SMT", with
+/// two sets of cache sizes to match and nothing anywhere saying so. It also stops sorting it at all the
+/// moment SMT is disabled in firmware: every core then carries one virtual core, so an eight-P plus
+/// sixteen-E machine becomes one undifferentiated class of 24 (ISSUES.MD G9). EfficiencyClass is the OS's
+/// own answer to the same question, is 0 for every core of a machine that is not hybrid, and orders the
+/// classes the same way round -- 0 is the least performant -- so a machine reporting one class falls back to
+/// the sibling count, which is the property that describes it
+/// @param efficiency EfficiencyClass of the core, from its RelationProcessorCore record
+/// @param vCores Number of virtual cores the core carries
+/// @param topClass Highest EfficiencyClass the machine reported, from pass 0 of the walk
+/// @return 0 for the narrower class (non-SMT, or efficiency), 1 for the wider (SMT, or performance)
+static inline cui8 CoreClass(cui8 efficiency, csi32 vCores, cui8 topClass) {
+   // Three or more efficiency classes -- a performance, an efficiency and a low-power-efficiency tier, as
+   // Intel's Meteor Lake reports -- collapse onto the two this program has: the most performant tier is
+   // class 1 and everything below it class 0, which keeps "class 1 is the widest core the machine has" true
+   // whatever the tier count
+   if(cfg.sys.hybrid) return efficiency >= topClass ? 1 : 0;
+
+   return vCores > 1 ? 1 : 0;
+}
+
+/// One pass of the processor-topology walk.
+///
+/// Records are stepped by the Size each one carries rather than by a fixed stride, so the walk stops on
+/// anything it cannot step over: a Size of 0 would not advance, and a Size reaching past the buffer describes
+/// a record the API never wrote. Relationship and Size are the two fields every record opens with, so a tail
+/// too short to hold them cannot name a record at all.
+///
+/// The three passes are three walks over the one buffer because each needs the one before it complete, and
+/// GetLogicalProcessorInformationEx documents no order for the records it returns:
+///   0 - the range of EfficiencyClass values the machine reports. No single core can say whether the machine
+///       is hybrid, so every core record is read before any core is filed
+///   1 - the core maps, the sibling bitmaps, and the per-class core counts and SMT widths
+///   2 - the cache sizes, filed under the class of the cores each cache serves, which only the finished maps
+///       of pass 1 can answer
+/// @param buffer First byte of the GetLogicalProcessorInformationEx(RelationAll) buffer
+/// @param bytes Length of the buffer, in bytes
+/// @param pass Which pass to perform; 0=Efficiency classes, 1=Cores, 2=Caches
+/// @param scan Running state of the walk, updated by passes 0 and 1
+static void WalkTopology(cptrc buffer, cui32 bytes, cui8 pass, TOPOLOGY_SCANptrc scan) {
+   ui32 os = 0;
+
+   while(os + ui32(sizeof(LOGICAL_PROCESSOR_RELATIONSHIP) + sizeof(DWORD)) <= bytes) {
+      cSLPIEXptrc lpi = (cSLPIEXptrc)&((cchptr)buffer)[os];
+
+      if(!lpi->Size || os + lpi->Size > bytes) break;
+      os += lpi->Size;
+
+      switch(lpi->Relationship) {
+      case RelationProcessorCore: {
+         // A processor core never spans processor groups, so GroupCount is documented to be 1 for this
+         // relationship and GroupMask[0] is the whole of the core
+         cui64 coreMask   = lpi->Processor.GroupMask[0].Mask;
+         cui16 group      = lpi->Processor.GroupMask[0].Group;
+         cui8  efficiency = lpi->Processor.EfficiencyClass;
+         csi32 coreVCores = si32(PopulationCount64(coreMask));
+
+         if(!coreMask) break; // A core of no virtual cores
+
+         if(!pass) { // Pass 0 reads nothing but the class the OS assigns the core
+            if(scan->effLow  > efficiency) scan->effLow  = efficiency;
+            if(scan->effHigh < efficiency) scan->effHigh = efficiency;
+            break;
+         }
+         if(pass != 1 || group >= MAX_GROUPS) break; // A group the maps cannot address
+
+         cui8 coreClass = CoreClass(efficiency, coreVCores, scan->effHigh);
+
+         if(cfg.sys.coreMap[coreClass][group] & coreMask) break; // The map is what remembers having seen it
+
+         // Every thread-indexed table -- threadData, the four result planes, the completion bitmap -- holds
+         // MAX_THREADS entries, and a thread's index is its ordinal among the selected cores. A machine of
+         // more virtual cores than that is trimmed here, where the surplus is still countable and can be
+         // reported, rather than left to be written past the end of them. Once one core has been refused
+         // every later one is too, tested by 'dropped' rather than by the count: taking a narrower core that
+         // still fits would leave a hole in the middle of a group's map for no gain
+         if(scan->dropped || scan->vCores + coreVCores > MAX_THREADS) { scan->dropped += coreVCores; break; }
+
+         scan->vCores += coreVCores;
+         ++cfg.sys.coreCount[coreClass]; // A core already in the map returned above, so this counts each once
+         cfg.sys.coreMap[coreClass][group] |= coreMask;
+         // Which virtual cores share a physical core is knowable only here, one record at a time: the maps
+         // above are unions and cannot answer it afterwards, which is why SetSMTLoading used to rebuild the
+         // sibling layout from a core count and a stride and got it wrong three ways (ISSUES.MD G1, G2, G7).
+         // A core with no SMT contributes the same bit to both maps, so it survives either policy
+         cfg.sys.coreSibling[0][group] |= LowestSetBit64(coreMask);
+         cfg.sys.coreSibling[1][group] |= HighestSetBit64(coreMask);
+         // The SMT width is per class, and is the core's own sibling count rather than Processor.Flags:
+         // LTP_PC_SMT is set for exactly the cores carrying more than one virtual core, so it answers the
+         // same question less precisely -- and one machine-wide maximum described a hybrid part's classes as
+         // both being as wide as its widest (ISSUES.MD G9)
+         if(cfg.sys.SMT[coreClass] < ui8(coreVCores)) cfg.sys.SMT[coreClass] = ui8(coreVCores);
+         break;
+      }
+      case RelationCache: {
+         if(pass != 2) break;
+
+         cui64 cacheMask  = lpi->Cache.GroupMask.Mask;
+         cui16 cacheGroup = lpi->Cache.GroupMask.Group;
+
+         if(!cacheMask || cacheGroup >= MAX_GROUPS) break;
+
+         cui64 classMap[2] = { cfg.sys.coreMap[0][cacheGroup], cfg.sys.coreMap[1][cacheGroup] };
+
+         // A cache belongs to the class of the cores it serves, which the maps of pass 1 answer directly.
+         // The class used to be the population count of the cache's own mask -- "more than one logical
+         // processor shares this" -- which is a different question with a coincidentally similar answer on a
+         // conventional SMT part and a wrong one elsewhere: the L2 of a four-core E-core cluster counted 4
+         // and was filed as a performance-core cache, and on a CPU without SMT every shared cache in the
+         // machine was filed under a class holding no cores at all (ISSUES.MD G9)
+         if(!(cacheMask & (classMap[0] | classMap[1]))) break; // Serves no core this build accepted
+
+         cui8 coreClass = (cacheMask & classMap[1] ? 1 : 0);
+
+         switch(lpi->Cache.Level) {
+         case 1:
+            if(lpi->Cache.Type == CacheInstruction) // Set (smallest) L1 code size
+               if(!cfg.sys.cache[coreClass].L1Code || cfg.sys.cache[coreClass].L1Code > lpi->Cache.CacheSize)
+                  cfg.sys.cache[coreClass].L1Code = lpi->Cache.CacheSize;
+            if(lpi->Cache.Type == CacheData) // Set (smallest) L1 data size
+               if(!cfg.sys.cache[coreClass].L1Data || cfg.sys.cache[coreClass].L1Data > lpi->Cache.CacheSize)
+                  cfg.sys.cache[coreClass].L1Data = lpi->Cache.CacheSize;
+            break;
+         case 2:
+            if(!cfg.sys.cache[coreClass].L2 || cfg.sys.cache[coreClass].L2 > lpi->Cache.CacheSize) // Set (smallest) L2 size
+               cfg.sys.cache[coreClass].L2 = lpi->Cache.CacheSize;
+            break;
+         case 3:
+            if(!cfg.sys.cacheL3 || cfg.sys.cacheL3 > lpi->Cache.CacheSize) // Set (smallest) L3 size
+               cfg.sys.cacheL3 = lpi->Cache.CacheSize;
+         }
+         break;
+      }
+      default: // Numa node, package, group and everything a later Windows adds
+         break;
+      }
+   }
+}
+
 /// Enumerates the system's processor topology into cfg.sys: the per-group core map of each thread class, the
 /// sibling bitmaps SetSMTLoading masks with, the physical and virtual core counts, the cache sizes and the
-/// SMT width. cfg.coreMap is left holding every virtual core found, which is what a run with no 'U' argument
-/// selects.
+/// per-class SMT widths. cfg.coreMap is left holding every virtual core found, which is what a run with no
+/// 'U' argument selects.
 ///
 /// GetLogicalProcessorInformation, which this replaces, cannot describe a machine of more than one processor
 /// group: its ProcessorMask is a bare 64-bit affinity mask with no group to qualify it, so on a machine of
 /// more than 64 virtual cores the walk saw one group's worth of cores and the rest of the program had no way
 /// to name the others (ISSUES.MD G3). The Ex form reports one variable-length record per relationship, each
 /// carrying a GROUP_AFFINITY -- the mask *and* the group it is a mask of -- which is what every map, the
-/// banner and the affinity walk now carry through.
+/// banner and the affinity walk now carry through. It also carries the EfficiencyClass the two-way core
+/// split is taken from on a hybrid machine (G9).
 /// @return 0 on success; the exit code wmain is to return on failure
 static csi32 EnumerateTopology(void) {
-   DWORD bytesProc = 0;
-   ui32  os        = 0;
-   si32  vCores    = 0; // Running total of virtual cores accepted
-   si32  dropped   = 0; // Virtual cores refused for want of a thread slot
-   ui8   g;
+   TOPOLOGY_SCAN scan;
+   DWORD         bytesProc = 0;
+   ui8           g;
 
    // An Ex record is variable-length, so no record count bounds the buffer in advance the way one bounded the
    // fixed-stride array this replaced. A first call with no buffer is documented to fail with
@@ -582,84 +750,23 @@ static csi32 EnumerateTopology(void) {
       return -23;
    }
 
-   // Records are walked by the Size each one carries rather than by a fixed stride, so the loop stops on
-   // anything it cannot step over: a Size of 0 would not advance, and a Size reaching past the buffer
-   // describes a record the API never wrote. Relationship and Size are the two fields every record opens with
-   while(os + ui32(sizeof(LOGICAL_PROCESSOR_RELATIONSHIP) + sizeof(DWORD)) <= ui32(bytesProc)) {
-      cSLPIEXptrc lpi = (SLPIEXptrc)&((chptr)sysLPI)[os];
+   WalkTopology(sysLPI, ui32(bytesProc), 0, &scan); // Which of the two classification rules this machine needs
 
-      if(!lpi->Size || os + lpi->Size > ui32(bytesProc)) break;
-      os += lpi->Size;
+   // A machine reporting more than one EfficiencyClass is one whose cores differ by design rather than by
+   // SMT width, and that is the whole of the difference between the two rules CoreClass applies
+   cfg.sys.hybrid = scan.effHigh > scan.effLow;
 
-      switch(lpi->Relationship) {
-      case RelationProcessorCore: {
-         // A processor core never spans processor groups, so GroupCount is documented to be 1 for this
-         // relationship and GroupMask[0] is the whole of the core
-         cui64 coreMask   = lpi->Processor.GroupMask[0].Mask;
-         cui16 group      = lpi->Processor.GroupMask[0].Group;
-         csi32 coreVCores = si32(PopulationCount64(coreMask));
-         cui8  coreType   = (coreVCores > 1 ? 1 : 0);
+   WalkTopology(sysLPI, ui32(bytesProc), 1, &scan); // Core maps, sibling bitmaps, core counts, SMT widths
+   WalkTopology(sysLPI, ui32(bytesProc), 2, &scan); // Cache sizes, filed by the class of the cores they serve
 
-         if(!coreMask || group >= MAX_GROUPS) break; // A core of no virtual cores, or a group the maps cannot address
-         if(cfg.sys.coreMap[coreType][group] & coreMask) break; // The map is what remembers having seen it
-
-         // Every thread-indexed table -- threadData, the four result planes, the completion bitmap -- holds
-         // MAX_THREADS entries, and a thread's index is its ordinal among the selected cores. A machine of
-         // more virtual cores than that is trimmed here, where the surplus is still countable and can be
-         // reported, rather than left to be written past the end of them. Once one core has been refused
-         // every later one is too, tested by 'dropped' rather than by the count: taking a narrower core that
-         // still fits would leave a hole in the middle of a group's map for no gain
-         if(dropped || vCores + coreVCores > MAX_THREADS) { dropped += coreVCores; break; }
-
-         vCores += coreVCores;
-         ++cfg.sys.coreCount[coreType]; // A core already in the map returned above, so this counts each once
-         cfg.sys.coreMap[coreType][group] |= coreMask;
-         // Which virtual cores share a physical core is knowable only here, one record at a time: the maps
-         // above are unions and cannot answer it afterwards, which is why SetSMTLoading used to rebuild the
-         // sibling layout from a core count and a stride and got it wrong three ways (ISSUES.MD G1, G2, G7).
-         // A core with no SMT contributes the same bit to both maps, so it survives either policy
-         cfg.sys.coreSibling[0][group] |= LowestSetBit64(coreMask);
-         cfg.sys.coreSibling[1][group] |= HighestSetBit64(coreMask);
-         if(lpi->Processor.Flags & LTP_PC_SMT) {
-            cui8 SMT = ui8(coreVCores);
-            if(!cfg.sys.SMT || cfg.sys.SMT < SMT) // Set (maximum) SMT count per physical core
-               cfg.sys.SMT = SMT;
-         }
-         break;
-      }
-      case RelationCache: {
-         cui8 coreType = (PopulationCount64(lpi->Cache.GroupMask.Mask) > 1 ? 1 : 0);
-
-         switch(lpi->Cache.Level) {
-         case 1:
-            if(lpi->Cache.Type == CacheInstruction) // Set (smallest) L1 code size
-               if(!cfg.sys.cache[coreType].L1Code || cfg.sys.cache[coreType].L1Code > lpi->Cache.CacheSize)
-                  cfg.sys.cache[coreType].L1Code = lpi->Cache.CacheSize;
-            if(lpi->Cache.Type == CacheData) // Set (smallest) L1 data size
-               if(!cfg.sys.cache[coreType].L1Data || cfg.sys.cache[coreType].L1Data > lpi->Cache.CacheSize)
-                  cfg.sys.cache[coreType].L1Data = lpi->Cache.CacheSize;
-            break;
-         case 2:
-            if(!cfg.sys.cache[coreType].L2 || cfg.sys.cache[coreType].L2 > lpi->Cache.CacheSize) // Set (smallest) L2 size
-               cfg.sys.cache[coreType].L2 = lpi->Cache.CacheSize;
-            break;
-         case 3:
-            if(!cfg.sys.cacheL3 || cfg.sys.cacheL3 > lpi->Cache.CacheSize) // Set (smallest) L3 size
-               cfg.sys.cacheL3 = lpi->Cache.CacheSize;
-         }
-         break;
-      }
-      default: // Numa node, package, group and everything a later Windows adds
-         break;
-      }
-   }
    mfree1(sysLPI);
 
-   // Processor.Flags carries LTP_PC_SMT only for a core of more than one virtual core, so a CPU without SMT
-   // never assigned cfg.sys.SMT at all and every later expression that shifted or multiplied by it inherited
-   // the 0 -- SetSMTLoading's undefined shift by ui64(0 - 1) among them (ISSUES.MD G1). One virtual core per
-   // physical core is what "no SMT" means; say so once, here
-   if(!cfg.sys.SMT) cfg.sys.SMT = 1;
+   // A core carrying one virtual core is what "no SMT" means, and a class the machine does not have has no
+   // width at all; both read as 1 rather than 0, so that no later expression can inherit a zero it would
+   // shift or multiply by -- which is how a CPU reporting no SMT used to reach a shift of ui64(0 - 1)
+   // (ISSUES.MD G1)
+   if(!cfg.sys.SMT[0]) cfg.sys.SMT[0] = 1;
+   if(!cfg.sys.SMT[1]) cfg.sys.SMT[1] = 1;
 
    // groupCount was an arithmetic prediction that omitted the SMT core count, doubled the non-SMT one and
    // added 1 (ISSUES.MD G4); counting the groups the walk populated states the same quantity and assumes
@@ -680,10 +787,19 @@ static csi32 EnumerateTopology(void) {
 
    // The count is the population of the maps rather than coreCount[1] * SMT + coreCount[0], which is the same
    // number on every uniform and hybrid topology but assumes one SMT width for the whole machine
-   cfg.sys.vCoreCount = si16(vCores);
+   cfg.sys.vCoreCount = si16(scan.vCores);
 
    // Testing part of a machine is a legitimate outcome; doing so without saying which part is not
-   if(dropped) wprintf(wstrMessage[33], vCores + dropped, si32(MAX_THREADS), dropped);
+   if(scan.dropped) wprintf(wstrMessage[33], scan.vCores + scan.dropped, si32(MAX_THREADS), scan.dropped);
+
+   // Every per-class choice this program makes -- 'Mn' and 'Ms', the two cache records, the two thread
+   // classes of the spawn loop -- is documented against a machine whose classes are its non-SMT and its SMT
+   // cores. On a hybrid machine they are its efficiency and its performance cores instead, which is a
+   // different split under the same names, and nothing anywhere used to say so (ISSUES.MD G9). It needs
+   // saying only when it is true, so a conventional CPU prints nothing here
+   if(cfg.sys.hybrid)
+      wprintf(wstrMessage[34], si32(cfg.sys.coreCount[1]), si32(cfg.sys.SMT[1]),
+                               si32(cfg.sys.coreCount[0]), si32(cfg.sys.SMT[0]));
 
    return 0;
 }
@@ -693,7 +809,7 @@ static csi32 EnumerateTopology(void) {
 /// next group; the scan therefore covers every group from the cursor's position onwards exactly once.
 /// @param mask Bit within the group to resume from; left holding the core's bit when one is found
 /// @param group Processor group to resume from; advanced past every group holding no further core
-/// @param threadClass Class of core to look for; 0=Non-SMT, 1=SMT
+/// @param threadClass Core class to look for; 0=Non-SMT or efficiency, 1=SMT or performance
 /// @return true if a core was found, false if the selected maps hold no further core of that class
 static cbool NextSelectedCore(ui64 &mask, ui8 &group, cui8 threadClass) {
    while(group < cfg.sys.groupCount) {
@@ -705,7 +821,8 @@ static cbool NextSelectedCore(ui64 &mask, ui8 &group, cui8 threadClass) {
 
 /// Applies the SMT loading policy to the core map: a cfg.SMTLoad of 1 keeps the first virtual core of each
 /// physical core, 2 the last, 3 adds every virtual core of each active physical core, and 0 leaves the map
-/// as the enumeration and any 'U' argument left it.
+/// as the enumeration and any 'U' argument left it. All three are exact expressions of one physical core at
+/// a time, taken from the sibling bitmaps the enumeration records, and none of them reasons about a stride.
 ///
 /// The two one-virtual-core policies were a single 'default' arm that built its mask arithmetically -- one
 /// bit per cfg.sys.coreCount[1] entry, spaced cfg.sys.SMT apart, shifted up to the first set bit of the SMT
@@ -717,17 +834,47 @@ static cbool NextSelectedCore(ui64 &mask, ui8 &group, cui8 threadClass) {
 /// the core map was then built (G1). And the scan could only ever yield 0 or 64, because any non-zero map
 /// is non-zero shifted right by zero, so it never found the offset it was written to find (G7).
 /// Masking with the per-core sibling bitmaps the enumeration records needs none of that arithmetic: it is
-/// exact for hybrid parts, for non-SMT parts, and for any virtual core numbering the OS reports
+/// exact for hybrid parts, for non-SMT parts, and for any virtual core numbering the OS reports.
+///
+/// The "use all virtual cores" arm was `cfg.coreMap[i] |= (cfg.coreMap[i] << j) & cfg.sys.coreMap[1][i]`
+/// over j < the SMT width, and read the map it was writing, so each iteration smeared the already-smeared
+/// map: at 4-way SMT the accumulated shift reaches past a core's own siblings and selects the *next*
+/// physical core, which had been selected against, and the j == 0 iteration was a no-op (ISSUES.MD G8). Only
+/// the class-1 map was consulted as well, so on a hybrid part whose two classes are both SMT -- a Zen 4 plus
+/// Zen 4c machine, where the class split is by core design rather than SMT width (G9) -- the class-0 cores
+/// were never expanded at all. The expansion below adds a physical core's whole span, once, to a separate
+/// accumulator, for exactly the cores the map already holds a virtual core of
 static void SetSMTLoading(void) {
-   ui8 i, j;
+   ui8 i;
 
    if(!cfg.SMTLoad) return;
 
    switch(cfg.SMTLoad) {
-   case 3: // Use all virtual cores
-      for(i = 0; i < cfg.sys.groupCount; ++i)
-         for(j = 0; j < cfg.sys.SMT; ++j)
-            cfg.coreMap[i] |= (cfg.coreMap[i] << j) & cfg.sys.coreMap[1][i];
+   case 3: // Use every virtual core of each active physical core
+      for(i = 0; i < cfg.sys.groupCount; ++i) {
+         cui64 groupMap = cfg.sys.coreMap[0][i] | cfg.sys.coreMap[1][i];
+         ui64  selected = cfg.coreMap[i]; // Accumulated separately: a map read while it is written smears
+         ui64  firsts   = cfg.sys.coreSibling[0][i];
+
+         // One iteration per physical core of the group, walking the first-sibling bitmap. Pairing each
+         // first with the lowest last-sibling bit at or above it names one core, because a core's siblings
+         // are consecutive and no core's span can hold another's -- which is the same assumption the two
+         // sibling bitmaps already encode, a core being described by its first virtual core and its last
+         while(firsts) {
+            cui64 first = LowestSetBit64(firsts);
+            cui64 last  = LowestSetBit64(cfg.sys.coreSibling[1][i] & ~(first - 1ull));
+            // 'last - first' is every bit between the two, so 'last | (last - first)' is the core. Every core
+            // contributes its highest virtual core to the second bitmap, so a first bit the enumeration wrote
+            // always has a last at or above it; a pair that disagreed would leave 'last' at 0, where the span
+            // is the one bit rather than the 2^64 - first the subtraction would otherwise wrap to. Masking
+            // with the group's own cores keeps a bit belonging to no core out of a map the banner prints
+            cui64 span  = (last ? last | (last - first) : first) & groupMap;
+
+            if(span & cfg.coreMap[i]) selected |= span;
+            firsts ^= first;
+         }
+         cfg.coreMap[i] = selected;
+      }
       break;
    case 1: // Use the first virtual core of each physical core
    case 2: // Use the last virtual core of each physical core

@@ -18,7 +18,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    ui64  mask;
    DWORD bytesProc = 0;
    int   c = 1, d;
-   si16  threadCount[3] = { 0, 0, 0 }; // 0=Non-SMT, 1=SMT, 2=Total
+   si16  threadCount[3] = { 0, 0, 0 }; // 0=First core class, 1=Second core class, 2=Total
    si16  i;
    si16  k;     // Indexes value[] over every selected core, so it counts to MAX_THREADS, not to 255
    ui8   j;
@@ -128,13 +128,15 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                   cfg.allocMem[0] = si64(wcstol(&argv[i][j + 1], &stopChar, 10)) << 20;
                   j += ui8(stopChar - &argv[i][j] - 1);
                   break;
-               case L'n': // For each non-SMT core
+               // The two classes are the CPU's non-SMT and SMT cores, or its efficiency and performance
+               // cores where it is hybrid; CoreClass (CPU.h) decides which, and the letters cannot say
+               case L'n': // For each core of the first class
                case L'N':
                   cfg.memConfig   = 2;
                   cfg.allocMem[0] = si64(wcstol(&argv[i][j + 1], &stopChar, 10)) << 20;
                   j += ui8(stopChar - &argv[i][j] - 1);
                   break;
-               case L's': // For each SMT virtual core
+               case L's': // For each virtual core of the second class
                case L'S':
                   cfg.memConfig   = 2;
                   cfg.allocMem[1] = si64(wcstol(&argv[i][j + 1], &stopChar, 10)) << 20;
@@ -550,7 +552,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       resArray.blockSize[0] = resArray.blockSize[1] = cfg.allocMem[0];
       cfg.allocMem[0] *= (cui64)threadCount[2];
       break;
-   case 2: // Separate non-SMT/SMT
+   case 2: // Separate per core class
       resArray.blockSize[0] = cfg.allocMem[0];
       resArray.blockSize[1] = cfg.allocMem[1];
       cfg.allocMem[0] = resArray.blockSize[0] * threadCount[0] + (resArray.blockSize[1] * threadCount[1]);
@@ -619,7 +621,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       // seeding two of them would leave each overwriting the other's records. wmain has already rejected any
       // selection naming more than one of FPU/SSE4.1/AVX2/AVX-512, so at most one of p0~p3 is written below.
       // bos is the running record offset into the arena: it counts across both thread classes, because
-      // restarting it at the first SMT thread would hand every SMT thread a slice a non-SMT thread already has
+      // restarting it at the first class-1 thread would hand each of them a slice a class-0 thread already has
       for(k = 0, m = 0, bos = 0; m < 2; ++m)
          for(l = 0; l < threadCount[m]; ++k, ++l, bos += resArray.records[m]) {
             value[1][k].p0 = &resArray.avx512[bos];
@@ -686,10 +688,10 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    // Spawn child processes
    for(d = 0, j = 0; j < 2; ++j) {
       // The affinity cursor walks the selected cores of the thread's own class, group by group. It consulted
-      // the combined map from bit 0 for both classes, so on any topology carrying non-SMT *and* SMT threads
+      // the combined map from bit 0 for both classes, so on any topology carrying two populated core classes
       // the second class was pinned over cores the first already held while the top of the map idled -- and
-      // that is every hybrid P/E-core part at every setting, because coreType is inferred from a core's
-      // sibling count, so its E-cores are the non-SMT class and its P-cores the SMT one (ISSUES.MD G5, G9).
+      // that is every hybrid P/E-core part at every setting, its efficiency cores being the first class and
+      // its performance cores the second (ISSUES.MD G5, G9).
       // Walking the class map also keeps packetSizeRAM and resArray.records[j], both selected by class,
       // describing the core the thread is actually pinned to. The two class maps are disjoint, so restarting
       // the cursor at group 0 bit 0 for each class costs nothing beyond skipping the other class's bits, and
