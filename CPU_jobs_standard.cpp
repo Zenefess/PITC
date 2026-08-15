@@ -20,6 +20,11 @@
    #error "CPU_jobs_standard.cpp must compile at the SSE2 baseline. See ISSUES.MD H1."
 #endif
 
+// The job cycles, the family cross-check and the arena seeding of the units below live here rather than in
+// CPU.cpp, beside the kernels they wrap (ISSUES.MD H4). Nothing in this unit is wider than a scalar, so it
+// is here for symmetry with the three vector units rather than out of necessity
+#include "CPU_job_cycles.h"
+
 #ifndef UNLOOPx4
 #define UNLOOPx4(code) code code code code
 #endif
@@ -185,3 +190,204 @@ void JobMemALU_FPU(fl64ptrc x, si64ptrc y) {
    }
    x[0] *= acc[0];   x[2] *= acc[2];   x[1] *= acc[1];   x[3] *= acc[3];
 }
+
+//--- Job kernel cross-check ---//
+
+// The ALU and FPU families. ValidateKernelFamilies (CPU.h) calls this before 'W' generates anything, so that
+// no memory-backed or combined kernel can drift from the register-resident one "cpu.values" records
+// (ISSUES.MD B5). refALU and refFPU are re-derived here rather than passed in, so that this function is a
+// complete statement of the two scalar families
+cui8 ValidateFamilyScalar(cRESULTS &seed) {
+   fl64 refFPU, memFPU[4], regFPU;
+   si64 refALU, memALU[4], regALU;
+   ui8  k;
+
+   refALU = seed.alu;   JobALU(refALU);
+   refFPU = seed.fpu;   JobFPU(refFPU);
+
+   regFPU = seed.fpu;   regALU = seed.alu;   JobALU_FPU(regFPU, regALU);
+   if(memcmp(&regFPU, &refFPU, sizeof(fl64)) || regALU != refALU) return 1;
+
+   for(k = 0; k < 4; ++k) memALU[k] = seed.alu;
+   JobMemALU(memALU);
+   for(k = 0; k < 4; ++k) if(memALU[k] != refALU) return 2;
+
+   for(k = 0; k < 4; ++k) memFPU[k] = seed.fpu;
+   JobMemFPU(memFPU);
+   for(k = 0; k < 4; ++k) if(memcmp(&memFPU[k], &refFPU, sizeof(fl64))) return 3;
+
+   for(k = 0; k < 4; ++k) { memFPU[k] = seed.fpu;   memALU[k] = seed.alu; }
+   JobMemALU_FPU(memFPU, memALU);
+   for(k = 0; k < 4; ++k) if(memcmp(&memFPU[k], &refFPU, sizeof(fl64)) || memALU[k] != refALU) return 4;
+
+   return 0;
+}
+//--- Job kernel cross-check ---//
+
+//--- Arena seeding ---//
+
+void SeedRecordsALU(si64ptrc records, cui64 count, csi64 seed) {
+   for(ui64 i = 0; i < count; ++i) records[i] = seed;
+}
+
+void SeedRecordsFPU(fl64ptrc records, cui64 count, cfl64 seed) {
+   for(ui64 i = 0; i < count; ++i) records[i] = seed;
+}
+//--- Arena seeding ---//
+
+//--- Job cycles ---//
+
+cui8 JobCycleALU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+   value[1][coreNum].alu = value[0][coreNum].alu;
+   JobALU(value[1][coreNum].alu);
+   if(value[1][coreNum].alu != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].alu;
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   return 0;
+}
+
+cui8 JobCycleMemALU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+   value[1][coreNum].p4[offset]     = value[0][coreNum].alu;
+   value[1][coreNum].p4[offset + 1] = value[0][coreNum].alu;
+   value[1][coreNum].p4[offset + 2] = value[0][coreNum].alu;
+   value[1][coreNum].p4[offset + 3] = value[0][coreNum].alu;
+   JobMemALU(&value[1][coreNum].p4[offset]);
+   if(value[1][coreNum].p4[offset] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   if(value[1][coreNum].p4[offset + 1] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset + 1];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   if(value[1][coreNum].p4[offset + 2] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset + 2];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   if(value[1][coreNum].p4[offset + 3] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset + 3];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   return 0;
+}
+
+cui8 JobCycleFPU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+   value[1][coreNum].fpu = value[0][coreNum].fpu;
+   JobFPU(value[1][coreNum].fpu);
+   if(value[1][coreNum].fpu != value[2][coreNum].fpu) {
+      value[3][coreNum].fpu = value[1][coreNum].fpu;
+      Failed(coreNum, threadByte, 3);
+      return 1;
+   }
+   return 0;
+}
+
+cui8 JobCycleMemFPU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+   value[1][coreNum].p3[offset]     = value[0][coreNum].fpu;
+   value[1][coreNum].p3[offset + 1] = value[0][coreNum].fpu;
+   value[1][coreNum].p3[offset + 2] = value[0][coreNum].fpu;
+   value[1][coreNum].p3[offset + 3] = value[0][coreNum].fpu;
+   JobMemFPU(&value[1][coreNum].p3[offset]);
+   // Failed's unit argument selects the format the mismatch is printed in, and must name the unit whose
+   // value[3] member was just written -- 3 (FPU) here, as in JobCycleFPU and JobCycleMemALU_FPU. These four
+   // passed 4 (ALU), so Failed's case 4 printed value[2].alu and value[3].alu with "%lld": two integers from
+   // lanes this function never touches, in place of the two doubles that disagreed (ISSUES.MD A12)
+   if(value[1][coreNum].p3[offset] != value[2][coreNum].fpu) {
+      value[3][coreNum].fpu = value[1][coreNum].p3[offset];
+      Failed(coreNum, threadByte, 3);
+      return 1;
+   }
+   if(value[1][coreNum].p3[offset + 1] != value[2][coreNum].fpu) {
+      value[3][coreNum].fpu = value[1][coreNum].p3[offset + 1];
+      Failed(coreNum, threadByte, 3);
+      return 1;
+   }
+   if(value[1][coreNum].p3[offset + 2] != value[2][coreNum].fpu) {
+      value[3][coreNum].fpu = value[1][coreNum].p3[offset + 2];
+      Failed(coreNum, threadByte, 3);
+      return 1;
+   }
+   if(value[1][coreNum].p3[offset + 3] != value[2][coreNum].fpu) {
+      value[3][coreNum].fpu = value[1][coreNum].p3[offset + 3];
+      Failed(coreNum, threadByte, 3);
+      return 1;
+   }
+   return 0;
+}
+
+cui8 JobCycleALU_FPU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+   value[1][coreNum].fpu = value[0][coreNum].fpu;
+   value[1][coreNum].alu = value[0][coreNum].alu;
+   JobALU_FPU(value[1][coreNum].fpu, value[1][coreNum].alu);
+   if(value[1][coreNum].alu != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].alu;
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   if(value[1][coreNum].fpu != value[2][coreNum].fpu) {
+      value[3][coreNum].fpu = value[1][coreNum].fpu;
+      Failed(coreNum, threadByte, 3);
+      return 1;
+   }
+   return 0;
+}
+
+cui8 JobCycleMemALU_FPU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+   value[1][coreNum].p3[offset]     = value[0][coreNum].fpu;
+   value[1][coreNum].p3[offset + 1] = value[0][coreNum].fpu;
+   value[1][coreNum].p3[offset + 2] = value[0][coreNum].fpu;
+   value[1][coreNum].p3[offset + 3] = value[0][coreNum].fpu;
+   value[1][coreNum].p4[offset]     = value[0][coreNum].alu;
+   value[1][coreNum].p4[offset + 1] = value[0][coreNum].alu;
+   value[1][coreNum].p4[offset + 2] = value[0][coreNum].alu;
+   value[1][coreNum].p4[offset + 3] = value[0][coreNum].alu;
+   JobMemALU_FPU(&value[1][coreNum].p3[offset], &value[1][coreNum].p4[offset]);
+   if(value[1][coreNum].p3[offset] != value[2][coreNum].fpu) {
+      value[3][coreNum].fpu = value[1][coreNum].p3[offset];
+      Failed(coreNum, threadByte, 3);
+      return 1;
+   }
+   if(value[1][coreNum].p3[offset + 1] != value[2][coreNum].fpu) {
+      value[3][coreNum].fpu = value[1][coreNum].p3[offset + 1];
+      Failed(coreNum, threadByte, 3);
+      return 1;
+   }
+   if(value[1][coreNum].p3[offset + 2] != value[2][coreNum].fpu) {
+      value[3][coreNum].fpu = value[1][coreNum].p3[offset + 2];
+      Failed(coreNum, threadByte, 3);
+      return 1;
+   }
+   if(value[1][coreNum].p3[offset + 3] != value[2][coreNum].fpu) {
+      value[3][coreNum].fpu = value[1][coreNum].p3[offset + 3];
+      Failed(coreNum, threadByte, 3);
+      return 1;
+   }
+   if(value[1][coreNum].p4[offset] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   if(value[1][coreNum].p4[offset + 1] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset + 1];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   if(value[1][coreNum].p4[offset + 2] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset + 2];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   if(value[1][coreNum].p4[offset + 3] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset + 3];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   return 0;
+}
+//--- Job cycles ---//

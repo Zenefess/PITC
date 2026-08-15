@@ -10,6 +10,22 @@
 #include "typedefs.h"
 #include "CPU_build.h"
 
+// This unit must be compiled with /arch:AVX512, in every configuration. MSVC accepts an AVX-512 intrinsic
+// whatever /arch is set to, so a unit compiled at the SSE2 baseline still produces the right answer -- but it
+// emits ZMM-using code without having been told the target supports it, which decides register allocation and
+// vzeroupper placement, and leaves the surrounding code unable to use EVEX encoding. Both per-file overrides
+// in CPU.vcxproj used to carry Condition="…=='Release|x64'", which is exactly the Debug build this rejects
+// (ISSUES.MD H3). The complementary guard -- that the scalar unit is never raised -- is in
+// CPU_jobs_standard.cpp (H1)
+#if !defined(__AVX512F__)
+   #error "CPU_jobs_AVX512.cpp must be compiled with /arch:AVX512. See CPU.vcxproj and ISSUES.MD H3."
+#endif
+
+// The AVX-512 job cycles, family cross-check, arena seeding and completion-bitmap poll live here rather than
+// in CPU.cpp, beside the kernels of their own width, so that no 512-bit instruction is emitted from a file
+// compiled at the StreamingSIMDExtensions2 baseline (ISSUES.MD H4)
+#include "CPU_job_cycles.h"
+
 #ifndef UNLOOPx4
 #define UNLOOPx4(code) code code code code
 #endif
@@ -229,3 +245,177 @@ void JobMemALU_AVX512(fl64x8ptrc x, si64ptrc y) {
    x[1] = _mm512_mul_pd(x[1], acc[1]);
    x[3] = _mm512_mul_pd(x[3], acc[3]);
 }
+
+//-- Bit-exact result comparison --//
+// XOR the two operands and test the difference against zero, over the integer domain: a golden value is a bit
+// pattern, and _mm512_mask_cmpneq_pd_mask -- which this replaced -- is a floating-point predicate, so it
+// answers a question about numeric values instead and errs in both directions. CPU_job_cycles.h carries the
+// whole of that reasoning (ISSUES.MD A11)
+
+/// @brief  Compare a 512-bit (AVX-512) result against its golden value
+/// @param  result:   Value produced by the job kernel
+/// @param  expected: Reference value loaded from "cpu.values"
+/// @return true if every bit of both operands is identical
+static inline cbool ResultsMatch(cfl64x8 result, cfl64x8 expected) {
+   // AVX-512 has no testz: VPTESTMQ sets one mask bit per 64-bit lane whose AND is non-zero, so testing the
+   // difference against itself yields a bit for every lane that differs, and an empty mask is the match
+   csi512 delta = _mm512_xor_si512(_mm512_castpd_si512(result), _mm512_castpd_si512(expected));
+
+   return !_mm512_test_epi64_mask(delta, delta);
+}
+
+//--- Thread completion bitmap ---//
+// The 512-bit view of the map: eight ui64 in one step, which is the whole of it
+bool ThreadsRunningAVX512(void) {
+   cui64ptrc bits = (cui64ptrc)ThreadBitsView();
+
+   return !AllFalse((si512&)bits[0], max512);
+}
+//--- Thread completion bitmap ---//
+
+//--- Job kernel cross-check ---//
+
+// The AVX-512 family. ValidateKernelFamilies (CPU.h) reaches this only on a CPU reporting AVX-512, exactly as
+// RunGoldenLadder gates the ladder itself
+cui8 ValidateFamilyAVX512(cRESULTS &seed) {
+   fl64x8 refAVX512, memAVX512[4], regAVX512;
+   si64   refALU,    memALU[4],    regALU;
+   ui8    k;
+
+   refALU    = seed.alu;      JobALU(refALU);
+   refAVX512 = seed.avx512;   JobAVX512(refAVX512);
+
+   regAVX512 = seed.avx512;   regALU = seed.alu;   JobALU_AVX512(regAVX512, regALU);
+   if(memcmp(&regAVX512, &refAVX512, sizeof(fl64x8)) || regALU != refALU) return 11;
+
+   for(k = 0; k < 4; ++k) memAVX512[k] = seed.avx512;
+   JobMemAVX512(memAVX512);
+   for(k = 0; k < 4; ++k) if(memcmp(&memAVX512[k], &refAVX512, sizeof(fl64x8))) return 12;
+
+   for(k = 0; k < 4; ++k) { memAVX512[k] = seed.avx512;   memALU[k] = seed.alu; }
+   JobMemALU_AVX512(memAVX512, memALU);
+   for(k = 0; k < 4; ++k) if(memcmp(&memAVX512[k], &refAVX512, sizeof(fl64x8)) || memALU[k] != refALU) return 13;
+
+   return 0;
+}
+//--- Job kernel cross-check ---//
+
+//--- Arena seeding ---//
+
+void SeedRecordsAVX512(fl64x8ptrc records, cui64 count, cfl64x8 &seed) {
+   for(ui64 i = 0; i < count; ++i) records[i] = seed;
+}
+//--- Arena seeding ---//
+
+//--- Job cycles ---//
+
+cui8 JobCycleAVX512(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+   value[1][coreNum].avx512 = value[0][coreNum].avx512;
+   JobAVX512(value[1][coreNum].avx512);
+   if(!ResultsMatch(value[1][coreNum].avx512, value[2][coreNum].avx512)) {
+      value[3][coreNum].avx512 = value[1][coreNum].avx512;
+      Failed(coreNum, threadByte, 0);
+      return 1;
+   }
+   return 0;
+}
+
+cui8 JobCycleMemAVX512(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+   value[1][coreNum].p0[offset]     = value[0][coreNum].avx512;
+   value[1][coreNum].p0[offset + 1] = value[0][coreNum].avx512;
+   value[1][coreNum].p0[offset + 2] = value[0][coreNum].avx512;
+   value[1][coreNum].p0[offset + 3] = value[0][coreNum].avx512;
+   JobMemAVX512(&value[1][coreNum].p0[offset]);
+   if(!ResultsMatch(value[1][coreNum].p0[offset], value[2][coreNum].avx512)) {
+      value[3][coreNum].avx512 = value[1][coreNum].p0[offset];
+      Failed(coreNum, threadByte, 0);
+      return 1;
+   }
+   if(!ResultsMatch(value[1][coreNum].p0[offset + 1], value[2][coreNum].avx512)) {
+      value[3][coreNum].avx512 = value[1][coreNum].p0[offset + 1];
+      Failed(coreNum, threadByte, 0);
+      return 1;
+   }
+   if(!ResultsMatch(value[1][coreNum].p0[offset + 2], value[2][coreNum].avx512)) {
+      value[3][coreNum].avx512 = value[1][coreNum].p0[offset + 2];
+      Failed(coreNum, threadByte, 0);
+      return 1;
+   }
+   if(!ResultsMatch(value[1][coreNum].p0[offset + 3], value[2][coreNum].avx512)) {
+      value[3][coreNum].avx512 = value[1][coreNum].p0[offset + 3];
+      Failed(coreNum, threadByte, 0);
+      return 1;
+   }
+   return 0;
+}
+
+cui8 JobCycleALU_AVX512(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+   value[1][coreNum].avx512 = value[0][coreNum].avx512;
+   value[1][coreNum].alu    = value[0][coreNum].alu;
+   JobALU_AVX512(value[1][coreNum].avx512, value[1][coreNum].alu);
+   if(value[1][coreNum].alu != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].alu;
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   if(!ResultsMatch(value[1][coreNum].avx512, value[2][coreNum].avx512)) {
+      value[3][coreNum].avx512 = value[1][coreNum].avx512;
+      Failed(coreNum, threadByte, 0);
+      return 1;
+   }
+   return 0;
+}
+
+cui8 JobCycleMemALU_AVX512(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+   value[1][coreNum].p0[offset]     = value[0][coreNum].avx512;
+   value[1][coreNum].p0[offset + 1] = value[0][coreNum].avx512;
+   value[1][coreNum].p0[offset + 2] = value[0][coreNum].avx512;
+   value[1][coreNum].p0[offset + 3] = value[0][coreNum].avx512;
+   value[1][coreNum].p4[offset]     = value[0][coreNum].alu;
+   value[1][coreNum].p4[offset + 1] = value[0][coreNum].alu;
+   value[1][coreNum].p4[offset + 2] = value[0][coreNum].alu;
+   value[1][coreNum].p4[offset + 3] = value[0][coreNum].alu;
+   JobMemALU_AVX512(&value[1][coreNum].p0[offset], &value[1][coreNum].p4[offset]);
+   if(!ResultsMatch(value[1][coreNum].p0[offset], value[2][coreNum].avx512)) {
+      value[3][coreNum].avx512 = value[1][coreNum].p0[offset];
+      Failed(coreNum, threadByte, 0);
+      return 1;
+   }
+   if(!ResultsMatch(value[1][coreNum].p0[offset + 1], value[2][coreNum].avx512)) {
+      value[3][coreNum].avx512 = value[1][coreNum].p0[offset + 1];
+      Failed(coreNum, threadByte, 0);
+      return 1;
+   }
+   if(!ResultsMatch(value[1][coreNum].p0[offset + 2], value[2][coreNum].avx512)) {
+      value[3][coreNum].avx512 = value[1][coreNum].p0[offset + 2];
+      Failed(coreNum, threadByte, 0);
+      return 1;
+   }
+   if(!ResultsMatch(value[1][coreNum].p0[offset + 3], value[2][coreNum].avx512)) {
+      value[3][coreNum].avx512 = value[1][coreNum].p0[offset + 3];
+      Failed(coreNum, threadByte, 0);
+      return 1;
+   }
+   if(value[1][coreNum].p4[offset] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   if(value[1][coreNum].p4[offset + 1] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset + 1];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   if(value[1][coreNum].p4[offset + 2] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset + 2];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   if(value[1][coreNum].p4[offset + 3] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset + 3];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   return 0;
+}
+//--- Job cycles ---//

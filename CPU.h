@@ -1,6 +1,6 @@
 /************************************************************
  * File: CPU.h                          Created: 2025/01/25 *
- *                                    Last mod.: 2025/02/22 *
+ *                                    Last mod.: 2026/08/15 *
  *                                                          *
  * Desc:                                                    *
  *                                                          *
@@ -13,7 +13,7 @@
 #include <iostream>
 #include <atomic>   // atomic_signal_fence, the compiler barrier the completion-bitmap polls read through
 #include <stdlib.h> // rand_s, which is declared only for a translation unit that defined _CRT_RAND_S above
-#include <string.h> // memcmp, for the byte-exact comparisons in ValidateKernelFamilies
+#include <string.h> // memcmp, for the byte-exact comparisons in each unit's ValidateFamily*
 #include <windows.h>
 #include <process.h>
 #include "memory management.h"
@@ -139,7 +139,7 @@ al64 union RESULTS { // 128 bytes
       si64ptr   p4;
    };
    ui64ptr pr[5];
-}; typedef RESULTS *const RESULTSptrc;
+}; typedef RESULTS *const RESULTSptrc; typedef const RESULTS cRESULTS;
 
 constexpr csi64 RESULTS_BUF_SIZE = sizeof(RESULTS) * MAX_THREADS;
 
@@ -167,31 +167,47 @@ al32 struct RESULTS_ARRAYS { // 96 bytes
    ~RESULTS_ARRAYS(void) { mfree(p, iter); }
 };
 
-// Global variables
-al64 CLASS_TIMER timer;
-     GLOBAL_CFG  cfg;
+//--- Global variables ---//
+// Declared here, defined once in CPU.cpp. A header that *defines* an object at namespace scope hands every
+// translation unit that includes it either a duplicate symbol at link time or -- for the `dataType *const`
+// the declare* macros expand to, which is const and therefore internally linked -- a private copy of it. The
+// four result planes, the thread table and the completion bitmap are the storage wmain and the worker threads
+// compare and signal through, so a second copy is not a link error but a program whose two halves cannot see
+// each other. That is what confined the whole program to a single translation unit, and it is what the
+// per-ISA job cycles of H4 had to be able to reach from CPU_jobs_*.cpp (ISSUES.MD H9).
+//
+// The declaration of a pointer the declare* macros produce is spelt out rather than macro-generated, because
+// the macros carry the allocation with them; the comment beside each names the macro that defines it in
+// CPU.cpp, and the two must be changed together
+extern al64 CLASS_TIMER timer;
+extern      GLOBAL_CFG  cfg;
 
-     declare1d64z(THREAD_CFG, threadData, MAX_THREADS);
-     declare2d64z(RESULTS, value, 4, MAX_THREADS); // Result values: 0==Input, 1=Processed, 2=Output, 3=Error
-     declare1d64z(vui64, threadBits, MAX_THREADS_WORDS);
-     declare1d64z(wchar, wstrOut, 1024);
-     RESULTS_ARRAYS resArray;
-     // Set by any GenerateValues thread whose self-check disagrees, and read by 'W' once every thread has
-     // joined. The failure used to be signalled by writing two sentinel values into value[2][0] and
-     // value[3][0], which whichever thread owns entry 0 then overwrote wholesale with its own results -- so a
-     // real computational error was discarded and "cpu.values" written as though the run had passed
-     // (ISSUES.MD B7). A flag of its own cannot be overwritten by anybody's results, and the interlocked
-     // write orders it ahead of the completion bit the reader is waiting on
-     vsi8 generateError = 0;
+extern THREAD_CFG *const threadData;        // declare1d64z(THREAD_CFG, threadData, MAX_THREADS)
+extern RESULTS (*const value)[MAX_THREADS]; // declare2d64z(RESULTS, value, 4, MAX_THREADS)
+                                            // Result values: 0==Input, 1=Processed, 2=Output, 3=Error
+extern vui64 *const threadBits;             // declare1d64z(vui64, threadBits, MAX_THREADS_WORDS)
+extern wchar *const wstrOut;                // declare1d64z(wchar, wstrOut, 1024)
+extern RESULTS_ARRAYS resArray;
+// Set by any GenerateValues thread whose self-check disagrees, and read by 'W' once every thread has joined.
+// The failure used to be signalled by writing two sentinel values into value[2][0] and value[3][0], which
+// whichever thread owns entry 0 then overwrote wholesale with its own results -- so a real computational
+// error was discarded and "cpu.values" written as though the run had passed (ISSUES.MD B7). A flag of its own
+// cannot be overwritten by anybody's results, and the interlocked write orders it ahead of the completion bit
+// the reader is waiting on
+extern vsi8 generateError;
 
 #include "translations.h"
 
-     cwchar   wstrUnitsCPU[8][4]  = { L"ALU", L"FPU", L"SSE", L"AVX", L"512", L"CL1", L"CL2", L"CL3" };
-     cwchar   wstrSyncCPU[8][4]   = { L"R-R", L"Par", L"Sta", L"T-S", L"Con", L"F-P", L"S-P", L"Ben" };
-     cwchar   wstrPass[2][8]      = { L".Pass.", L"!Fail!" }; ///--- Modify for translation ---///
-     wchar    wstrLang[6]         = L"en-GB";
-     cwchar   outUTF16header      = 0x0FEFF;
-     cchar    outUTF8header[3]    = { char(0x0EF), char(0x0BB), char(0x0BF) };
+// Immutable tables, so one entity shared by every translation unit rather than a definition each of them owns
+// a private copy of. 'inline' is what makes them one entity in C++17; wstrLang below is written to by the 'L'
+// option, so it is a global like any other and is defined in CPU.cpp (ISSUES.MD H9)
+inline cwchar wstrUnitsCPU[8][4]  = { L"ALU", L"FPU", L"SSE", L"AVX", L"512", L"CL1", L"CL2", L"CL3" };
+inline cwchar wstrSyncCPU[8][4]   = { L"R-R", L"Par", L"Sta", L"T-S", L"Con", L"F-P", L"S-P", L"Ben" };
+inline cwchar wstrPass[2][8]      = { L".Pass.", L"!Fail!" }; ///--- Modify for translation ---///
+inline cwchar outUTF16header      = 0x0FEFF;
+inline cchar  outUTF8header[3]    = { char(0x0EF), char(0x0BB), char(0x0BF) };
+extern wchar  wstrLang[6];
+//--- Global variables ---//
 
 extern void JobALU(si64&);            extern void JobFPU(fl64&);                          extern void JobALU_FPU(fl64&, si64&);
 extern void JobSSE(fl64x2&);          extern void JobALU_SSE(fl64x2&, si64&);
@@ -201,6 +217,24 @@ extern void JobMemALU(si64ptrc);      extern void JobMemFPU(fl64ptrc);          
 extern void JobMemSSE(fl64x2ptrc);    extern void JobMemALU_SSE(fl64x2ptrc, si64ptrc);
 extern void JobMemAVX2(fl64x4ptrc);   extern void JobMemALU_AVX2(fl64x4ptrc, si64ptrc);
 extern void JobMemAVX512(fl64x8ptrc); extern void JobMemALU_AVX512(fl64x8ptrc, si64ptrc);
+
+//--- Arena seeding ---//
+// One record of the arena is one input to the job kernel the run has selected, so seeding a slice is a store
+// of the unit's own width, repeated: 'value[1][k].p0[os] = value[0][k].avx512' is a 512-bit move, and it was
+// written in wmain, which compiles at the SSE2 baseline. Each unit's seeding pass therefore sits in the
+// translation unit built for that unit, beside the kernels that read what it writes, exactly as the job
+// cycles do -- so that no vector store above the baseline is emitted from CPU.cpp (ISSUES.MD H4). The seed is
+// taken by reference: a vector wider than 16 bytes is passed by address under the x64 calling convention
+// either way, and a reference says so without the caller ever forming the value in a register it may not have
+/// @param records First record of the thread's slice of the arena
+/// @param count Number of records in the slice
+/// @param seed Value every record is to be given
+extern void SeedRecordsALU   (si64ptrc   records, cui64 count, csi64    seed);
+extern void SeedRecordsFPU   (fl64ptrc   records, cui64 count, cfl64    seed);
+extern void SeedRecordsSSE   (fl64x2ptrc records, cui64 count, cfl64x2 &seed);
+extern void SeedRecordsAVX2  (fl64x4ptrc records, cui64 count, cfl64x4 &seed);
+extern void SeedRecordsAVX512(fl64x8ptrc records, cui64 count, cfl64x8 &seed);
+//--- Arena seeding ---//
 
 //--- Job kernel cross-check ---//
 // The eighteen job kernels are written out by hand across four translation units, with no shared
@@ -213,7 +247,7 @@ extern void JobMemAVX512(fl64x8ptrc); extern void JobMemALU_AVX512(fl64x8ptrc, s
 
 // Names of the kernels the check walks, in the order it walks them; index 0 is "nothing disagreed".
 // These are identifiers rather than prose, so the table is not part of the translated strings
-cwchar wstrKernelName[14][20] = {
+inline cwchar wstrKernelName[14][20] = {
    L"",
    L"JobALU_FPU",    L"JobMemALU",    L"JobMemFPU",    L"JobMemALU_FPU",
    L"JobALU_SSE",    L"JobMemSSE",    L"JobMemALU_SSE",
@@ -221,95 +255,42 @@ cwchar wstrKernelName[14][20] = {
    L"JobALU_AVX512", L"JobMemAVX512", L"JobMemALU_AVX512"
 };
 
-/// Runs one seed through every job kernel the CPU can execute, and requires each memory-array and combined
-/// variant to reproduce its register-resident counterpart exactly. Each JobMem* kernel is handed four
-/// records carrying the same seed, so all four must come back equal to the single register result -- which
-/// checks the record indexing as well as the arithmetic. The comparison is a byte compare: a golden value
-/// is a bit pattern, and every floating-point spelling of "equal" this codebase has reached for has at some
-/// point compared something other than every bit (ISSUES.MD A1~A3, A11)
+/// Runs one seed through every job kernel of one processing unit, and requires each memory-array and combined
+/// variant to reproduce its register-resident counterpart exactly. Each JobMem* kernel is handed four records
+/// carrying the same seed, so all four must come back equal to the single register result -- which checks the
+/// record indexing as well as the arithmetic. The comparison is a byte compare: a golden value is a bit
+/// pattern, and every floating-point spelling of "equal" this codebase has reached for has at some point
+/// compared something other than every bit (ISSUES.MD A1~A3, A11).
+///
+/// Each of the four lives in the translation unit of the kernels it checks, because the check reads and
+/// writes values of that unit's width: the AVX-512 half of the one function these replace performed 512-bit
+/// moves in a file compiled at the SSE2 baseline (ISSUES.MD H4). Every one of them re-derives the ALU
+/// reference itself rather than being handed one, so that each is a complete statement of its own unit
+/// @param seed The one seed every kernel of the family is run over
+/// @return 0 if every kernel of the family agreed; otherwise the wstrKernelName index of the first that did not
+extern cui8 ValidateFamilyScalar(cRESULTS &seed); // JobALU_FPU, JobMemALU, JobMemFPU, JobMemALU_FPU
+extern cui8 ValidateFamilySSE   (cRESULTS &seed); // JobALU_SSE, JobMemSSE, JobMemALU_SSE
+extern cui8 ValidateFamilyAVX2  (cRESULTS &seed); // JobALU_AVX2, JobMemAVX2, JobMemALU_AVX2
+extern cui8 ValidateFamilyAVX512(cRESULTS &seed); // JobALU_AVX512, JobMemAVX512, JobMemALU_AVX512
+
+/// Runs one seed through every job kernel the CPU can execute, one family at a time
 /// @return 0 if every kernel agreed; otherwise the wstrKernelName index of the first that did not
 static cui8 ValidateKernelFamilies(void) {
    RESULTS seed = {}; // Zeroed first, so every lane stays defined if the seeding below is ever narrowed
-   fl64x8  refAVX512, memAVX512[4];
-   fl64x4  refAVX2,   memAVX2[4];
-   fl64x2  refSSE,    memSSE[4];
-   fl64    refFPU,    memFPU[4];
-   si64    refALU,    memALU[4];
-   fl64x8  regAVX512;
-   fl64x4  regAVX2;
-   fl64x2  regSSE;
-   fl64    regFPU;
-   si64    regALU;
-   ui8     k;
+   ui8     badKernel;
 
    // The seed KernelFingerprint probes with: a magnitude the FP chains settle from within two steps, and a
    // plain integer for the ALU lane
-   for(k = 0; k < 15; ++k) seed._fl64[k] = fl64(0x0123456789ABCull >> (k & 0x03)) + fl64(k);
+   for(ui8 k = 0; k < 15; ++k) seed._fl64[k] = fl64(0x0123456789ABCull >> (k & 0x03)) + fl64(k);
    seed.raw[15] = 0x0123456789ABCDEF;
 
-   //--- ALU and FPU: the scalar paths every x64 CPU carries ---//
-   refALU = seed.alu;   JobALU(refALU);
-   refFPU = seed.fpu;   JobFPU(refFPU);
-
-   regFPU = seed.fpu;   regALU = seed.alu;   JobALU_FPU(regFPU, regALU);
-   if(memcmp(&regFPU, &refFPU, sizeof(fl64)) || regALU != refALU) return 1;
-
-   for(k = 0; k < 4; ++k) memALU[k] = seed.alu;
-   JobMemALU(memALU);
-   for(k = 0; k < 4; ++k) if(memALU[k] != refALU) return 2;
-
-   for(k = 0; k < 4; ++k) memFPU[k] = seed.fpu;
-   JobMemFPU(memFPU);
-   for(k = 0; k < 4; ++k) if(memcmp(&memFPU[k], &refFPU, sizeof(fl64))) return 3;
-
-   for(k = 0; k < 4; ++k) { memFPU[k] = seed.fpu;   memALU[k] = seed.alu; }
-   JobMemALU_FPU(memFPU, memALU);
-   for(k = 0; k < 4; ++k) if(memcmp(&memFPU[k], &refFPU, sizeof(fl64)) || memALU[k] != refALU) return 4;
-
-   //--- SSE: reached on every CPU, being the golden ladder's fallback ---//
-   refSSE = seed.sse;   JobSSE(refSSE);
-
-   regSSE = seed.sse;   regALU = seed.alu;   JobALU_SSE(regSSE, regALU);
-   if(memcmp(&regSSE, &refSSE, sizeof(fl64x2)) || regALU != refALU) return 5;
-
-   for(k = 0; k < 4; ++k) memSSE[k] = seed.sse;
-   JobMemSSE(memSSE);
-   for(k = 0; k < 4; ++k) if(memcmp(&memSSE[k], &refSSE, sizeof(fl64x2))) return 6;
-
-   for(k = 0; k < 4; ++k) { memSSE[k] = seed.sse;   memALU[k] = seed.alu; }
-   JobMemALU_SSE(memSSE, memALU);
-   for(k = 0; k < 4; ++k) if(memcmp(&memSSE[k], &refSSE, sizeof(fl64x2)) || memALU[k] != refALU) return 7;
+   //--- ALU, FPU and SSE: the paths every x64 CPU carries, SSE being the golden ladder's fallback ---//
+   if((badKernel = ValidateFamilyScalar(seed)) != 0) return badKernel;
+   if((badKernel = ValidateFamilySSE(seed))    != 0) return badKernel;
 
    //--- AVX2 and AVX-512: gated exactly as RunGoldenLadder gates them ---//
-   if(cfg.sys.cpuAVX2) {
-      refAVX2 = seed.avx;   JobAVX2(refAVX2);
-
-      regAVX2 = seed.avx;   regALU = seed.alu;   JobALU_AVX2(regAVX2, regALU);
-      if(memcmp(&regAVX2, &refAVX2, sizeof(fl64x4)) || regALU != refALU) return 8;
-
-      for(k = 0; k < 4; ++k) memAVX2[k] = seed.avx;
-      JobMemAVX2(memAVX2);
-      for(k = 0; k < 4; ++k) if(memcmp(&memAVX2[k], &refAVX2, sizeof(fl64x4))) return 9;
-
-      for(k = 0; k < 4; ++k) { memAVX2[k] = seed.avx;   memALU[k] = seed.alu; }
-      JobMemALU_AVX2(memAVX2, memALU);
-      for(k = 0; k < 4; ++k) if(memcmp(&memAVX2[k], &refAVX2, sizeof(fl64x4)) || memALU[k] != refALU) return 10;
-   }
-
-   if(cfg.sys.cpuAVX512) {
-      refAVX512 = seed.avx512;   JobAVX512(refAVX512);
-
-      regAVX512 = seed.avx512;   regALU = seed.alu;   JobALU_AVX512(regAVX512, regALU);
-      if(memcmp(&regAVX512, &refAVX512, sizeof(fl64x8)) || regALU != refALU) return 11;
-
-      for(k = 0; k < 4; ++k) memAVX512[k] = seed.avx512;
-      JobMemAVX512(memAVX512);
-      for(k = 0; k < 4; ++k) if(memcmp(&memAVX512[k], &refAVX512, sizeof(fl64x8))) return 12;
-
-      for(k = 0; k < 4; ++k) { memAVX512[k] = seed.avx512;   memALU[k] = seed.alu; }
-      JobMemALU_AVX512(memAVX512, memALU);
-      for(k = 0; k < 4; ++k) if(memcmp(&memAVX512[k], &refAVX512, sizeof(fl64x8)) || memALU[k] != refALU) return 13;
-   }
+   if(cfg.sys.cpuAVX2   && (badKernel = ValidateFamilyAVX2(seed))   != 0) return badKernel;
+   if(cfg.sys.cpuAVX512 && (badKernel = ValidateFamilyAVX512(seed)) != 0) return badKernel;
 
    return 0;
 }
@@ -489,7 +470,12 @@ static inline ptr ThreadBitsView(void) {
 // two ui128 is _mm_testz_si128, an SSE4.1 instruction, so binding the SSE poll on nothing but the absence of
 // AVX2 executed an illegal instruction on a Core 2 or an early Athlon 64 X2 before any test began -- and
 // before the pre-flight check that names a missing instruction set could be reached, which an ALU-only run
-// never reaches at all (ISSUES.MD D4). Its reads keep the volatile qualifier, so it needs no barrier
+// never reaches at all (ISSUES.MD D4). Its reads keep the volatile qualifier, so it needs no barrier.
+//
+// It is also the only one of the four that can be defined here: the three vector polls read the map with
+// SSE4.1, AVX and AVX-512 instructions, and this header is included by CPU.cpp, which is compiled at the
+// SSE2 baseline. Each of those therefore lives in the translation unit built for its own instruction set,
+// beside the job kernels of the same width (ISSUES.MD H4)
 inline bool ThreadsRunningScalar(void) {
    ui64 bits = 0;
 
@@ -497,22 +483,9 @@ inline bool ThreadsRunningScalar(void) {
 
    return bits ? true : false;
 }
-inline bool ThreadsRunningAVX512(void) {
-   cui64ptrc bits = (cui64ptrc)ThreadBitsView();
-
-   return !AllFalse((si512&)bits[0], max512);
-}
-inline bool ThreadsRunningAVX(void) {
-   cui64ptrc bits = (cui64ptrc)ThreadBitsView();
-
-   return !(AllFalse(_mm256_loadu_si256((cui256ptr)&bits[0]), max256) && AllFalse(_mm256_loadu_si256((cui256ptr)&bits[4]), max256));
-}
-inline bool ThreadsRunningSSE(void) {
-   cui64ptrc bits = (cui64ptrc)ThreadBitsView();
-
-   return !(AllFalse(_mm_loadu_si128((cui128ptr)&bits[0]), max128) && AllFalse(_mm_loadu_si128((cui128ptr)&bits[2]), max128) &&
-            AllFalse(_mm_loadu_si128((cui128ptr)&bits[4]), max128) && AllFalse(_mm_loadu_si128((cui128ptr)&bits[6]), max128));
-}
+extern bool ThreadsRunningSSE(void);    // CPU_jobs_SSE.cpp
+extern bool ThreadsRunningAVX(void);    // CPU_jobs_AVX.cpp
+extern bool ThreadsRunningAVX512(void); // CPU_jobs_AVX512.cpp
 ///--- Expand beyond 512 cores ---///
 
 typedef HANDLE *const HANDLEptrc;
@@ -1169,48 +1142,12 @@ static void ParseCoreMap(cwchptrc str, ui32 &j, cbool physical) {
 }
 //--- Command-line parsing ---//
 
-// Print computational failure data
-static void Failed(cui64 coreNum, vchptrc threadByte, cui8 unit) {
-   // threadByte addresses the byte holding eight threads' completion bits, so zeroing it told wmain that all
-   // eight had finished: its wait loop could then return while up to seven of them were still writing
-   // value[3] and resArray.iter, and read the results table out from under them. coreNum is
-   // (threadByte << 3) + threadBit, so the failing thread's bit within that byte is coreNum & 0x07
-   cui8 threadMask = ui8(~(1u << (coreNum & 0x07)));
-
-   // The observed value is read from value[3], never value[1]. Every caller in CPU_job_cycles.h copies the
-   // value that failed into value[3] immediately before calling, and value[1] is the *working* plane, which
-   // in memory-backed mode does not hold results at all: its first 40 bytes are the arena pointers p0~p4,
-   // which the RESULTS union overlays on the avx512 member. Cases 0~3 read value[1], so an AVX-512 failure
-   // printed eight pointers reinterpreted as doubles, and the AVX2, SSE and FPU cases printed whatever a
-   // register-resident run had last left in those lanes -- zero, under any 'M', 'B' or preset run. Only the
-   // ALU case, which already read value[3], reported the value the CPU actually produced (ISSUES.MD A8)
-   wprintf(wstrInterface[11], coreNum);
-   switch(unit) {
-   case 0:
-      wprintf(L"%1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f  %s %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f\n",
-         value[2][coreNum].avx512.m512d_f64[0], value[2][coreNum].avx512.m512d_f64[1], value[2][coreNum].avx512.m512d_f64[2], value[2][coreNum].avx512.m512d_f64[3],
-         value[2][coreNum].avx512.m512d_f64[4], value[2][coreNum].avx512.m512d_f64[5], value[2][coreNum].avx512.m512d_f64[6], value[2][coreNum].avx512.m512d_f64[7], wstrInterface[12],
-         value[3][coreNum].avx512.m512d_f64[0], value[3][coreNum].avx512.m512d_f64[1], value[3][coreNum].avx512.m512d_f64[2], value[3][coreNum].avx512.m512d_f64[3],
-         value[3][coreNum].avx512.m512d_f64[4], value[3][coreNum].avx512.m512d_f64[5], value[3][coreNum].avx512.m512d_f64[6], value[3][coreNum].avx512.m512d_f64[7]);
-      break;
-   case 1:
-      wprintf(L"%1.9f, %1.9f, %1.9f, %1.9f  %s %1.9f, %1.9f, %1.9f, %1.9f\n",
-         value[2][coreNum].avx.m256d_f64[0], value[2][coreNum].avx.m256d_f64[1], value[2][coreNum].avx.m256d_f64[2], value[2][coreNum].avx.m256d_f64[3], wstrInterface[12],
-         value[3][coreNum].avx.m256d_f64[0], value[3][coreNum].avx.m256d_f64[1], value[3][coreNum].avx.m256d_f64[2], value[3][coreNum].avx.m256d_f64[3]);
-      break;
-   case 2:
-      wprintf(L"%1.9f, %1.9f  %s %1.9f, %1.9f\n",
-         value[2][coreNum].sse.m128d_f64[0], value[2][coreNum].sse.m128d_f64[1], wstrInterface[12], value[3][coreNum].sse.m128d_f64[0], value[3][coreNum].sse.m128d_f64[1]);
-      break;
-   case 3:
-      wprintf(L"%1.9f  %s %1.9f\n", value[2][coreNum].fpu, wstrInterface[12], value[3][coreNum].fpu);
-      break;
-   case 4:
-      wprintf(L"%lld  %s %lld\n", value[2][coreNum].alu, wstrInterface[12], value[3][coreNum].alu);
-   }
-   _InterlockedAnd8(threadByte, threadMask);
-   return;
-}
+/// Prints computational failure data, and clears the calling thread's completion bit. Defined in CPU.cpp:
+/// every caller is a job cycle, and those now live in the four CPU_jobs_*.cpp units (ISSUES.MD H4, H9)
+/// @param coreNum Index of the thread that found the mismatch
+/// @param threadByte Byte of the completion bitmap holding that thread's bit
+/// @param unit Unit whose value[3] member the caller has just written; 0=AVX-512, 1=AVX2, 2=SSE, 3=FPU, 4=ALU
+extern void Failed(cui64 coreNum, vchptrc threadByte, cui8 unit);
 
 ///--- Add vector versions ---///
 // Evaluate integrity of results.

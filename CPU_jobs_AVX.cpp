@@ -10,13 +10,32 @@
 #include "typedefs.h"
 #include "CPU_build.h"
 
+// This unit must be compiled with /arch:AVX2, in every configuration. MSVC accepts an AVX2 intrinsic whatever
+// /arch is set to, so a unit compiled at the SSE2 baseline still produces the right answer -- but it will not
+// use VEX encoding for the code around the intrinsics, which costs an AVX-to-SSE transition penalty on every
+// boundary, and it leaves the compiler allocating registers for an instruction set it has been told the
+// target does not have. Both per-file overrides in CPU.vcxproj used to carry Condition="…=='Release|x64'",
+// which is exactly the Debug build this rejects (ISSUES.MD H3). The complementary guard -- that the scalar
+// unit is never raised -- is in CPU_jobs_standard.cpp (H1)
+#if !defined(__AVX2__)
+   #error "CPU_jobs_AVX.cpp must be compiled with /arch:AVX2. See CPU.vcxproj and ISSUES.MD H3."
+#endif
+
+// The AVX2 job cycles, family cross-check, arena seeding and completion-bitmap poll live here rather than in
+// CPU.cpp, beside the kernels of their own width, so that no 256-bit instruction is emitted from a file
+// compiled at the StreamingSIMDExtensions2 baseline (ISSUES.MD H4)
+#include "CPU_job_cycles.h"
+
 #ifndef UNLOOPx4
 #define UNLOOPx4(code) code code code code
 #endif
 
-#ifndef _mm256_abs_pd
+// SIMD management.h, reached through the include above, defines _mm256_abs_pd as well -- but only for a unit
+// compiled below AVX2, which the #error above has already refused. The #undef is here for the same reason as
+// the one in CPU_jobs_SSE.cpp: the definition this unit's kernels are written against is this one, and it is
+// a bare #define over there, so an #ifndef alone would inherit whichever spelling arrived first
+#undef  _mm256_abs_pd
 #define _mm256_abs_pd(input) _mm256_and_pd((fl64x4&)_mm256_set1_epi64x(0x07FFFFFFFFFFFFFFF), (input))
-#endif
 
 // ISSUES.MD J1/J2: the shift alternates direction across the loop -- the predicate was 'i < 32' against a
 // counter that never exceeds 15, so the right-shift arm was unreachable and an entire instruction class
@@ -233,3 +252,176 @@ void JobMemALU_AVX2(fl64x4ptrc x, si64ptrc y) {
    x[1] = _mm256_mul_pd(x[1], acc[1]);
    x[3] = _mm256_mul_pd(x[3], acc[3]);
 }
+
+//-- Bit-exact result comparison --//
+// XOR the two operands and test the difference against zero, over the integer domain: a golden value is a bit
+// pattern, and every other spelling of "equal" this codebase has reached for compared something less than
+// every bit -- _mm256_testc_pd, which this replaced, examines each lane's sign bit and nothing else, and
+// every job output is positive. CPU_job_cycles.h carries the whole of that reasoning (ISSUES.MD A11)
+
+/// @brief  Compare a 256-bit (AVX2) result against its golden value
+/// @param  result:   Value produced by the job kernel
+/// @param  expected: Reference value loaded from "cpu.values"
+/// @return true if every bit of both operands is identical
+static inline cbool ResultsMatch(cfl64x4 result, cfl64x4 expected) {
+   csi256 delta = _mm256_xor_si256(_mm256_castpd_si256(result), _mm256_castpd_si256(expected));
+
+   return _mm256_testz_si256(delta, delta);
+}
+
+//--- Thread completion bitmap ---//
+// The 256-bit view of the map: four ui64 per step, so the two steps below cover all 64 bytes of it. Stepping
+// one element per vector re-read bits already examined and left bytes 48~63 unchecked (ISSUES.MD D3)
+bool ThreadsRunningAVX(void) {
+   cui64ptrc bits = (cui64ptrc)ThreadBitsView();
+
+   return !(AllFalse(_mm256_loadu_si256((cui256ptr)&bits[0]), max256) && AllFalse(_mm256_loadu_si256((cui256ptr)&bits[4]), max256));
+}
+//--- Thread completion bitmap ---//
+
+//--- Job kernel cross-check ---//
+
+// The AVX2 family. ValidateKernelFamilies (CPU.h) reaches this only on a CPU reporting AVX2, exactly as
+// RunGoldenLadder gates the ladder itself
+cui8 ValidateFamilyAVX2(cRESULTS &seed) {
+   fl64x4 refAVX2, memAVX2[4], regAVX2;
+   si64   refALU,  memALU[4],  regALU;
+   ui8    k;
+
+   refALU  = seed.alu;   JobALU(refALU);
+   refAVX2 = seed.avx;   JobAVX2(refAVX2);
+
+   regAVX2 = seed.avx;   regALU = seed.alu;   JobALU_AVX2(regAVX2, regALU);
+   if(memcmp(&regAVX2, &refAVX2, sizeof(fl64x4)) || regALU != refALU) return 8;
+
+   for(k = 0; k < 4; ++k) memAVX2[k] = seed.avx;
+   JobMemAVX2(memAVX2);
+   for(k = 0; k < 4; ++k) if(memcmp(&memAVX2[k], &refAVX2, sizeof(fl64x4))) return 9;
+
+   for(k = 0; k < 4; ++k) { memAVX2[k] = seed.avx;   memALU[k] = seed.alu; }
+   JobMemALU_AVX2(memAVX2, memALU);
+   for(k = 0; k < 4; ++k) if(memcmp(&memAVX2[k], &refAVX2, sizeof(fl64x4)) || memALU[k] != refALU) return 10;
+
+   return 0;
+}
+//--- Job kernel cross-check ---//
+
+//--- Arena seeding ---//
+
+void SeedRecordsAVX2(fl64x4ptrc records, cui64 count, cfl64x4 &seed) {
+   for(ui64 i = 0; i < count; ++i) records[i] = seed;
+}
+//--- Arena seeding ---//
+
+//--- Job cycles ---//
+
+cui8 JobCycleAVX2(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+   value[1][coreNum].avx = value[0][coreNum].avx;
+   JobAVX2(value[1][coreNum].avx);
+   if(!ResultsMatch(value[1][coreNum].avx, value[2][coreNum].avx)) {
+      value[3][coreNum].avx = value[1][coreNum].avx;
+      Failed(coreNum, threadByte, 1);
+      return 1;
+   }
+   return 0;
+}
+
+cui8 JobCycleMemAVX2(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+   value[1][coreNum].p1[offset]     = value[0][coreNum].avx;
+   value[1][coreNum].p1[offset + 1] = value[0][coreNum].avx;
+   value[1][coreNum].p1[offset + 2] = value[0][coreNum].avx;
+   value[1][coreNum].p1[offset + 3] = value[0][coreNum].avx;
+   JobMemAVX2(&value[1][coreNum].p1[offset]);
+   if(!ResultsMatch(value[1][coreNum].p1[offset], value[2][coreNum].avx)) {
+      value[3][coreNum].avx = value[1][coreNum].p1[offset];
+      Failed(coreNum, threadByte, 1);
+      return 1;
+   }
+   if(!ResultsMatch(value[1][coreNum].p1[offset + 1], value[2][coreNum].avx)) {
+      value[3][coreNum].avx = value[1][coreNum].p1[offset + 1];
+      Failed(coreNum, threadByte, 1);
+      return 1;
+   }
+   if(!ResultsMatch(value[1][coreNum].p1[offset + 2], value[2][coreNum].avx)) {
+      value[3][coreNum].avx = value[1][coreNum].p1[offset + 2];
+      Failed(coreNum, threadByte, 1);
+      return 1;
+   }
+   if(!ResultsMatch(value[1][coreNum].p1[offset + 3], value[2][coreNum].avx)) {
+      value[3][coreNum].avx = value[1][coreNum].p1[offset + 3];
+      Failed(coreNum, threadByte, 1);
+      return 1;
+   }
+   return 0;
+}
+
+cui8 JobCycleALU_AVX2(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+   value[1][coreNum].avx = value[0][coreNum].avx;
+   value[1][coreNum].alu = value[0][coreNum].alu;
+   JobALU_AVX2(value[1][coreNum].avx, value[1][coreNum].alu);
+   if(value[1][coreNum].alu != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].alu;
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   if(!ResultsMatch(value[1][coreNum].avx, value[2][coreNum].avx)) {
+      value[3][coreNum].avx = value[1][coreNum].avx;
+      Failed(coreNum, threadByte, 1);
+      return 1;
+   }
+   return 0;
+}
+
+cui8 JobCycleMemALU_AVX2(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+   value[1][coreNum].p1[offset]     = value[0][coreNum].avx;
+   value[1][coreNum].p1[offset + 1] = value[0][coreNum].avx;
+   value[1][coreNum].p1[offset + 2] = value[0][coreNum].avx;
+   value[1][coreNum].p1[offset + 3] = value[0][coreNum].avx;
+   value[1][coreNum].p4[offset]     = value[0][coreNum].alu;
+   value[1][coreNum].p4[offset + 1] = value[0][coreNum].alu;
+   value[1][coreNum].p4[offset + 2] = value[0][coreNum].alu;
+   value[1][coreNum].p4[offset + 3] = value[0][coreNum].alu;
+   JobMemALU_AVX2(&value[1][coreNum].p1[offset], &value[1][coreNum].p4[offset]);
+   if(!ResultsMatch(value[1][coreNum].p1[offset], value[2][coreNum].avx)) {
+      value[3][coreNum].avx = value[1][coreNum].p1[offset];
+      Failed(coreNum, threadByte, 1);
+      return 1;
+   }
+   if(!ResultsMatch(value[1][coreNum].p1[offset + 1], value[2][coreNum].avx)) {
+      value[3][coreNum].avx = value[1][coreNum].p1[offset + 1];
+      Failed(coreNum, threadByte, 1);
+      return 1;
+   }
+   if(!ResultsMatch(value[1][coreNum].p1[offset + 2], value[2][coreNum].avx)) {
+      value[3][coreNum].avx = value[1][coreNum].p1[offset + 2];
+      Failed(coreNum, threadByte, 1);
+      return 1;
+   }
+   if(!ResultsMatch(value[1][coreNum].p1[offset + 3], value[2][coreNum].avx)) {
+      value[3][coreNum].avx = value[1][coreNum].p1[offset + 3];
+      Failed(coreNum, threadByte, 1);
+      return 1;
+   }
+   if(value[1][coreNum].p4[offset] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   if(value[1][coreNum].p4[offset + 1] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset + 1];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   if(value[1][coreNum].p4[offset + 2] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset + 2];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   if(value[1][coreNum].p4[offset + 3] != value[2][coreNum].alu) {
+      value[3][coreNum].alu = value[1][coreNum].p4[offset + 3];
+      Failed(coreNum, threadByte, 4);
+      return 1;
+   }
+   return 0;
+}
+//--- Job cycles ---//

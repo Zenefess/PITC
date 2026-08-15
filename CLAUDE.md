@@ -39,6 +39,33 @@ Two build settings look like mistakes but are deliberate — **do not "fix" them
   must never carry such an override — it holds the scalar ALU/FPU path that has to run on any x64 CPU — and
   now `#error`s if one is applied (ISSUES.MD H1).
 
+**No per-file setting carries a `Condition`.** Both x64 configurations apply all six of them, so `Debug|x64`
+compiles the AVX2 unit with `/arch:AVX2` and the AVX-512 unit with `/arch:AVX512` exactly as `Release|x64`
+does. They were `Condition="…=='Release|x64'"`, which left both vector units compiling at the SSE2 baseline in
+the debug build: MSVC accepts an intrinsic whatever `/arch` says, so the answers were right, but the code
+around them could not be VEX-encoded and paid an AVX-to-SSE transition at every boundary (ISSUES.MD H3). The
+requirement is now enforced from the sources as well — `CPU_jobs_AVX.cpp` `#error`s unless `__AVX2__` is
+defined and `CPU_jobs_AVX512.cpp` unless `__AVX512F__` is, the complement of H1's guard on the baseline unit.
+`CPU_jobs_SSE.cpp` has no such guard because MSVC has no `/arch` for SSE4.1: that unit compiles at the
+baseline by construction, and its one SSE4.1 instruction is gated on `cfg.sys.cpuSSE4_1` at run time instead.
+`Optimization=Custom` is likewise unconditional; `Debug|x64` sets no `Optimization` of its own, so it emits no
+`/O` switch either way and the change is one of spelling rather than of code.
+
+The **`_mm_abs_pd` and `_mm256_abs_pd` macros in the SSE and AVX2 units are `#undef`ined before being
+defined**, and must stay that way. Those units now include `CPU.h`, which reaches `SIMD management.h`, and
+that header defines `_mm_abs_pd` itself for any unit compiled below AVX2 — as `_mm_and_epi64`, an AVX-512VL
+instruction (ISSUES.MD I1). It is a bare `#define`, so an `#ifndef` inherits it silently; the SSE kernels
+would then carry an EVEX opcode into every CPU this program dispatches them to.
+
+Two settings in `Release|x64` are gone and should not come back: `WholeProgramOptimization` (`/GL` and, from
+the `Label="Configuration"` property group, `/LTCG`), which defers to link time precisely the optimisation
+`/Od` exists to prevent, and `EnableFiberSafeOptimizations` (`/GT`), which does nothing here. `AssemblyDebug`
+is gone from both link groups as a managed-code option, and the per-file `FavorSizeOrSpeed=Size` from
+`CPU_jobs_standard.cpp` as inert under `/Od` (ISSUES.MD H5). `Release|x64` states `SDLCheck`,
+`BufferSecurityCheck` and `ControlFlowGuard=Guard` explicitly, because a tool that parses user input should
+not ship without stack cookies (H6); `Debug|x64` carries the first two and not CFG, being an ASAN build that
+is never shipped.
+
 Two settings are load-bearing for reproducibility and must stay pinned in **every** configuration:
 `<FloatingPointModel>Strict</FloatingPointModel>` and `<FloatingPointExceptions>false</FloatingPointExceptions>`.
 `/fp:strict` fixes the rounding and forbids the compiler from contracting `a*b + c` into an FMA — `JobFPU`
@@ -79,8 +106,12 @@ run reported the difference as a CPU fault. It runs one seed through every kerne
 requires each memory-array and combined variant to reproduce its register-resident counterpart **byte for
 byte** — `memcmp`, never an arithmetic comparison, for the reason the bit-exactness note at the end of this
 file gives. Each `JobMem*` kernel is handed four records carrying the same seed and all four must come back
-equal, so the record indexing is checked alongside the arithmetic. **Add a `Job*` family and it must be added
-to `ValidateKernelFamilies`, to `wstrKernelName`, and to `JobCycle`.**
+equal, so the record indexing is checked alongside the arithmetic. `ValidateKernelFamilies` is a dispatcher:
+the checks themselves are four `ValidateFamily*` functions, one per `CPU_jobs_*.cpp`, because the AVX2 and
+AVX-512 halves move values of those widths and may not be compiled at the baseline (ISSUES.MD H4). Each
+returns the `wstrKernelName` index of the first kernel that disagreed, and each derives its own ALU reference
+rather than being handed one, so it is a complete statement of its own family. **Add a `Job*` family and it
+must be added to its unit's `ValidateFamily*`, to `wstrKernelName`, and to `JobCycle`.**
 
 Exit codes are meaningful and documented in `en-GB.h` (`wstrInstructions_English`): negative = error,
 `0` = stability test completed, `1` = values file written, `2` = instructions displayed. `-11` … `-18` are the
@@ -133,7 +164,8 @@ them before the blocks are read, and every read and write is checked for length,
 reaching the end of a file as success and `WriteFile` reports a partial write the same way (ISSUES.MD B6).
 **Changing `VALUES_HEADER`, `RESULTS`, or `MAX_THREADS` means raising `VALUES_FILE_VERSION` with it.**
 
-The four planes (`value[4][MAX_THREADS]`, declared in `CPU.h`) each carry a fixed role:
+The four planes (`value[4][MAX_THREADS]`, declared in `CPU.h` and defined in `CPU.cpp`) each carry a fixed
+role:
 
 | Plane | Role at test time |
 |-------|-------------------|
@@ -174,6 +206,28 @@ that had already failed (ISSUES.MD B7). **Nothing but a result belongs in a resu
 between the workers and `wmain` needs storage of its own and an interlocked write, so that it is ordered
 ahead of the completion bit `wmain` is waiting on.
 
+### Where the globals live
+
+**Every object at namespace scope is declared `extern` in a header and defined once, in `CPU.cpp`.** That is
+`timer`, `cfg`, `threadData`, `value`, `threadBits`, `wstrOut`, `resArray`, `generateError` and `wstrLang`
+from `CPU.h`, the three language pointers from `translations.h`, and the `JobCycle[2][32]` dispatch table from
+`CPU_job_cycles.h`; `Failed` is a function definition in `CPU.cpp` for the same reason. The definitions sit
+together at the top of `CPU.cpp`, above `wmain`, and the declaration in the header names the `declare*` macro
+that defines each pointer, because the macro carries the allocation with it and the two have to be changed
+together.
+
+They were defined in the headers, which is why the program could never grow a second translation unit
+(ISSUES.MD H9). Some of them would have been duplicate symbols; the rest — everything the `declare*` macros
+produce, being `dataType *const` and so internally linked — would have been *worse than* a link error, giving
+each unit a private copy of the result planes, the thread table and the completion bitmap that the workers and
+`wmain` compare and signal through. The `L` option's three pointers are the same hazard: they are written at
+run time, and a per-unit copy is a language change one half of the program never sees.
+
+The immutable tables are the exception, and are `inline` rather than `extern`: `wstrUnitsCPU`, `wstrSyncCPU`,
+`wstrPass`, `wstrKernelName` and the two byte-order marks. `inline` makes them one entity instead of a copy
+per unit while leaving them beside what they describe. **A new mutable global goes in `CPU.cpp`; a new
+immutable table may stay in a header if it is `inline`.**
+
 ### Job kernels: one translation unit per ISA
 
 `CPU_jobs_standard.cpp` (ALU/FPU), `CPU_jobs_SSE.cpp`, `CPU_jobs_AVX.cpp`, `CPU_jobs_AVX512.cpp` each define
@@ -183,6 +237,18 @@ the same eight-function family, declared `extern` in `CPU.h`:
 Job<UNIT>(x)              Job ALU_<UNIT>(x, y)         # register-resident
 JobMem<UNIT>(ptr)         JobMemALU_<UNIT>(ptr, ptr)   # memory-array variants, 4 records per call
 ```
+
+**Everything else of that unit's width lives in the same file**, and that is the point of the split: each unit
+also holds its `ResultsMatch` overload, its four (or six, for the scalar unit) `JobCycle*` wrappers, its
+`ValidateFamily*` cross-check, its `SeedRecords*` arena pass, and — for the three vector units — its
+`ThreadsRunning*` completion-bitmap poll. All of those used to sit in headers included by `CPU.cpp`, which
+compiles at the SSE2 baseline in every configuration, so the file holding the option parser and the results
+table emitted `_mm512_xor_si512`, `_mm512_test_epi64_mask` and a 512-bit move per AVX-512 job cycle
+(ISSUES.MD H4). Nothing failed at run time — the ISA gate in `wmain` keeps those paths off CPUs that cannot
+execute them — but the isolation this section describes was true of the kernels alone. It is now true of the
+whole program: `CPU.obj` contains no `ymm` or `zmm` operand and no `ptest`. **Anything added that moves or
+compares a value wider than 64 bits belongs in the unit for its width, not in `CPU.h`, `CPU.cpp` or
+`CPU_methods.h`.**
 
 Every kernel is `for(i < 16) { UNLOOPx4( ...4 chained ops... ) }` — the `UNLOOPx4` macro is manual unrolling,
 and the arithmetic is deliberately chosen to be latency-bound and irreducible (chained `sqrt`/divide for FP,
@@ -216,8 +282,10 @@ eighteen kernels still agree afterwards.
 
 ### Dispatch: `JobCycle[2][32]`
 
-`CPU_job_cycles.h` wraps each kernel in a `JobCycle*` function that seeds the working values from `value[0]`,
-runs the kernel, compares against `value[2]`, and on mismatch records `value[3]` and calls `Failed()`.
+Each kernel is wrapped in a `JobCycle*` function that seeds the working values from `value[0]`, runs the
+kernel, compares against `value[2]`, and on mismatch records `value[3]` and calls `Failed()`. The wrappers are
+defined in the four `CPU_jobs_*.cpp` units (H4) and declared in `CPU_job_cycles.h`, which also states the
+rules the table below keeps; the table itself is defined in `CPU.cpp` with the other globals (H9).
 **`Failed()`'s third argument must name the unit whose `value[3]` member the wrapper just wrote**
 (0=AVX-512, 1=AVX2, 2=SSE, 3=FPU, 4=ALU), because that argument is what selects the format the mismatch is
 printed in and the lanes it is read from. `JobCycleMemFPU` passed 4 for all four of its records, so an FPU
@@ -329,7 +397,9 @@ is byte-wide and interlocked**: a thread clears its own bit via `_InterlockedAnd
 sets a bit with `SetThreadRunning` (`_InterlockedOr8`) before spawning. A plain `|=` there was a lost-update
 race against a worker already clearing a different bit of the same byte, which hung the poll below
 (ISSUES.MD D1). `wmain` spins on `ThreadsRunning()` — a reference bound at startup to the widest poll the CPU
-can execute, `ThreadsRunningAVX512/AVX/SSE/Scalar` (`CPU.h`). All four read the *same* 64 bytes: a `ui64`
+can execute, `ThreadsRunningAVX512/AVX/SSE/Scalar`. All four are declared in `CPU.h`, but only the scalar one
+is defined there: each vector poll reads the map with instructions of its own width, so it lives in the
+`CPU_jobs_*.cpp` unit built for that width (ISSUES.MD H4). All four read the *same* 64 bytes: a `ui64`
 array means a 512-bit view spans 8 elements, a 256-bit view 4 and a 128-bit view 2, so the AVX2 poll steps
 `[0], [4]` and the SSE poll `[0], [2], [4], [6]`. Stepping one element per vector re-read bits already
 examined and left the tail of the map unchecked (ISSUES.MD D3). `MAX_THREADS_WORDS`, not `MAX_THREADS_BYTES`,
@@ -491,9 +561,16 @@ that owns the pointers, exactly as `GLOBAL_CFG`'s destructor owns its bitmaps (C
 one command line frees `resArray.iter` before allocating it again.
 
 Of the five pointers handed to each thread, `p0`–`p3` are four views of the *same* arena address at different
-element strides (only `p4` is advanced past them, and only for the `ALU_` combinations). The seeding loop must
+element strides (only `p4` is advanced past them, and only for the `ALU_` combinations). The seeding pass must
 therefore write no more than one of them, which is why `wmain` rejects a unit selection naming more than one
 of FPU/SSE4.1/AVX2/AVX-512 (ISSUES.MD C1).
+
+The pass itself is one `SeedRecords<UNIT>` call per selected unit rather than a loop in `wmain`, because
+filling a slice is a store of the unit's own width repeated — `p0[os] = value[0][k].avx512` is a 512-bit move
+— and `wmain` compiles at the SSE2 baseline. Each lives in its unit's translation unit with everything else of
+that width (ISSUES.MD H4). The seed is passed **by reference** for the three vector widths: MSVC passes a
+vector of more than 16 bytes by address anyway, and a reference says so without the caller having to form the
+value in a register it may not have.
 
 ### Configuration bit-fields
 
@@ -621,7 +698,10 @@ manual. The rules that bite most often when editing here:
 
 `translations.h` selects a language by pointing three globals at one header's string tables; `en-GB.h` is the
 only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[41]`
-and `wstrInterface_*[13]`, then extending both `translations.h` and the `L` case in `CPU.cpp`.
+and `wstrInterface_*[13]`, then extending both `translations.h` and the `L` case in `CPU.cpp`. The three
+globals are *declared* in `translations.h` and defined, pointing at English, in `CPU.cpp`: the `L` option
+writes them at run time, so a definition in the header would have given each translation unit a copy and left
+the four `CPU_jobs_*.cpp` units reading a language nobody selected (ISSUES.MD H9).
 
 The `L` option's selection logic was inverted — `lstrcmpiW` returns 0 when the codes *match*, so testing it
 directly selected a language exactly when the argument did not name it, and every input resolved to English
@@ -655,11 +735,19 @@ Verify against current source before relying on any of these:
   frees the arena under them on the way out. The process is exiting with an error either way; every path that
   goes on to *read* a result joins first (ISSUES.MD D8).
 - Cache-targeting (`I1`/`I2`/`I3`) is accepted, displayed, and does nothing.
+- **The program is no longer confined to one translation unit** (ISSUES.MD H9), and the five it now has are
+  compiled at four different instruction sets. A new file has to be added to `CPU.vcxproj`'s `ClCompile` list
+  with the ISA and `Optimization` metadata of the unit it belongs beside; a new *header* still has to be added
+  to the `ClInclude` list, which the six vendored headers are still absent from (H8).
+- **`memory management.h` carries AVX2 and AVX-512 copy and stream helpers**, and `CPU.h` includes it, so a
+  future caller of `Copy512`/`Stream512` from `CPU.cpp` would put an EVEX opcode back into the baseline unit.
+  They are `inline` and unused today, so nothing is emitted; the guard belongs upstream (ISSUES.MD I section).
 
 ### Result comparison must stay bit-exact
 
-`CPU_job_cycles.h` defines three `ResultsMatch` overloads (`fl64x2`, `fl64x4`, `fl64x8`) that XOR the
-computed and expected vectors and test the difference against zero. **Every** SSE, AVX2 and AVX-512 job
+Each of the three vector units defines one `ResultsMatch` overload — `fl64x2` in `CPU_jobs_SSE.cpp`, `fl64x4`
+in `CPU_jobs_AVX.cpp`, `fl64x8` in `CPU_jobs_AVX512.cpp`, each beside the job cycles that call it (ISSUES.MD
+H4) — that XORs the computed and expected vectors and tests the difference against zero. **Every** SSE, AVX2 and AVX-512 job
 cycle goes through them, and the ALU and FPU paths compare raw scalars with `!=`, so all five units now
 answer the same question: are these two bit patterns identical?
 Do not substitute `_mm_testc_si128` or `_mm256_testc_pd` here, and do not reach for `AllTrue` in

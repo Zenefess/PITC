@@ -1,6 +1,6 @@
 /************************************************************
  * File: CPU.cpp                        Created: 2025/01/21 *
- *                                    Last mod.: 2025/04/16 *
+ *                                    Last mod.: 2026/08/15 *
  *                                                          *
  * Desc: Pulsed integrity tests for CPUs.                   *
  *                                                          *
@@ -8,9 +8,91 @@
  *                                                          *
  * MIT license             Copyright (c) David William Bull *
  ************************************************************/
-#pragma warning(disable:4996)
-
 #include "CPU_methods.h"
+
+//--- Global variables ---//
+// Every object this program holds at namespace scope is defined here, and declared in CPU.h -- or, for the
+// three language tables, in translations.h. A definition in a header hands the second translation unit to
+// include it either a duplicate symbol at link time or, where the object is const and so internally linked, a
+// private copy of it; and the storage below is precisely what the worker threads and wmain compare and signal
+// through, so a private copy of it is a program whose halves cannot see each other (ISSUES.MD H9). The
+// initialisation order is the order of the definitions, which is all one translation unit has to guarantee:
+// none of them reads another as it is constructed
+al64 CLASS_TIMER timer;
+     GLOBAL_CFG  cfg;
+
+     declare1d64z(THREAD_CFG, threadData, MAX_THREADS);
+     declare2d64z(RESULTS, value, 4, MAX_THREADS); // Result values: 0==Input, 1=Processed, 2=Output, 3=Error
+     declare1d64z(vui64, threadBits, MAX_THREADS_WORDS);
+     declare1d64z(wchar, wstrOut, 1024);
+     RESULTS_ARRAYS resArray;
+     vsi8  generateError = 0;
+     wchar wstrLang[6]   = L"en-GB";
+
+// Default: English
+cwchptr     wstrInstructions = wstrInstructions_English;
+cwchptrcptr wstrMessage      = wstrMessage_English;
+cwchptrcptr wstrInterface    = wstrInterface_English;
+
+// Job cycle functions array. [0][]==Without memory, [1][]==With memory. Each entry is defined in the
+// translation unit of the kernel it wraps (ISSUES.MD H4); CPU_job_cycles.h declares them and states the rules
+// this table has to keep, of which the first is that all 32 indices of the (procUnits & 0x1F) domain are
+// covered, because ComputationPulse does not range-check the index it dispatches through
+al64 cui8 (*JobCycle[2][32])(cui64 coreNum, csi64 offset, vchptrc threadByte) = {
+ { JobCycleALU,       JobCycleALU,           JobCycleFPU,       JobCycleALU_FPU,       JobCycleSSE,       JobCycleALU_SSE,       JobCycleSSE,       JobCycleALU_SSE,
+   JobCycleAVX2,      JobCycleALU_AVX2,      JobCycleAVX2,      JobCycleALU_AVX2,      JobCycleAVX2,      JobCycleALU_AVX2,      JobCycleAVX2,      JobCycleALU_AVX2,
+   JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,
+   JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512, },
+ { JobCycleMemALU,    JobCycleMemALU,        JobCycleMemFPU,    JobCycleMemALU_FPU,    JobCycleMemSSE,    JobCycleMemALU_SSE,    JobCycleMemSSE,    JobCycleMemALU_SSE,
+   JobCycleMemAVX2,   JobCycleMemALU_AVX2,   JobCycleMemAVX2,   JobCycleMemALU_AVX2,   JobCycleMemAVX2,   JobCycleMemALU_AVX2,   JobCycleMemAVX2,   JobCycleMemALU_AVX2,
+   JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512,
+   JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512 }
+};
+//--- Global variables ---//
+
+// Print computational failure data. Declared in CPU.h and called from all four CPU_jobs_*.cpp units, which is
+// why it is a definition here rather than a static function in the header (ISSUES.MD H4, H9)
+void Failed(cui64 coreNum, vchptrc threadByte, cui8 unit) {
+   // threadByte addresses the byte holding eight threads' completion bits, so zeroing it told wmain that all
+   // eight had finished: its wait loop could then return while up to seven of them were still writing
+   // value[3] and resArray.iter, and read the results table out from under them. coreNum is
+   // (threadByte << 3) + threadBit, so the failing thread's bit within that byte is coreNum & 0x07
+   cui8 threadMask = ui8(~(1u << (coreNum & 0x07)));
+
+   // The observed value is read from value[3], never value[1]. Every caller copies the value that failed into
+   // value[3] immediately before calling, and value[1] is the *working* plane, which in memory-backed mode
+   // does not hold results at all: its first 40 bytes are the arena pointers p0~p4, which the RESULTS union
+   // overlays on the avx512 member. Cases 0~3 read value[1], so an AVX-512 failure printed eight pointers
+   // reinterpreted as doubles, and the AVX2, SSE and FPU cases printed whatever a register-resident run had
+   // last left in those lanes -- zero, under any 'M', 'B' or preset run. Only the ALU case, which already
+   // read value[3], reported the value the CPU actually produced (ISSUES.MD A8)
+   wprintf(wstrInterface[11], coreNum);
+   switch(unit) {
+   case 0:
+      wprintf(L"%1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f  %s %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f\n",
+         value[2][coreNum].avx512.m512d_f64[0], value[2][coreNum].avx512.m512d_f64[1], value[2][coreNum].avx512.m512d_f64[2], value[2][coreNum].avx512.m512d_f64[3],
+         value[2][coreNum].avx512.m512d_f64[4], value[2][coreNum].avx512.m512d_f64[5], value[2][coreNum].avx512.m512d_f64[6], value[2][coreNum].avx512.m512d_f64[7], wstrInterface[12],
+         value[3][coreNum].avx512.m512d_f64[0], value[3][coreNum].avx512.m512d_f64[1], value[3][coreNum].avx512.m512d_f64[2], value[3][coreNum].avx512.m512d_f64[3],
+         value[3][coreNum].avx512.m512d_f64[4], value[3][coreNum].avx512.m512d_f64[5], value[3][coreNum].avx512.m512d_f64[6], value[3][coreNum].avx512.m512d_f64[7]);
+      break;
+   case 1:
+      wprintf(L"%1.9f, %1.9f, %1.9f, %1.9f  %s %1.9f, %1.9f, %1.9f, %1.9f\n",
+         value[2][coreNum].avx.m256d_f64[0], value[2][coreNum].avx.m256d_f64[1], value[2][coreNum].avx.m256d_f64[2], value[2][coreNum].avx.m256d_f64[3], wstrInterface[12],
+         value[3][coreNum].avx.m256d_f64[0], value[3][coreNum].avx.m256d_f64[1], value[3][coreNum].avx.m256d_f64[2], value[3][coreNum].avx.m256d_f64[3]);
+      break;
+   case 2:
+      wprintf(L"%1.9f, %1.9f  %s %1.9f, %1.9f\n",
+         value[2][coreNum].sse.m128d_f64[0], value[2][coreNum].sse.m128d_f64[1], wstrInterface[12], value[3][coreNum].sse.m128d_f64[0], value[3][coreNum].sse.m128d_f64[1]);
+      break;
+   case 3:
+      wprintf(L"%1.9f  %s %1.9f\n", value[2][coreNum].fpu, wstrInterface[12], value[3][coreNum].fpu);
+      break;
+   case 4:
+      wprintf(L"%lld  %s %lld\n", value[2][coreNum].alu, wstrInterface[12], value[3][coreNum].alu);
+   }
+   _InterlockedAnd8(threadByte, threadMask);
+   return;
+}
 
 csi32 wmain(csi32 argc, cwchptrc argv[]) {
    VALUES_HEADER header;
@@ -694,7 +776,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    if(resArray.blockSize[0] || resArray.blockSize[1]) {
       MEMORYSTATUSEX memStatus = { ui32(sizeof(MEMORYSTATUSEX)) };
       cbool memStatusValid     = GlobalMemoryStatusEx(&memStatus) ? true : false;
-      ui64  os, bos, recSize, vecUnits;
+      ui64  bos, recSize, vecUnits;
       // l walks a thread class, whose population is an si16: as a ui8 it wrapped at 256 and the loop below
       // could not terminate, which the 64-virtual-core ceiling was all that kept out of reach (ISSUES.MD C11)
       si16  l;
@@ -771,13 +853,16 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             value[1][k].p2 = &resArray.sse[bos];
             value[1][k].p3 = &resArray.fpu[bos];
             value[1][k].p4 = &resArray.alu[bos];
-            for(os = 0; os < resArray.records[m]; ++os) {
-               if(cfg.procUnits & 0x010) value[1][k].p0[os] = value[0][k].avx512;
-               if(cfg.procUnits & 0x08)  value[1][k].p1[os] = value[0][k].avx;
-               if(cfg.procUnits & 0x04)  value[1][k].p2[os] = value[0][k].sse;
-               if(cfg.procUnits & 0x02)  value[1][k].p3[os] = value[0][k].fpu;
-               if(cfg.procUnits & 0x01)  value[1][k].p4[os] = value[0][k].alu;
-            }
+            // Filling a slice is a store of the unit's own width repeated -- 'p0[os] = value[0][k].avx512'
+            // is a 512-bit move -- so each unit's pass is a call into the translation unit built for that
+            // unit, and this file emits none of them (ISSUES.MD H4). At most two of the five run: wmain has
+            // rejected any selection naming more than one of FPU/SSE4.1/AVX2/AVX-512 by here, and the ALU
+            // sub-array p4 addresses is the only one of the five that is not a view of the same records
+            if(cfg.procUnits & 0x010) SeedRecordsAVX512(value[1][k].p0, resArray.records[m], value[0][k].avx512);
+            if(cfg.procUnits & 0x08)  SeedRecordsAVX2  (value[1][k].p1, resArray.records[m], value[0][k].avx);
+            if(cfg.procUnits & 0x04)  SeedRecordsSSE   (value[1][k].p2, resArray.records[m], value[0][k].sse);
+            if(cfg.procUnits & 0x02)  SeedRecordsFPU   (value[1][k].p3, resArray.records[m], value[0][k].fpu);
+            if(cfg.procUnits & 0x01)  SeedRecordsALU   (value[1][k].p4, resArray.records[m], value[0][k].alu);
          }
    }
 
@@ -799,6 +884,16 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    }
 
    printf("\n");
+   // RULE-DEV:C4996 The report below is built with the two-argument swprintf, which MSVC deprecates in favour
+   // of the count-taking ISO form; every call in this region is one, and there is nothing else here that
+   // C4996 has anything to say about. The suppression used to be a bare '#pragma warning(disable:4996)' at
+   // the top of the file, which silenced every deprecation diagnostic in the whole of CPU.cpp -- the parser,
+   // the arena, the thread spawn and the file I/O included -- so a deprecated call added anywhere in it would
+   // have compiled without a word. It is now pushed and popped around the two regions that need it, which is
+   // this one and the results table below (ISSUES.MD H10). The calls themselves are unbounded, which is a
+   // separate defect and a separate entry (C7); wstrOutput is sized for the widest report a run can produce
+#pragma warning(push)
+#pragma warning(disable:4996)
    // Output configuration properties
    c = swprintf(wstrOutput, wstrInterface[0]);
    for(i = 0, j = 0; i < 8; ++i) if(cfg.procUnits & (0x01ull << i)) { c += swprintf(&wstrOutput[c], L" %s", wstrUnitsCPU[i]); ++j; }
@@ -828,6 +923,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          c += swprintf(&wstrOutput[c], L"%c", (mask & cfg.coreMap[i] ? '!' : '.'));
       c += swprintf(&wstrOutput[c], L"\n               ");
    }
+#pragma warning(pop)
    c -= 15;
    // wstrOutput is built at run time, so passing it as the format string makes every '%' it ever comes to
    // hold a conversion specifier reading arguments that were never passed. Nothing can put one there today,
@@ -921,6 +1017,10 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
 
    // Output results
    printf("\n");
+   // RULE-DEV:C4996 The second of the two regions built with the two-argument swprintf; see the note above
+   // the configuration banner
+#pragma warning(push)
+#pragma warning(disable:4996)
    for(d = c, j = 0; j < 5; ++j) { // Cycle through each processing unit
       mask = 0x01ull << j;
       if(~cfg.procUnits & mask) continue;
@@ -975,6 +1075,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                     si64(fl64(accum) * fl64(unitLanes) * fl64(timer.siFrequency) / fl64(cfg.tics)) >> 10);
    }
    c += swprintf(&wstrOutput[c], L"\n");
+#pragma warning(pop)
 
    // Write outputs to console and/or file
    wprintf(L"%s", &wstrOutput[d]); // A run-time buffer is never a format string (ISSUES.MD F11)
