@@ -74,7 +74,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      9==Staggered fixed-width pulsed stress on all virtual cores. 4 hour duration"
  "\n      0==Synchronised fixed-width pulsed stress on all virtual cores, using ALU & SSE code-paths with 2MB memory per core. 1 hour duration\n\n";
 
-cwchptrc wstrMessage_English[33] = {
+cwchptrc wstrMessage_English[34] = {
    L"\nSuccessfully wrote results to \"%s\" file.\n\n",
    L"\n\nNew \"cpu.values\" file generated.\n\n",
    L"\n\n\"cpu.values\" file not found. Generate via 'W' command-line option.\n\n",
@@ -107,7 +107,8 @@ cwchptrc wstrMessage_English[33] = {
    L"\n\n\"cpu.values\" is corrupt; its contents do not match the hashes in its header. Regenerate via 'W'.\n\n",
    L"\n\nThe %s kernel does not agree with the register-resident kernel for its unit. \"cpu.values\" not written.\n\n",
    L"\nUnable to enumerate the processor topology of the system; error code %u.\n\n",
-   L"\nThe system reported no processor cores; there is nothing to test.\n\n"
+   L"\nThe system reported no processor cores; there is nothing to test.\n\n",
+   L"\nWARNING: The system has %d virtual cores; this build tests at most %d, so %d will not be tested.\n"
 };
 
 cwchptrc wstrInterface_English[13] = {

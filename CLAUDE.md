@@ -89,10 +89,13 @@ written; `-21` is a `cpu.values` this build will not read — bad magic, an unre
 version, a different build or kernel revision, or contents that disagree with the hashes in the header —
 one code shared by five messages, the way `-11` and `-17` already share theirs. `-22` is a job kernel that
 disagrees with the register-resident kernel for its unit, raised by `ValidateKernelFamilies` under `W`.
-`-23` is a processor topology that could not be enumerated — `GetLogicalProcessorInformation` returning
-`FALSE`, or succeeding but naming no processor core — raised before anything else in `wmain` and shared by
-two messages (ISSUES.MD G6). Add a code and the table in `wstrInstructions_English` and the message in
-`wstrMessage_*` have to grow with it.
+`-23` is a processor topology that could not be enumerated — `GetLogicalProcessorInformationEx` failing at
+either of its two calls, a buffer that could not be allocated for it, or a walk that named no processor core
+— raised by `EnumerateTopology` before anything else in `wmain` and shared by three messages (ISSUES.MD G6,
+G3). Add a code and the table in `wstrInstructions_English` and the message in `wstrMessage_*` have to grow
+with it. Not every message is an exit code: `wstrMessage[24]` warns that a thread could not be pinned and
+`wstrMessage[33]` that the machine carries more virtual cores than `MAX_THREADS`, and both let the run
+continue.
 
 ## Architecture
 
@@ -195,35 +198,53 @@ standing between a hand-built `I` string and a wild jump.
 
 ### Thread lifecycle and scheduling
 
-`wmain` (`CPU.cpp`) enumerates topology via `GetLogicalProcessorInformation`, applies the core map and SMT
+`wmain` (`CPU.cpp`) calls `EnumerateTopology` (`CPU.h`) first of all, applies the core map and SMT
 policy (`SetSMTLoading` in `CPU.h`), allocates the arena, then creates one `ComputationPulse`
-(`CPU_methods.h`) per selected virtual core with `_beginthreadex` — **suspended**, so `SetThreadAffinityMask`
+(`CPU_methods.h`) per selected virtual core with `_beginthreadex` — **suspended**, so `SetThreadGroupAffinity`
 lands before the thread executes anything — and resumes it. `_beginthread` is not usable here: the CRT closes
 *its* handle when the thread exits, so the handle must not be retained, let alone passed to an API. The
 handle `_beginthreadex` returns belongs to `wmain`, which closes it after resuming. A creation or resume
 failure aborts the run with `-19` rather than leaving a completion bit no thread will ever clear. Both thread
 entry points are therefore `ui32 __stdcall` and end by returning rather than calling `_endthread`.
 
-The mask a thread is pinned to comes from `cfg.sys.coreMap[j][procGroup] & cfg.coreMap[procGroup]` — the
-selected cores of the thread's **own class** — not from the combined map. `threadCount[j]` is the population
-count of exactly that expression, so the walk hands out one distinct core per thread and leaves none of the
-selected cores idle, and a class-0 thread lands on a non-SMT core, which is what makes `packetSizeRAM` and
-`resArray.records[j]` (both chosen by class) describe the core the thread is really on. The walk used the
-combined map and restarted at bit 0 for each class, so the second class was pinned over cores the first
-already held: on a hybrid P/E-core part that left **every E-core untested at every setting**, because
-`coreType` is inferred from a core's sibling count and puts the E-cores in the other class (ISSUES.MD G5).
-The two class maps are disjoint, which is why restarting `mask` at bit 0 per class is still correct.
+**Everything about a core is a (group, mask) pair, never a bare mask.** `EnumerateTopology` walks
+`GetLogicalProcessorInformationEx(RelationAll, …)`, whose every record carries a `GROUP_AFFINITY`;
+`GetLogicalProcessorInformation`, which it replaced, has no group field at all and on a machine of more than
+64 logical processors reports only the group the calling thread happens to be in — so the tool silently
+tested one group and reported it as the machine (ISSUES.MD G3). The core maps are indexed `[class][group]`,
+the thread bitmap in the banner is printed one row per group, and threads are pinned with
+`SetThreadGroupAffinity`: `SetThreadAffinityMask` interprets its mask in the thread's *own* group and cannot
+reach another. `MAX_GROUPS` (`CPU.h`) is 64, Windows' architectural maximum, and is deliberately **not**
+`MAX_THREADS_WORDS` — that is the width of a bitmap indexed by thread, and the two are equal only when every
+group holds 64 virtual cores.
 
-The enumeration carries four rules of its own. Its return value is checked, and a walk that names no
-processor core is refused as well — both `-23`; an unchecked call left the walk reading an untouched buffer
-as though it held topology records, and an empty core map means no thread is ever created, which `wmain`
-would otherwise report as a successful test of a CPU it never touched. The walk counts *records*, rather
-than decrementing a byte count tested through a `(si32&)` reinterpretation of a `DWORD`. `cfg.sys.SMT` is
-normalised to 1 when nothing set it: `ProcessorCore.Flags` is set only for a core carrying more than one
-virtual core, so a CPU without SMT left it 0 for every later shift and multiply. And `cfg.sys.groupCount` is
-the number of groups the walk *populated*, counted from the maps themselves — it was an arithmetic
-expression that omitted the SMT core count, doubled the non-SMT one and added 1, so a single non-SMT core
-made it 2 while only group 0 is ever written (ISSUES.MD G1, G4, G6).
+The core a thread is pinned to comes from `NextSelectedCore` (`CPU.h`), a cursor over
+`cfg.sys.coreMap[j][g] & cfg.coreMap[g]` — the selected cores of the thread's **own class** — not over the
+combined map. `threadCount[j]` is the population count of exactly that expression summed over the groups, so
+the cursor hands out one distinct core per thread and leaves none of the selected cores idle, and a class-0
+thread lands on a non-SMT core, which is what makes `packetSizeRAM` and `resArray.records[j]` (both chosen by
+class) describe the core the thread is really on. The walk used the combined map and restarted at bit 0 for
+each class, so the second class was pinned over cores the first already held: on a hybrid P/E-core part that
+left **every E-core untested at every setting**, because `coreType` is inferred from a core's sibling count
+and puts the E-cores in the other class (ISSUES.MD G5). The two class maps are disjoint, which is why
+restarting the cursor at group 0, bit 0 per class is still correct. A mask shifted past bit 63 is 0, and that
+is the cursor's signal to resume at bit 0 of the next group — do not "fix" the shift.
+
+The enumeration carries six rules of its own. Both `GetLogicalProcessorInformationEx` calls are checked, as
+is the buffer allocated between them, and a walk that names no processor core is refused as well — all
+`-23`; an unchecked call left the walk reading an untouched buffer as though it held topology records, and an
+empty core map means no thread is ever created, which `wmain` would otherwise report as a successful test of
+a CPU it never touched. Records are stepped by the `Size` each one carries, and a `Size` of 0 or one reaching
+past the buffer ends the walk rather than spinning or reading past it. `cfg.sys.SMT` is normalised to 1 when
+nothing set it: `Processor.Flags` carries `LTP_PC_SMT` only for a core of more than one virtual core, so a
+CPU without SMT left it 0 for every later shift and multiply. `cfg.sys.groupCount` is the number of groups
+the walk *populated*, counted from the maps themselves over `MAX_GROUPS` — it was an arithmetic expression
+that omitted the SMT core count, doubled the non-SMT one and added 1, so a single non-SMT core made it 2
+while only group 0 was ever written (ISSUES.MD G1, G4, G6). And **a core that would take the virtual core
+total past `MAX_THREADS` is refused rather than recorded**: a thread's index is its ordinal among the
+selected cores, so `threadData`, the four result planes and the completion bitmap are all indexed by it, and
+the surplus is reported through `wstrMessage[33]` rather than written past the end of them. `cfg.sys.vCoreCount`
+is therefore the count of cores actually accepted, not `coreCount[1] * SMT + coreCount[0]`.
 
 `SetSMTLoading` applies the `Ue`/`Uo` policies by masking with `cfg.sys.coreSibling`, two bitmaps the
 enumeration builds one record at a time: the lowest set bit of each physical core's sibling mask, and the
@@ -401,7 +422,7 @@ manual. The rules that bite most often when editing here:
 ## Localisation
 
 `translations.h` selects a language by pointing three globals at one header's string tables; `en-GB.h` is the
-only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[23]`
+only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[34]`
 and `wstrInterface_*[13]`, then extending both `translations.h` and the `L` case in `CPU.cpp`.
 
 Note the `L` option's selection logic is inverted (`if(lstrcmpiW(...))` is truthy when the codes *differ*), so
@@ -416,12 +437,16 @@ deliberately: its entries are C++ identifiers naming the job kernels, and are no
 
 ## Known constraints and latent issues
 
-Scattered `///--- Modify to account for >64 virtual cores !!!` markers flag the main one. Verify against
-current source before relying on any of these:
+Verify against current source before relying on any of these:
 
-- **Single processor group / 64 virtual cores.** `MAX_THREADS` is 512 and the buffers are sized for it, but
-  topology enumeration, the `U` core-map parsing and the affinity mask in `wmain` all assume one 64-bit mask.
-  This is the top item on `CPU.cpp`'s To-do list.
+- **`MAX_THREADS` is a real ceiling, at 512.** Enumeration and affinity are now group-aware end to end
+  (ISSUES.MD G3), so the 64-virtual-core limit is gone, but the thread-indexed tables are still fixed at 512
+  entries and a core beyond that is refused with a warning rather than tested. The remaining `///--- Modify
+  to account for non-SMT CPUs !!!` markers are on the `Uc` parser, not on the group handling.
+- **`Uc` and `Ut` are unusable and were not fixed with G3** (ISSUES.MD F2, C10): both are off by two in the
+  core they name, index `cfg.coreMap` as though a 64-bit word held eight cores, and shift by 64 or more on a
+  long enough map. That last one used to write into a `cfg.coreMap` element nothing read; now that a second
+  element can be a second processor group, it writes into one that does.
 - **Hybrid P/E-core parts are classified as "non-SMT / SMT"** (ISSUES.MD G9), because `coreType` is inferred
   from a core's sibling count. `Mn`/`Ms` therefore mean "E-core / P-core" on those CPUs, with the two cache
   records to match, and nothing in the code or the help text says so.

@@ -24,6 +24,12 @@ constexpr auto MAX_THREADS_BYTES = (MAX_THREADS + 7) >> 3;
 // 64 ui64 -- 4096 thread bits -- for a map that needs 8, so the buffer's true capacity silently disagreed
 // with MAX_THREADS. It is the same units mix-up that produced the stride bug in the ThreadsRunning* polls
 constexpr auto MAX_THREADS_WORDS = (MAX_THREADS_BYTES + 7) >> 3;
+// Processor groups a topology may name. Windows numbers groups from zero and defines at most 64 of them, so
+// this bounds the API's numbering rather than the storage behind it: the maps below are indexed by group and
+// hold MAX_THREADS entries each. It is deliberately not MAX_THREADS_WORDS -- that is the width of a bitmap
+// indexed by *thread*, and the two were only ever equal because 512 threads and 64-processor groups both
+// divide by 64. A group carrying fewer than 64 virtual cores makes them differ (ISSUES.MD G3)
+constexpr auto MAX_GROUPS = 64;
 
 al32 struct GLOBAL_CFG { // 104 bytes
    struct _C_D_ { ui32 L1Code, L1Data, L2; };
@@ -528,6 +534,173 @@ static inline cui64 HighestSetBit64(cui64 mask) {
    smear |= smear >> 8;   smear |= smear >> 16;   smear |= smear >> 32;
 
    return smear - (smear >> 1);
+}
+
+typedef       SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *const SLPIEXptrc;
+typedef const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *const cSLPIEXptrc;
+
+/// Enumerates the system's processor topology into cfg.sys: the per-group core map of each thread class, the
+/// sibling bitmaps SetSMTLoading masks with, the physical and virtual core counts, the cache sizes and the
+/// SMT width. cfg.coreMap is left holding every virtual core found, which is what a run with no 'U' argument
+/// selects.
+///
+/// GetLogicalProcessorInformation, which this replaces, cannot describe a machine of more than one processor
+/// group: its ProcessorMask is a bare 64-bit affinity mask with no group to qualify it, so on a machine of
+/// more than 64 virtual cores the walk saw one group's worth of cores and the rest of the program had no way
+/// to name the others (ISSUES.MD G3). The Ex form reports one variable-length record per relationship, each
+/// carrying a GROUP_AFFINITY -- the mask *and* the group it is a mask of -- which is what every map, the
+/// banner and the affinity walk now carry through.
+/// @return 0 on success; the exit code wmain is to return on failure
+static csi32 EnumerateTopology(void) {
+   DWORD bytesProc = 0;
+   ui32  os        = 0;
+   si32  vCores    = 0; // Running total of virtual cores accepted
+   si32  dropped   = 0; // Virtual cores refused for want of a thread slot
+   ui8   g;
+
+   // An Ex record is variable-length, so no record count bounds the buffer in advance the way one bounded the
+   // fixed-stride array this replaced. A first call with no buffer is documented to fail with
+   // ERROR_INSUFFICIENT_BUFFER, having written the size it wants
+   SetLastError(ERROR_SUCCESS);
+   GetLogicalProcessorInformationEx(RelationAll, 0, &bytesProc);
+   if(GetLastError() != ERROR_INSUFFICIENT_BUFFER || !bytesProc) {
+      wprintf(wstrMessage[31], ui32(GetLastError()));
+      return -23;
+   }
+
+   ptrc sysLPI = zalloc64(bytesProc);
+
+   // A topology that cannot be read is a topology that cannot be tested, whichever step failed to read it
+   if(!sysLPI) {
+      wprintf(wstrMessage[31], ui32(ERROR_NOT_ENOUGH_MEMORY));
+      return -23;
+   }
+
+   if(!GetLogicalProcessorInformationEx(RelationAll, (SLPIEXptrc)sysLPI, &bytesProc)) {
+      wprintf(wstrMessage[31], ui32(GetLastError()));
+      mfree1(sysLPI);
+      return -23;
+   }
+
+   // Records are walked by the Size each one carries rather than by a fixed stride, so the loop stops on
+   // anything it cannot step over: a Size of 0 would not advance, and a Size reaching past the buffer
+   // describes a record the API never wrote. Relationship and Size are the two fields every record opens with
+   while(os + ui32(sizeof(LOGICAL_PROCESSOR_RELATIONSHIP) + sizeof(DWORD)) <= ui32(bytesProc)) {
+      cSLPIEXptrc lpi = (SLPIEXptrc)&((chptr)sysLPI)[os];
+
+      if(!lpi->Size || os + lpi->Size > ui32(bytesProc)) break;
+      os += lpi->Size;
+
+      switch(lpi->Relationship) {
+      case RelationProcessorCore: {
+         // A processor core never spans processor groups, so GroupCount is documented to be 1 for this
+         // relationship and GroupMask[0] is the whole of the core
+         cui64 coreMask   = lpi->Processor.GroupMask[0].Mask;
+         cui16 group      = lpi->Processor.GroupMask[0].Group;
+         csi32 coreVCores = si32(PopulationCount64(coreMask));
+         cui8  coreType   = (coreVCores > 1 ? 1 : 0);
+
+         if(!coreMask || group >= MAX_GROUPS) break; // A core of no virtual cores, or a group the maps cannot address
+         if(cfg.sys.coreMap[coreType][group] & coreMask) break; // The map is what remembers having seen it
+
+         // Every thread-indexed table -- threadData, the four result planes, the completion bitmap -- holds
+         // MAX_THREADS entries, and a thread's index is its ordinal among the selected cores. A machine of
+         // more virtual cores than that is trimmed here, where the surplus is still countable and can be
+         // reported, rather than left to be written past the end of them. Once one core has been refused
+         // every later one is too, tested by 'dropped' rather than by the count: taking a narrower core that
+         // still fits would leave a hole in the middle of a group's map for no gain
+         if(dropped || vCores + coreVCores > MAX_THREADS) { dropped += coreVCores; break; }
+
+         vCores += coreVCores;
+         ++cfg.sys.coreCount[coreType]; // A core already in the map returned above, so this counts each once
+         cfg.sys.coreMap[coreType][group] |= coreMask;
+         // Which virtual cores share a physical core is knowable only here, one record at a time: the maps
+         // above are unions and cannot answer it afterwards, which is why SetSMTLoading used to rebuild the
+         // sibling layout from a core count and a stride and got it wrong three ways (ISSUES.MD G1, G2, G7).
+         // A core with no SMT contributes the same bit to both maps, so it survives either policy
+         cfg.sys.coreSibling[0][group] |= LowestSetBit64(coreMask);
+         cfg.sys.coreSibling[1][group] |= HighestSetBit64(coreMask);
+         if(lpi->Processor.Flags & LTP_PC_SMT) {
+            cui8 SMT = ui8(coreVCores);
+            if(!cfg.sys.SMT || cfg.sys.SMT < SMT) // Set (maximum) SMT count per physical core
+               cfg.sys.SMT = SMT;
+         }
+         break;
+      }
+      case RelationCache: {
+         cui8 coreType = (PopulationCount64(lpi->Cache.GroupMask.Mask) > 1 ? 1 : 0);
+
+         switch(lpi->Cache.Level) {
+         case 1:
+            if(lpi->Cache.Type == CacheInstruction) // Set (smallest) L1 code size
+               if(!cfg.sys.cache[coreType].L1Code || cfg.sys.cache[coreType].L1Code > lpi->Cache.CacheSize)
+                  cfg.sys.cache[coreType].L1Code = lpi->Cache.CacheSize;
+            if(lpi->Cache.Type == CacheData) // Set (smallest) L1 data size
+               if(!cfg.sys.cache[coreType].L1Data || cfg.sys.cache[coreType].L1Data > lpi->Cache.CacheSize)
+                  cfg.sys.cache[coreType].L1Data = lpi->Cache.CacheSize;
+            break;
+         case 2:
+            if(!cfg.sys.cache[coreType].L2 || cfg.sys.cache[coreType].L2 > lpi->Cache.CacheSize) // Set (smallest) L2 size
+               cfg.sys.cache[coreType].L2 = lpi->Cache.CacheSize;
+            break;
+         case 3:
+            if(!cfg.sys.cacheL3 || cfg.sys.cacheL3 > lpi->Cache.CacheSize) // Set (smallest) L3 size
+               cfg.sys.cacheL3 = lpi->Cache.CacheSize;
+         }
+         break;
+      }
+      default: // Numa node, package, group and everything a later Windows adds
+         break;
+      }
+   }
+   mfree1(sysLPI);
+
+   // Processor.Flags carries LTP_PC_SMT only for a core of more than one virtual core, so a CPU without SMT
+   // never assigned cfg.sys.SMT at all and every later expression that shifted or multiplied by it inherited
+   // the 0 -- SetSMTLoading's undefined shift by ui64(0 - 1) among them (ISSUES.MD G1). One virtual core per
+   // physical core is what "no SMT" means; say so once, here
+   if(!cfg.sys.SMT) cfg.sys.SMT = 1;
+
+   // groupCount was an arithmetic prediction that omitted the SMT core count, doubled the non-SMT one and
+   // added 1 (ISSUES.MD G4); counting the groups the walk populated states the same quantity and assumes
+   // nothing about the topology it is counting. The scan runs to MAX_GROUPS rather than to the width of the
+   // thread bitmap, because a group need not carry 64 virtual cores and 512 threads may span more than eight
+   for(cfg.sys.groupCount = 0, g = 0; g < MAX_GROUPS; ++g)
+      if(cfg.sys.coreMap[0][g] | cfg.sys.coreMap[1][g]) cfg.sys.groupCount = ui8(g + 1);
+
+   // An enumeration that named no processor core leaves nothing to test: the core map is empty, so no thread
+   // is created, and wmain would print an empty results table and return 0 -- "successful completion of
+   // stability test" for a CPU that was never exercised. In the 'W' path it is a division by zero
+   if(!cfg.sys.groupCount) {
+      wprintf(wstrMessage[32]);
+      return -23;
+   }
+
+   for(g = 0; g < cfg.sys.groupCount; ++g) cfg.coreMap[g] = cfg.sys.coreMap[0][g] | cfg.sys.coreMap[1][g];
+
+   // The count is the population of the maps rather than coreCount[1] * SMT + coreCount[0], which is the same
+   // number on every uniform and hybrid topology but assumes one SMT width for the whole machine
+   cfg.sys.vCoreCount = si16(vCores);
+
+   // Testing part of a machine is a legitimate outcome; doing so without saying which part is not
+   if(dropped) wprintf(wstrMessage[33], vCores + dropped, si32(MAX_THREADS), dropped);
+
+   return 0;
+}
+
+/// Advances a core cursor to the next selected virtual core of one thread class, crossing processor-group
+/// boundaries. A mask the caller has shifted past bit 63 is 0, which is the signal to resume at bit 0 of the
+/// next group; the scan therefore covers every group from the cursor's position onwards exactly once.
+/// @param mask Bit within the group to resume from; left holding the core's bit when one is found
+/// @param group Processor group to resume from; advanced past every group holding no further core
+/// @param threadClass Class of core to look for; 0=Non-SMT, 1=SMT
+/// @return true if a core was found, false if the selected maps hold no further core of that class
+static cbool NextSelectedCore(ui64 &mask, ui8 &group, cui8 threadClass) {
+   while(group < cfg.sys.groupCount) {
+      if(mask & cfg.sys.coreMap[threadClass][group] & cfg.coreMap[group]) return true;
+      if(!(mask <<= 1)) { mask = 1; ++group; }
+   }
+   return false;
 }
 
 /// Applies the SMT loading policy to the core map: a cfg.SMTLoad of 1 keeps the first virtual core of each
