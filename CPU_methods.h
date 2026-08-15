@@ -21,7 +21,6 @@ ui32 __stdcall ComputationPulse(ptrc dataPtr) {
    vchptrc threadByte = &((chptr)threadBits)[tcfg->threadByte];
    csi64   recCount   = tcfg->rc_tc & 0x0FFFFFFFFFFFF;
    cui32   coreNum    = (cui32(tcfg->threadByte) << 3) + tcfg->threadBit;
-   cDWORD  offset[2]  = { tcfg->procSync & 0x08 ? 0 : cDWORD(rand() & 0x03F), tcfg->procSync & 0x08 ? 0 : cDWORD(rand() & 0x0FFFF) };
    cui32   cycleTime  = cui32(tcfg->cycleTics * 1000 / timer.siFrequency);
    cui32   coreStag   = 1u << (coreNum & 0x07u);
    cui8    jobProc    = tcfg->procUnits & 0x01F;
@@ -32,6 +31,8 @@ ui32 __stdcall ComputationPulse(ptrc dataPtr) {
    si64    i, j       = 0;
    si64    oldTics    = 0;
    si64    curTics    = 0;
+   si64    jitterSpan = 0; // Width of this thread's jitter window, in tics; 0 when no jitter is to be applied
+   ui64    jitterRNG  = 0; // Jitter generator state, seeded per thread and per run by JitterSeed
    ui32    sleepDelay = tcfg->inactiveTime;
 
    if(tcfg->procSync & 0x010) // Constant computation
@@ -54,6 +55,24 @@ ui32 __stdcall ComputationPulse(ptrc dataPtr) {
       // 2==Parallel. Every other combination is rejected during parsing; treating them as parallel here
       // guarantees that nextTic can never be left holding a duration instead of an absolute tic count
       default:
+         // Unless it is time-synchronised, a parallel thread's train is offset by a random fraction of a
+         // cycle and its period jittered around cycleTics, so that the threads do not all step at one
+         // instant -- which is the whole of what 'Spt' promises over 'Sp'. Only this shape is jittered: the
+         // other two arrange the threads against each other, and a perturbation of any size erodes the
+         // property they exist to deliver, round-robin's one-thread-at-a-time above all. The two offsets
+         // this replaces eroded neither, but only because every thread of a run drew the same two values
+         // from an unseeded rand() -- which is also why they desynchronised nothing (ISSUES.MD D6)
+         if(!(tcfg->procSync & 0x08)) {
+            // One span in tics governs the start offset and the per-cycle jitter alike, so the two can no
+            // longer disagree about their units the way a millisecond offset[0] and a tic-counted offset[1]
+            // did (ISSUES.MD D7). A quarter of the shorter phase is as wide as the window can be without a
+            // pulse being consumed whole, at which point the shape stops being the one that was asked for
+            jitterSpan = min(tcfg->activeTics, tcfg->cycleTics - tcfg->activeTics) >> 2;
+            jitterRNG  = JitterSeed(coreNum);
+            // Drawn once, because it is a phase offset: it shifts the whole train, distorting neither the
+            // period nor the duty cycle, and every later edge inherits it through nextTic
+            startTics += NextJitter(jitterRNG, jitterSpan);
+         }
          break;
       }
       nextTic += startTics;
@@ -86,8 +105,14 @@ ui32 __stdcall ComputationPulse(ptrc dataPtr) {
                // Clamped because a ratio outside [0, 1] wraps the unsigned delay to roughly 49 days
                pulseDelay = ui32(max(si64(0), min(si64(cycleTime), ramp)));
             }
-            PulseSleep(pulseTimer, pulseDelay + offset[0]);
-            nextTic += cycleTics + offset[1];
+            // The off-phase is the duration that was asked for: offset[0] was added to it every cycle, which
+            // is a permanent change of duty cycle rather than jitter, and it was taken out of the *following*
+            // on-phase because nextTic fixes the period arithmetically -- up to 63ms of a 250ms pulse
+            PulseSleep(pulseTimer, pulseDelay);
+            // Drawn afresh each cycle and centred on zero, so the thread's mean period remains cycleTics.
+            // offset[1] added one fixed value to every cycle instead, which is not jitter but a period this
+            // thread then kept for the whole of the run (ISSUES.MD D7)
+            nextTic += cycleTics + NextJitter(jitterRNG, jitterSpan) - (jitterSpan >> 1);
          }
       }
 //fail:

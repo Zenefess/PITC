@@ -37,8 +37,8 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1–A12, B1–B8, C1–C13, D1, D2, D3, D5, E1, E2, F1–F15, G1–G9, H1, H2,
-H7, J1, J2 and J7 are fixed** — sections B and C are complete — see the
+**A1–A12, B1–B8, C1–C13, D1–D9, E1, E2, F1–F15, G1–G9, H1, H2,
+H7, J1, J2 and J7 are fixed** — sections B, C and D are complete — see the
 `Fixed` notes on those entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
 bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
 failure; A4–A6 and F1 were the false-pass family of Appendix B item 2, where the configuration itself
@@ -99,9 +99,8 @@ executed; the MSVC build still has to confirm it.
 SMT thread class — from a latent defect to a live one on any topology carrying both non-SMT and SMT threads.
 Uniform SMT CPUs are unaffected, and **G5 should be the next entry taken** — it was, in the topology batch
 below, where measuring it showed the "uniform SMT CPUs are unaffected" qualifier to be the whole of the
-story only for CPUs that are not hybrid. **D4 and D6–D9 are untouched**,
-and D8 in particular now stands alone: with A7 fixed, the only completion bit cleared ahead of a thread's
-last write is that thread's own.
+story only for CPUs that are not hybrid. D4 and D6–D9 are closed by the batch below, which completes
+section D.
 
 Note that B1–B3 shifted every line in `CPU.h` after 231 down by two, so line citations below that point in
 `CPU.h` — B4, B5, B7 and B8 among them — read two low against the current source. A9, A10 and C1 shifted
@@ -486,6 +485,59 @@ and `CLAUDE.md` was updated to match: its `W`, exit-code, `GenerateValues` and a
 new iteration count and its cost, the flag that replaced the sentinels, the multiple-of-8 rounding and the
 destructor.
 
+D4, D6, D7, D8 and D9 close section D. Three of them are about what a poll or a wait actually guarantees, and
+**D8 is the one that was doing damage**: `wmain` used the completion bitmap as a join, but a thread clears its
+bit from inside its own body, so the poll released `wmain` while every worker was still executing — and
+`~RESULTS_ARRAYS`, added by C13, then freed the arena those workers compute over. The handles
+`_beginthreadex` returns are now kept in `threadHandle[]` and waited on by `JoinThreads` (`CPU.h`) before any
+result is read, at both spawn sites; the `-19` abort path releases them with `ReleaseThreads` instead, since
+those threads would run to the end of a test whose results nobody is going to read. D4 gives the poll the
+scalar baseline it never had and selects it when the CPU has no SSE4.1 — the instruction set
+`AllFalse(cui128, cui128)` needs, and which the selection never consulted — and D9 gives the three vector
+polls a compiler barrier, so that casting the map's `volatile` away cannot leave the wait loop spinning on a
+value it read once. No exit code is added and no message: `wstrMessage_*` stays at 42 entries.
+
+D6 and D7 are the fourth thing and are one edit, because the two offsets they describe are replaced together
+by a single jitter window measured in tics. `JitterSeed` and `NextJitter` (`CPU.h`) draw it per thread from
+`rand_s` rather than from an unseeded `rand()` whose per-thread state made every thread of every run produce
+the same two numbers; the start offset is drawn once and shifts the whole train, and the period jitter is
+drawn every cycle and centred on zero, so neither the duty cycle nor the mean period moves. `rand()` has no
+caller left in the tree. **One behaviour changes in a way a user will notice, deliberately: only the parallel
+shape is jittered.** Round-robin and staggered are arrangements of the threads against one another, and a
+per-thread perturbation erodes them — which the pre-fix code avoided only by virtue of this very defect,
+every thread having been shifted by the same amount. `Sr` and `Ss` are therefore unchanged by the jitter and
+`Srt`/`Sst` no longer differ from them; `en-GB.h` and `README.md` say so in the `S` option's reference.
+
+Verified off-target in the manner of the earlier batches, both harnesses transcribing the code verbatim. The
+four polls were driven over all 512 thread indices — the empty map, each index set alone, each index cleared
+from a full map — and agree over 4 100 checks; compiled at the SSE2 baseline the scalar poll emits no
+`ptest`, where the SSE poll emits four. D9's barrier was checked by codegen rather than by execution: with a
+wait the optimiser can see through, gcc 13 at `-O2` reduces the unbarriered loop to a single `ret` and keeps
+the barriered one reading the map every iteration. `ComputationPulse`'s timing loop was then run over a
+virtual clock for four configurations: at preset `-4`'s 250 ms / 1750 ms the pre-fix code delivers a 212.15 ms
+on-phase and a rising-edge spread across 16 threads of 0.000 ms, and the current code 251.36 ms and 201 ms;
+`Tf[10]10` goes from a 0.02 ms on-phase in a 51.02 ms period — 9 408 pulses of a 30-second run consumed whole
+— to the 10.00 ms in 20.00 ms that was asked for; and `Sr Tf[250]100` across 8 threads keeps its
+one-thread-at-a-time for the whole of a 30-minute run, where jittering it would have put two threads inside
+an on-phase together for 194 s of it. The Windows-specific halves — `WaitForSingleObject`, `rand_s`,
+`std::atomic_signal_fence` under MSVC — were reviewed, not executed; the MSVC build still has to confirm
+them. No job kernel is touched, so **`cpu.values` does not need regenerating**.
+
+Three files moved. `CPU.h` gained 109 — 1 173 now 1 282 — two at `:14` for the `<atomic>` and `<stdlib.h>`
+includes, 64 in the thread-completion bitmap group at `:462` (`ThreadBitsView`, the scalar poll, and
+`JoinThreads`/`ReleaseThreads` at its end) and 43 for a `Pulse jitter` group at `:622`, immediately below the
+pulse-timing one; a citation therefore reads 2 lines low to `:459`, 66 low from there to `:621`, and 109 low
+below that — the topology group, `SetSMTLoading`, the command-line group, `Failed()`, `Evaluate` and
+`GenerateValues`, and so A7, B4, B5, B7 and B8, on top of every earlier shift. `CPU.cpp` gained 29 — 949 now
+978 — four at `:17` for `threadHandle[]`, six at the poll selection, six in the `W` spawn loop and thirteen in
+the test spawn loop, so a citation into `wmain` reads 4 low above the poll selection, 10 low between it and
+the `W` case, 16 low between that and the test spawn loop, and 29 low below it. `CPU_methods.h` gained 25 —
+101 now 126 — one line removed where `offset[2]` was declared and 26 added in three places, so the pulse loop
+E1 and E2 cite moves down again. `en-GB.h` gained one documentation line and no message, 42 entries still.
+`CLAUDE.md` and `README.md` were updated to match: `CLAUDE.md`'s thread-lifecycle section describes the join,
+the scalar poll and the barrier, its pulse-shape list says which shape is jittered and why, and a new
+known-constraints bullet records what the `-19` abort path deliberately does not wait for.
+
 Every other entry below still stands.
 
 ---
@@ -650,7 +702,8 @@ job cycle at `CPU_methods.h:61`.
 > and the mask is built from that. The clear is now idempotent with the one `ComputationPulse` performs on
 > its way out, and a failure on one thread no longer releases `wmain` for the other seven in its byte.
 > The residual — `Failed()` clearing the *failing* thread's own bit before that thread writes
-> `resArray.iter[coreNum]` — is **D8**, which is untouched.
+> `resArray.iter[coreNum]` — was **D8**, now fixed: `wmain` waits on the thread handles before reading
+> anything, so a bit cleared early no longer releases a reader.
 
 `CPU.h:206`:
 
@@ -1595,7 +1648,26 @@ spans two. Two independent defects follow:
   that needs 64. Harmless over-allocation, but it is the same units mix-up that produces the stride bug above,
   and it means the buffer's true capacity (4096 thread bits) silently disagrees with `MAX_THREADS`.
 
-### D4. The SSE fallback poll requires SSE4.1 but is selected without checking for it — **Medium**
+### D4. The SSE fallback poll requires SSE4.1 but is selected without checking for it — **Medium** — *Fixed*
+
+> **Fixed.** `ThreadsRunningScalar` (`CPU.h`) is the baseline the three vector polls are selected over, and
+> the selection now consults `cfg.sys.cpuSSE4_1` before reaching for the SSE one: AVX-512, else AVX2, else
+> SSE4.1, else the scalar poll. The scalar form ORs the eight `ui64` of the map and returns whether anything
+> remains — the same question the vector polls ask, over exactly the same 64 bytes — and it is the one of the
+> four that keeps the map's `volatile` qualifier on its reads, which makes it the natural place for the
+> baseline to live rather than a concession (GCS p3 asks for a scalar baseline beside the SIMD path anyway).
+>
+> The entry's reasoning about reachability holds and is worth restating, because it is what made this a
+> **Medium** rather than a curiosity: the pre-flight check that names a missing instruction set only fires
+> for a run that *asked* for that unit, so `PITC.exe Ia` — ALU only, the one configuration such a CPU can
+> actually run — reached the wait loop without passing any check at all.
+>
+> Measured off-target, against a stand-in that transcribes the four polls and drives all 512 thread indices
+> through them: the four agree over 4 100 checks (the empty map, each index set alone, and each index cleared
+> from a full map), and compiled for the SSE2 baseline the scalar poll emits `mov`/`or`/`test` with no
+> `ptest` in it, against four `ptest` in the SSE poll and two `vptest` in the AVX2 one. The instruction the
+> entry names is therefore gone from the path a non-SSE4.1 CPU takes, rather than merely unlikely to be
+> reached.
 
 `CPU.cpp:79` binds `ThreadsRunning` to `ThreadsRunningSSE` whenever the CPU has neither AVX-512 nor AVX2, and
 never consults `cfg.sys.cpuSSE4_1`. `ThreadsRunningSSE` calls `AllFalse(cui128, cui128)`, which is
@@ -1638,7 +1710,33 @@ started running. The same unchecked `_beginthread` appears at `CPU.cpp:340` in t
   unnoticed and its `threadBits` bit is never cleared, hanging `wmain` forever.
 * **Fix:** use `_beginthreadex`, check for 0/-1, create suspended, set affinity, then resume.
 
-### D6. `rand()` is unseeded and per-thread, so every thread gets identical "jitter" — **Medium**
+### D6. `rand()` is unseeded and per-thread, so every thread gets identical "jitter" — **Medium** — *Fixed*
+
+> **Fixed**, with **D7**: the two are one edit, because the pair of offsets they describe is replaced by one
+> jitter window governing both halves. `JitterSeed` and `NextJitter` (`CPU.h`) are the generator — `rand_s`
+> for entropy, exactly as this entry suggests, XORed with the performance counter and the thread's own index
+> so that a CRT which cannot reach the OS generator still leaves every thread of every run with a sequence of
+> its own, then SplitMix64 to draw from it. `rand()` has no caller left in the tree.
+>
+> **Only the parallel shape is jittered**, which is a deliberate narrowing of what the entry describes. The
+> jitter setup moved into the shape `switch`'s `default:` arm — the Parallel case — because round-robin and
+> staggered are *arrangements of the threads against each other*, and any perturbation erodes the property
+> they exist to deliver. That the pre-fix code did not erode them was an accident of this very defect: every
+> thread drew the same two values, so both offsets shifted the whole machine equally and the arrangement
+> survived. Fixing the generator without narrowing the shape would have broken round-robin's documented
+> one-thread-at-a-time, and the drift is unbounded because the per-cycle jitter accumulates through `nextTic`
+> — measured, `Sr Tf[250]100` across 8 threads spends **194 s of a 30-minute run** with two threads inside an
+> on-phase together, against 0 s for both the pre-fix code and the code as shipped. Parallel is the shape
+> whose threads would otherwise be in exact lockstep, which is what the jitter is for.
+>
+> Measured off-target by driving `ComputationPulse`'s timing loop over a virtual clock, 16 threads at preset
+> `-4`'s 250 ms / 1750 ms: the pre-fix code gives every thread the same two draws — MSVC's `rand()` from its
+> default seed yields 41 and 18 467, so `offset[0]` is 41 ms and `offset[1]` 18 467 tics for every thread of
+> every run — and the spread of the threads' rising edges is **0.000 ms**, with one distinct start offset
+> among 16. The current code gives 16 distinct start offsets and a mean edge spread of 201 ms. `Spt` is
+> unchanged at 0.000 ms, which is the distinction the entry says is inoperative.
+>
+> No job kernel is touched, so `cpu.values` does not need regenerating.
 
 `CPU_methods.h:21`:
 
@@ -1658,7 +1756,31 @@ rather than per cycle.
 * **Fix:** derive the offsets from `coreNum` plus a seeded per-thread PRNG, or use `rand_s` (already enabled
   by `_CRT_RAND_S` at `CPU.h:11`).
 
-### D7. `offset[1]` is a permanent period offset in the wrong units, not jitter — **Medium**
+### D7. `offset[1]` is a permanent period offset in the wrong units, not jitter — **Medium** — *Fixed*
+
+> **Fixed**, with **D6** and in the same edit. One `jitterSpan` in tics now governs both halves, so the units
+> cannot disagree: it is a quarter of the shorter of the two phases, which is as wide as the window can be
+> without a pulse being consumed whole. From it come a **start** offset in `[0, jitterSpan)`, drawn once and
+> added to `startTics` — a phase offset shifts the whole train and distorts neither the period nor the duty
+> cycle — and a **period** jitter drawn afresh every cycle and centred on zero, so the mean period stays
+> `cycleTics`. `offset[0]` is gone from the sleep entirely: the off-phase is now the duration that was asked
+> for.
+>
+> The entry names `offset[1]` but `offset[0]` was the more damaging of the two, and for the reason the E2
+> note gives about `nextTic` fixing the period arithmetically — whatever the off-phase overruns is taken out
+> of the *following* on-phase. Measured on the virtual clock at preset `-4`'s 250 ms / 1750 ms, the pre-fix
+> code delivers a **212.15 ms on-phase against a requested 250** (a duty cycle 15 % short of the one on the
+> command line) and a 2 003.20 ms period; the current code delivers 251.36 ms and 2 001.10 ms, both within
+> the sampling error of 480 pulses of a window that is ±31.25 ms wide, and an off-phase of exactly 1 750 ms.
+> At the defaults (100 ms / 900 ms, 64 threads) the pre-fix on-phase is 61.50 ms against 100.
+>
+> The pathological case is a cycle shorter than `offset[0]` itself. `Tf[10]10` asks for 10 ms on and 10 ms
+> off; the pre-fix code sleeps 51 ms every cycle while advancing `nextTic` by 21.85 ms, so `nextTic` falls
+> permanently behind the clock and the compute branch is reached for one job cycle at a time: a measured
+> **0.02 ms on-phase in a 51.02 ms period**, with 9 408 pulses of a 30-second run consumed whole. This is the
+> residue the E2 note's "10.0 ms at 50 %" could not see, that measurement having been taken against the
+> timer rather than against the offsets. The current code delivers 10.00 ms on, 10.00 ms off, 20.00 ms
+> period, and no pulse is lost at any setting tested.
 
 `CPU_methods.h:70` — `nextTic += cycleTics + offset[1];` — adds the *same* value every cycle, so the thread's
 period is permanently `cycleTics + offset[1]` rather than jittered around `cycleTics`. The magnitude is also
@@ -1666,14 +1788,60 @@ inconsistent with its sibling: `offset[1]` is at most 65 535 **tics** (≈ 6.5 m
 2 s cycle) while `offset[0]` is added to a `Sleep` argument in **milliseconds** (up to 63 ms). One of the two
 is in the wrong unit.
 
-### D8. Threads are never joined — **Medium**
+### D8. Threads are never joined — **Medium** — *Fixed*
+
+> **Fixed.** `wmain` keeps the handle `_beginthreadex` returns in `threadHandle[]` instead of closing it at
+> the end of the spawn iteration, and calls `JoinThreads` (`CPU.h`) — `WaitForSingleObject` then
+> `CloseHandle`, per thread — after the wait loop and before anything reads a result. Both spawn sites are
+> converted: the test path joins before the results table, the KUPS score and `~RESULTS_ARRAYS`'s `mfree` of
+> the arena, and the `W` path before `generateError` and the two result blocks are read. The completion
+> bitmap is kept as the wait, rather than replaced by the join, because it is what `wmain` polls on and what
+> D1, D3, D4 and D9 are about; the join is what gives its answer the meaning the code was already assuming.
+>
+> The window this closes is wider than the entry's "before calling `_endthread()`" suggests. A thread clears
+> its bit at the end of `ComputationPulse`, and still ahead of it are its `return`, the CRT's thread
+> shutdown, and — on the path that matters most — nothing at all, because `resArray.iter[coreNum]` is
+> written before the clear. What made it a live hazard rather than a formal one was never the ordering of
+> those writes but **the arena**: `~RESULTS_ARRAYS` frees the block every worker's `p0`–`p4` point into
+> (ISSUES.MD C13), and it ran as soon as `wmain` returned. A 16-thread run had 16 threads still inside the CRT
+> when their memory went back to the heap.
+>
+> **The `-19` abort path deliberately does not join.** Those threads are running the test they were given,
+> which the command line can make hours long, so `ReleaseThreads` closes the handles without waiting: the
+> process is exiting with an error and no result of theirs will be read. The arena is still freed under them
+> there, which is a race this entry does not close and which only a failure of `_beginthreadex` or
+> `ResumeThread` can reach; it is recorded in `CLAUDE.md`'s known-constraints list rather than left implicit.
+>
+> With **A7** already fixed, this was the last thing standing between the completion bitmap and the claim
+> `wmain` makes of it.
 
 `wmain` exits its wait loop as soon as `ThreadsRunning()` returns false (`CPU.cpp:614`), but a thread clears
 its bit at `CPU_methods.h:76` *before* calling `_endthread()`. `wmain` then reads `value[3][i]` and
 `resArray.iter[i]` for every thread. Combined with A7 (`Failed()` clearing eight bits at once) this becomes a
 real correctness problem rather than a theoretical one.
 
-### D9. `ThreadsRunning*` cast away the `volatile` qualifier — **Low**
+### D9. `ThreadsRunning*` cast away the `volatile` qualifier — **Low** — *Fixed*
+
+> **Fixed**, and the entry's "the guarantee is not there in the source" is exactly what was addressed: the
+> three vector polls still cast the qualifier away, because no `_mm*_load` intrinsic accepts a volatile
+> pointer and there is no spelling that avoids it, but each now takes its address from `ThreadBitsView`
+> (`CPU.h`), which issues a `std::atomic_signal_fence(std::memory_order_acq_rel)` first. No load may be
+> carried across a compiler barrier, and the barrier is inlined into `wmain`'s wait loop along with the load
+> that follows it, so each iteration reads the map afresh. It emits no instruction. `ThreadsRunningScalar`,
+> added for **D4**, needs none — it reads through the `vui64` declaration.
+>
+> Two alternatives were rejected. Snapshotting the map into a local through volatile scalar reads and running
+> the vector test over the copy is correct without any barrier, but it makes the choice of poll width
+> decorative — the eight scalar loads dominate, and D3's work to have each poll examine the same 64 bytes at
+> its own width becomes pointless. `_ReadWriteBarrier()` is the same barrier in MSVC's own spelling, but it
+> is deprecated with the standard fence as its documented replacement.
+>
+> The entry calls the hoisting theoretical, "in practice … prevented" by the opaque `Sleep(100)`. That is
+> true of the shipped loop and was worth checking rather than assuming: compiled with a *transparent* wait in
+> place of the `Sleep`, gcc 13 at `-O2` reduces the whole unbarriered loop to a single `ret` — the map is
+> read zero times — while the barriered form keeps the `vmovdqa`/`vptest` pair inside the loop and branches
+> back to it. The defect is latent only for as long as every statement between two polls stays opaque to the
+> optimiser, which is not a property the source states anywhere.
 
 `CPU.h:145–153` casts `vui64` storage to non-volatile vector references, permitting the compiler to cache the
 poll result. In practice the `Sleep(100)` and the non-inlinable call boundary prevent hoisting, but the
@@ -3359,7 +3527,9 @@ verified by execution rather than by reading.
 | ~~Any run on a hybrid P/E-core CPU~~ | ~~`groupCount` becomes 2 for a single populated group, so `SetSMTLoading` shifts by 64~~ — `groupCount` counts populated groups (**G4**, fixed) |
 | ~~`-1`/`-3`/`-4`/`-6`/`-8` on a hybrid P/E CPU~~ | ~~Every E-core silently deselected~~ — every physical core selected, one thread each (**G2**, fixed) |
 | ~~Any run on a hybrid P/E-core CPU~~ | ~~The SMT thread class re-uses the affinity mask of the non-SMT class, so every E-core goes untested while each P-core carries two threads~~ — one thread per core, on a core of its own class (**G5**, fixed) |
-| Any run on a CPU with SSE2 but not SSE4.1 | Illegal instruction in `ThreadsRunningSSE` before the test starts (**D4**) |
+| ~~Any run on a CPU with SSE2 but not SSE4.1~~ | ~~Illegal instruction in `ThreadsRunningSSE` before the test starts~~ — the scalar poll is selected for it (**D4**, fixed) |
+| ~~`PITC.exe Sp` vs `PITC.exe Spt`~~ | ~~Identical runs; every thread draws the same "jitter" from an unseeded `rand()`~~ — 16 distinct offsets against one (**D6**, fixed) |
+| ~~`PITC.exe Tf[10]10`~~ | ~~0.02 ms of compute per 51 ms cycle, against the 10 ms per 20 ms requested~~ — 10.00 ms per 20.00 ms (**D7**, fixed) |
 | Debug build on a non-AVX-512 CPU | Illegal instruction in the scalar ALU/FPU path (**H1**) |
 
 ## Appendix B — suggested order of work
@@ -3374,7 +3544,10 @@ verified by execution rather than by reading.
 4. ~~**A9, A10, C1** — reject or handle every `procUnits` combination the parser can produce.~~ **Done.**
 5. ~~**E1, E2** — fix the sweep-mode hang and raise the timer resolution, so pulse timing means what it says.~~ **Done.**
 6. ~~**C2, C3, C4, C5, C6** — the memory-safety set.~~ **Done.**
-7. ~~**A7, D1, D2, D3, D5** — the concurrency set; A7 corrupts the report exactly when it matters most.~~ **Done.**
+7. ~~**A7, D1, D2, D3, D5** — the concurrency set; A7 corrupts the report exactly when it matters most.~~
+   **Done**, and ~~**D4, D6–D9**~~ with it in a later batch: the wait is now a join, the poll has a scalar
+   baseline and a barrier, and the pulse jitter is per thread rather than the same two numbers for all of
+   them. **Section D is complete.**
 8. ~~**H1, H2, B6** — pin the floating-point model, stop the Debug/Release divergence, and version the
    `cpu.values` format so a toolchain change can never be mistaken for a hardware fault.~~ **Done.**
 9. ~~**J1, J2, J7, B5** — decide the intended ALU shift behaviour, move the chains to unsigned arithmetic,

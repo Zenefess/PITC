@@ -29,6 +29,7 @@ Command-line options
  Sx : Set core synchronisation options. One of the first three options (P,R,S) can be stacked with the last (T); eg. Spt
  
       P==Parallel, R==Round-robin, S==Staggered, T==Time synchronised                           |  P, R and S are mutually exclusive
+         'T' aligns every thread's pulse edges. Without it a parallel run offsets each thread by a random fraction of a cycle
  Tx : Set timing options. One of the first three options (C,F,S) can be stacked with any of the remaining (D,T,[,]); eg. Tfd1.0t12.5[100]2400
  
       C==Constant, F==Fixed-length pulses, S==Sweeping-length pulses                            |  The last of C, F and S given is used
