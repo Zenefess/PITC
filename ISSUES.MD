@@ -2942,8 +2942,8 @@ verified by execution rather than by reading.
 11. ~~**G3** — the 64-virtual-core ceiling~~ **Done**, with **C7** and **C11**, the two entries that named it
     as the only thing keeping them latent. A machine of more than one processor group is now enumerated,
     selected, pinned and reported whole, where before the tool tested the one group it happened to be in and
-    returned 0 for the rest. Next: **G9** to stop calling E-cores "non-SMT" — the misnomer that hid G5's real
-    severity — and **G8**, whose remaining half the sibling bitmaps G2 added make straightforward.
+    returned 0 for the rest. ~~Next: **G9** to stop calling E-cores "non-SMT" — the misnomer that hid G5's real
+    severity — and **G8**, whose remaining half the sibling bitmaps G2 added make straightforward.~~ **Done**
 12. **F2–F15** — the parser and output set. **F2** and **C10** are the `Uc`/`Ut` pair G3 deliberately left
     alone, and G3 makes them the more worth taking: the element their wrong word index writes into can now be
     a second processor group rather than storage nothing reads.
