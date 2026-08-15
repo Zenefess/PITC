@@ -514,11 +514,17 @@ static cui8 JobCycleMemALU_AVX512(cui64 coreNum, csi64 offset, vchptrc threadByt
 }
 
 // Job cycle functions array. [0][]==Without memory, [1][]==With memory
-al64 static cui8 (*JobCycle[2][24])(cui64 coreNum, csi64 offset, vchptrc threadByte) = {
+// ComputationPulse indexes this with (procUnits & 0x1F), so every one of the 32 combinations must carry an
+// entry: a shorter table is read past its end and calls through whatever follows it. Only the ALU bit and
+// the widest selected unit alter the dispatch, which makes 24~31 (AVX2 with AVX-512) AVX-512 entries and
+// matches the arena-sizing switch in wmain, whose own cases already span the whole 0~31 domain
+al64 static cui8 (*JobCycle[2][32])(cui64 coreNum, csi64 offset, vchptrc threadByte) = {
  { JobCycleALU,       JobCycleALU,           JobCycleFPU,       JobCycleALU_FPU,       JobCycleSSE,       JobCycleALU_SSE,       JobCycleSSE,       JobCycleALU_SSE,
    JobCycleAVX2,      JobCycleALU_AVX2,      JobCycleAVX2,      JobCycleALU_AVX2,      JobCycleAVX2,      JobCycleALU_AVX2,      JobCycleAVX2,      JobCycleALU_AVX2,
+   JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,
    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512, },
  { JobCycleMemALU,    JobCycleMemALU,        JobCycleMemFPU,    JobCycleMemALU_FPU,    JobCycleMemSSE,    JobCycleMemALU_SSE,    JobCycleMemSSE,    JobCycleMemALU_SSE,
    JobCycleMemAVX2,   JobCycleMemALU_AVX2,   JobCycleMemAVX2,   JobCycleMemALU_AVX2,   JobCycleMemAVX2,   JobCycleMemALU_AVX2,   JobCycleMemAVX2,   JobCycleMemALU_AVX2,
+   JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512,
    JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512 }
 };

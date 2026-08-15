@@ -11,7 +11,8 @@ Command-line options
       Utilises the ALU and largest vector unit of all (virtual) cores in the system, level 3 cache, and 8MB memory per thread for 60 seconds.
  Ix : Set intruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av !!! Cache use not yet implemented !!!
  
-      Caches: 1==Level 1, 2==Level 2, 3==Level 3  |  Processing: A==ALU, F==FPU, S==SSE4.1, V==AVX2, X==AVX512
+      Caches: 1==Level 1, 2==Level 2, 3==Level 3                                                |  At least one processing unit is required
+      Processing: A==ALU, F==FPU, S==SSE4.1, V==AVX2, X==AVX512                                 |  F, S, V and X are mutually exclusive
  Lx : Set interface language.
  
       Recognises ISO 639-1 language codes; eg. Len-GB
