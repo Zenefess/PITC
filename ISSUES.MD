@@ -37,8 +37,8 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1–A7, A9, A10, B1, B2, B3, B5, B6, C1–C6, D1, D2, D3, D5, E1, E2, F1, H1, H2, H7, J1, J2 and J7 are
-fixed** — see the
+**A1–A7, A9, A10, B1, B2, B3, B5, B6, C1–C6, D1, D2, D3, D5, E1, E2, F1, G1, G2, G4, G6, G7, H1, H2, H7,
+J1, J2 and J7 are fixed** — see the
 `Fixed` notes on those entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
 bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
 failure; A4–A6 and F1 were the false-pass family of Appendix B item 2, where the configuration itself
@@ -192,6 +192,48 @@ exit code is added, `-22`, and `wstrMessage_*` grew from 30 entries to 31.
 header's `KernelFingerprint` detects that on its own and reports `-21`, so a stale file is refused rather
 than blamed on the CPU — which is the guard doing exactly what B6 added it for. **J3, J4, J5, J6 and B4,
 B7, B8 remain open.**
+
+G1, G2, G4 and G6 are the topology batch, and three of the four are one story: the code knew how many cores
+there were and never recorded how they were arranged. `SetSMTLoading` rebuilt the sibling layout from a core
+count and a stride every time it ran, which on a CPU reporting no SMT meant shifting by `ui64(0 - 1)` and by
+64 (G1), on a hybrid part meant a mask describing the P-cores that cleared every E-core (G2), and in either
+case leaned on a `groupCount` that omitted the SMT core count, doubled the non-SMT one and added 1 (G4). The
+enumeration has the layout in its hand, one record at a time, and now keeps it: `cfg.sys.coreSibling` holds
+the lowest and the highest sibling of every physical core, `SetSMTLoading` masks with one of the two, and
+`groupCount` counts the groups the walk populated rather than predicting them. `cfg.sys.SMT` is normalised
+to 1 when nothing set it. **G7 goes with them** — the arm no longer computes an offset, so the scan that
+could only return 0 or 64 has nothing left to be wrong about — and half of **G8**, whose shadowed loop
+variable disappeared with the arm that needed the outer one. G6 is separate: `GetLogicalProcessorInformation`
+is checked, a walk that names no core is refused alongside it, and both raise the new exit code `-23`;
+`wstrMessage_*` grew from 31 entries to 33. No job kernel is touched, so **`cpu.values` does not need
+regenerating**.
+
+The batch was verified off-target, in the same way the concurrency batch was: both `SetSMTLoading` arms, the
+walk and the `groupCount` derivation were transcribed pre- and post-fix into a harness and run over seven
+synthetic topologies, with the pre-fix code's two undefined shifts emulated as x86 executes them. The
+pre-fix forms fail 13 of 35 checks — 0 threads selected on either non-SMT part, every E-core dropped on both
+hybrid parts, `groupCount` 2 on all four — and the current forms fail none of 93. The uniform SMT
+topologies pass both, which is what the entries predicted: this is a class of defect that never appears on
+the machines most likely to be used for testing.
+
+**G5 is the entry this promotes, and it should be next.** G2's fix is what puts the E-cores back in the core
+map; G5 is why six of them still would not be tested. It is a one-line change to where `mask` is
+initialised, and D5's note already named it. **G3 and G9 remain open**, and G9 in particular is worth
+reading alongside G2: the "non-SMT / SMT" split these fixes now handle correctly is still *called* something
+it does not mean on a hybrid part.
+
+Two stale cross-references were corrected while the section was open: C7 and C11 both cite "the
+64-virtual-core ceiling (G2)", which is **G3**.
+
+Three files moved again. `CPU.cpp` gained 48 — 797 now 845 — 24 of them in the topology walk at `:30` and
+24 more between the walk and `cfg.coreMap`'s assembly at `:96`, so a citation into `wmain` reads 24 lines
+low above the `groupCount` derivation and 48 low below it, on top of every earlier shift; **every C, E and
+F entry in `wmain` is below both**. `CPU.h` gained 35 — 625 now 660 — six at `:33` for the sibling bitmaps
+and 29 at `SetSMTLoading`, so a citation reads 6 low from `:33` to `:512` and 35 low below that:
+`Failed()`, `Evaluate` and `GenerateValues`, and so A7, B4, B5, B7 and B8. `en-GB.h` gained three, one exit
+code in the instruction table and two messages at the end of the array. `CLAUDE.md` was updated to match —
+its exit-code and thread-lifecycle sections describe the enumeration's four rules and the sibling bitmaps,
+and the known-constraints bullet that named G5 now says what G2's fix leaves it holding up.
 
 Every other entry below still stands.
 
@@ -962,7 +1004,7 @@ That needs `2c + c ≤ 65 536` bytes, i.e. `c ≤ 21 845`. An ALU + AVX2 table c
 row plus 160 per AVX2 row, so `c` passes 21 845 at about 100 threads and 32 768 at about 150.
 `wcstombs`'s return value (which can be `(size_t)-1`) is also unchecked.
 
-* **Trigger:** currently unreachable because of the 64-virtual-core ceiling (G2), but `MAX_THREADS` is 512 and
+* **Trigger:** currently unreachable because of the 64-virtual-core ceiling (G3), but `MAX_THREADS` is 512 and
   all buffers claim to support it. Lifting the core limit makes this immediately live.
 * **Fix:** size `wstrOutput` from `threadCount[2]`, use the bounded `swprintf_s`, and convert into a separate
   allocation.
@@ -1001,7 +1043,7 @@ accompanying indexing errors.
 ### C11. The arena-slice loop uses `ui8` counters against `si16` thread counts — **Low**
 
 `CPU.cpp:513,552–553` declare `ui8 k, l, m` and compare `l` against `threadCount[m]` (`si16`). Above 255
-threads the counters wrap and the loop cannot terminate. Latent behind the 64-core ceiling (G2), but the
+threads the counters wrap and the loop cannot terminate. Latent behind the 64-core ceiling (G3), but the
 buffers are sized for 512.
 
 ### C12. Per-thread slices are not cache-line aligned — **Low**
@@ -1666,7 +1708,25 @@ dependency and an unnecessary attack surface for printing help text.
 
 ## G. Topology and scaling
 
-### G1. `SetSMTLoading` invokes undefined behaviour on any CPU without SMT — **High**
+### G1. `SetSMTLoading` invokes undefined behaviour on any CPU without SMT — **High** — *Fixed*
+
+> **Fixed** at both ends. `cfg.sys.SMT` is normalised to 1 immediately after the topology walk, because
+> `ProcessorCore.Flags` is set only for a core carrying more than one virtual core and "no SMT" means one
+> virtual core per physical core — that removes `ui64(cfg.sys.SMT - 1)` as a shift count. The scan that ran
+> to 64 is gone along with the arithmetic that needed it: `SetSMTLoading`'s two one-virtual-core policies now
+> mask with `cfg.sys.coreSibling`, a pair of bitmaps the enumeration records one core at a time (see G2).
+> Neither undefined shift has an expression left to appear in.
+>
+> The impact this entry describes is closed twice over: an enumeration naming no processor core is refused
+> with `-23` before the spawn loop (G6), so the "empty results table, exit code 0" path now needs a `U` map
+> that disables every core to reach — which is **C8**, still open.
+>
+> Verified off-target. The walk, the `groupCount` derivation and both `SetSMTLoading` arms were transcribed
+> pre- and post-fix into a harness and run over seven synthetic topologies — uniform 2-way and 4-way SMT, a
+> 6-core and a 1-core non-SMT part, a 32-core 2-way part, and two hybrid P/E mixes — with the two undefined
+> shifts emulated as x86 executes them (count masked to 6 bits, which is what the shipped binary does). The
+> pre-fix arms fail 13 of 35 checks and the post-fix code none of 93. On both non-SMT topologies a `-1`
+> preset selected **0** virtual cores before the fix and selects one per physical core after it.
 
 `CPU.h:168–176`:
 
@@ -1698,7 +1758,23 @@ On a CPU with no SMT, `cfg.sys.SMT` is never assigned (`CPU.cpp:38–42` only wr
   documented in `en-GB.h:15` as "Successul completion of stability test". A CPU that was never tested at all
   reports success.
 
-### G2. `SetSMTLoading` deselects every non-SMT core — **High**
+### G2. `SetSMTLoading` deselects every non-SMT core — **High** — *Fixed*
+
+> **Fixed** by recording the sibling layout rather than reconstructing it. The topology walk ORs the lowest
+> set bit of each processor-core record's `ProcessorMask` into `cfg.sys.coreSibling[0][group]` and the
+> highest into `[1][group]`, and `SetSMTLoading`'s `Ue`/`Uo` arms mask with one of those. That record is the
+> only place the layout is knowable — `cfg.sys.coreMap[0]` and `[1]` are unions over a whole core class and
+> cannot say afterwards which virtual cores share a physical core — and a core without SMT contributes the
+> same bit to both sibling maps, so it survives either policy instead of being cleared by a mask built from
+> the SMT core count alone.
+>
+> On the 6 P-core + 8 E-core topology in the G1 harness, `Uo` selected 6 virtual cores before the fix and
+> selects 14 after: every physical core, one thread each. On 8 P + 16 E it is 8 before and 24 after.
+>
+> **G5 is now what stands between that core map and the cores actually being tested.** The spawn loop
+> restarts its affinity mask at bit 0 for the SMT thread class, so six of those fourteen threads are pinned
+> back over cores the E-core threads already hold, leaving six E-cores idle. G5 is untouched by this batch
+> and is the next entry to take.
 
 `CPU.h:173` builds the mask from `cfg.sys.coreCount[1]` (SMT physical cores) only. `cfg.coreMap[i] &= mask` at
 `CPU.h:175` then clears every bit belonging to a non-SMT core.
@@ -1722,7 +1798,19 @@ groups (`SetThreadGroupAffinity` is needed).
   shifts `mask` to 0 and `SetThreadAffinityMask(handle, 0)` fails, so threads run wherever the scheduler puts
   them. Together with D3's unchecked high bits, results become unreliable rather than merely unpinned.
 
-### G4. `groupCount` adds `coreCount[0]` to itself — **High**
+### G4. `groupCount` adds `coreCount[0]` to itself — **High** — *Fixed*
+
+> **Fixed.** `groupCount` is now the number of groups the walk populated, counted from
+> `cfg.sys.coreMap[0][j] | cfg.sys.coreMap[1][j]` across the eight-word span a 512-thread bitmap covers,
+> instead of being derived arithmetically from a core count. Under `GetLogicalProcessorInformation` that is
+> always 1 — the writer indexes with `procGroup`, which is 0 and never assigned again — and that is exactly
+> the point: the five loops over an empty group, the banner's second all-dots row, and the all-zero
+> `coreMap[1][1]` that `SetSMTLoading` scanned to 64 all go with the second group. Counting the data rather
+> than predicting it also means the derivation stays correct when `GetLogicalProcessorInformationEx`
+> replaces the walk (**G3**).
+>
+> In the G1 harness `groupCount` was 2 on all four non-SMT and hybrid topologies before the fix, and is 1 on
+> all seven after it.
 
 `CPU.cpp:71`:
 
@@ -1747,6 +1835,13 @@ prints a second, all-dots thread-bitmap row for a processor group that does not 
 
 ### G5. The affinity mask restarts at bit 0 for the SMT pass — **Medium**
 
+> **Not fixed, and now the last thing standing between a hybrid CPU and a complete test.** G2's fix hands
+> `Ue`, `Uo` and the one-thread-per-physical-core presets a core map that includes every E-core; this loop
+> then pins the P-core threads back over the first of them. Note also that the "masked whenever
+> `threadCount[0] == 0`" qualifier below already did not hold on a hybrid part with no `U` option at all,
+> where both thread classes are populated by default — G5 has been live there since D5 made affinity reach
+> the scheduler.
+
 `CPU.cpp:592–593`:
 
 ```cpp
@@ -1758,7 +1853,21 @@ for(d = 0, j = 0; j < 2; ++j)
 already assigned to the non-SMT threads. Two threads land on the same virtual core while other cores idle.
 Masked whenever `threadCount[0] == 0`, i.e. on a uniform SMT CPU.
 
-### G6. `GetLogicalProcessorInformation`'s return value is ignored — **Medium**
+### G6. `GetLogicalProcessorInformation`'s return value is ignored — **Medium** — *Fixed*
+
+> **Fixed.** The call is checked, and on `FALSE` the run stops with the new exit code `-23` and a message
+> carrying `GetLastError()`. There is deliberately no retry at the size the API asks for: the buffer holds
+> `MAX_THREADS * 4` records, several times what a processor group of 64 virtual cores can describe, so
+> `ERROR_INSUFFICIENT_BUFFER` here would mean a machine this build cannot describe rather than one that needs
+> a second attempt. The `(si32&)` reinterpretation is gone with the decrement it guarded — the walk divides
+> the byte count the API wrote back into a record count and iterates that, in `ui32`.
+>
+> A call that succeeds but names no processor core is refused the same way, for the reason this entry gives
+> for the failure case taken one step further: the core map is empty, so no thread is created, and `wmain`
+> would print an empty results table and return 0 — "successful completion of stability test" — for a CPU it
+> never touched. The same zero is the divisor in `GenerateValues`' `W` path. One exit code, `-23`, shared by
+> two messages, the way `-11`, `-17` and `-21` already share theirs; `wstrMessage_*` grew from 31 entries to
+> 33.
 
 `CPU.cpp:30–31`:
 
@@ -1771,7 +1880,12 @@ On failure the API sets `bytesProc` to the *required* size and returns FALSE. Si
 discarded, the loop then walks uninitialised memory as though it were topology records, building a nonsense
 core map. The `(si32&)` reinterpretation of a `DWORD` also makes a required size above 2 GiB read as negative.
 
-### G7. `SetSMTLoading`'s "first set bit" scan is a no-op — **Medium**
+### G7. `SetSMTLoading`'s "first set bit" scan is a no-op — **Medium** — *Fixed*
+
+> **Fixed as a consequence of G1 and G2, not as separate work.** `SetSMTLoading` no longer computes an
+> offset at all: the scan, the `cfg.sys.SMT` stride and the `mask0` ladder are replaced by a mask taken from
+> the per-core sibling bitmaps the enumeration records, which is correct whatever order the OS numbers
+> virtual cores in — including the hybrid layout this entry describes, where the E-cores hold the low bits.
 
 `CPU.h:174` — `for(k = 0; k < 64 && cfg.sys.coreMap[1][i] >> k == 0; ++k);` — for any non-zero map,
 `map >> 0 != 0`, so the loop exits immediately with `k == 0` and `mask <<= 0` does nothing. The intent was
@@ -1780,6 +1894,13 @@ UB case in G1). On a hybrid CPU where E-cores occupy the low bits, this silently
 wrong offset.
 
 ### G8. `SetSMTLoading`'s "use all virtual cores" arm shadows its loop variable and over-smears — **Medium**
+
+> **Half overtaken, not fixed.** The inner `ui8 i` is gone: the `default` arm that needed the outer `i`
+> pre-initialised was replaced by G1 and G2, so `case 3` declares nothing of its own and uses the outer
+> variable. The substantive half is untouched — the statement still reads `cfg.coreMap[i]` while writing it,
+> so a 4-way SMT part still accumulates shifts past the intended sibling span, and the `j == 0` iteration is
+> still a no-op. The per-core sibling bitmaps G2 added would let this arm be written as an exact expansion
+> too, which is the obvious way to take it.
 
 `CPU.h:163–167`:
 
@@ -2512,9 +2633,10 @@ verified by execution rather than by reading.
 | `PITC.exe Mc65536` / `Mc-1` | Null-pointer crash with no diagnostic (**C5**) |
 | `PITC.exe Mn8 Ua` / `Ms8 Ua` | Threads silently drop out of memory-backed mode (**C9**) |
 | Any `Mc*` run with ALU + a vector unit | Each thread overruns its arena slice by up to 3 records (**C4**) |
-| `-1`/`-3`/`-4`/`-6`/`-8` on a CPU without SMT | Undefined shift in `SetSMTLoading`; zero threads, empty table, **exit code 0** (**G1**) |
-| Any run on a hybrid P/E-core CPU | `groupCount` becomes 2 for a single populated group, so `SetSMTLoading` shifts by 64 (**G4**) |
-| `-1`/`-3`/`-4`/`-6`/`-8` on a hybrid P/E CPU | Every E-core silently deselected (**G2**) |
+| ~~`-1`/`-3`/`-4`/`-6`/`-8` on a CPU without SMT~~ | ~~Undefined shift in `SetSMTLoading`; zero threads, empty table, **exit code 0**~~ — one thread per physical core (**G1**, fixed) |
+| ~~Any run on a hybrid P/E-core CPU~~ | ~~`groupCount` becomes 2 for a single populated group, so `SetSMTLoading` shifts by 64~~ — `groupCount` counts populated groups (**G4**, fixed) |
+| ~~`-1`/`-3`/`-4`/`-6`/`-8` on a hybrid P/E CPU~~ | ~~Every E-core silently deselected~~ — every physical core selected; six of them still share a P-core thread's affinity (**G2** fixed, **G5** open) |
+| Any run on a hybrid P/E-core CPU | The SMT thread class re-uses the affinity mask of the non-SMT class, so cores at the top of the map idle (**G5**) |
 | Any run on a CPU with SSE2 but not SSE4.1 | Illegal instruction in `ThreadsRunningSSE` before the test starts (**D4**) |
 | Debug build on a non-AVX-512 CPU | Illegal instruction in the scalar ALU/FPU path (**H1**) |
 
@@ -2536,7 +2658,9 @@ verified by execution rather than by reading.
 9. ~~**J1, J2, J7, B5** — decide the intended ALU shift behaviour, move the chains to unsigned arithmetic,
    consider whether the FP kernels' 1-ULP blindness is acceptable, and
    extend `W` to validate the `JobMem*` and `JobALU_*` kernels; regenerate golden values once, together.~~ **Done.**
-10. **G1, G2, G4, G6** — topology correctness, then **G3** to lift the 64-core ceiling.
+10. ~~**G1, G2, G4, G6** — topology correctness~~ **Done**, and **G7** with them. **G5** is the immediate
+    follow-on: without it, the core map G2 now builds correctly on a hybrid part is still pinned onto too
+    few cores. Then **G3** to lift the 64-core ceiling, and **G9** to stop calling E-cores "non-SMT".
 11. **F2–F15** — the parser and output set.
 12. Documentation (**K**) and process (**L**) alongside the code changes they describe. A CI job that builds a
     clean clone is the highest-value single addition.

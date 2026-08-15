@@ -28,16 +28,40 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
         ui8   outUTF    = 0;
 
    setlocale(LC_ALL, "");
-   GetLogicalProcessorInformation(sysLPI, &(bytesProc = sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION) * MAX_THREADS * 4));
-   for(i = 0; (si32&)bytesProc > 0; ++i, bytesProc -= sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION)) { ///--- Modify to account for >64 virtual cores !!!
-      cui8 coreType = (PopulationCount64(sysLPI[i].ProcessorMask) > 1 ? 1 : 0);
 
-      switch(sysLPI[i].Relationship) {
+   // GetLogicalProcessorInformation reports failure by returning FALSE, having replaced bytesProc with the
+   // size it wants -- and its return value was discarded, so the walk below read an untouched buffer as
+   // though it held topology records and built a core map out of whatever was in it (ISSUES.MD G6). The
+   // buffer holds MAX_THREADS * 4 records, several times what a processor group of 64 virtual cores can
+   // describe, so a failure here is a system that cannot be enumerated rather than one that needs a larger
+   // second attempt
+   bytesProc = DWORD(sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION) * MAX_THREADS * 4);
+   if(!GetLogicalProcessorInformation(sysLPI, &bytesProc)) {
+      wprintf(wstrMessage[31], ui32(GetLastError()));
+      mfree1(sysLPI);
+      return -23;
+   }
+
+   // bytesProc now holds the number of bytes written, always a whole number of records. The walk counted it
+   // down instead, testing (si32&)bytesProc > 0 -- a DWORD reinterpreted as signed, so a required size above
+   // 2GiB would have read as negative. A record count is what the walk is counting, so count records
+   cui32 lpiCount = bytesProc / ui32(sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION));
+
+   for(ui32 n = 0; n < lpiCount; ++n) { ///--- Modify to account for >64 virtual cores !!!
+      cui8 coreType = (PopulationCount64(sysLPI[n].ProcessorMask) > 1 ? 1 : 0);
+
+      switch(sysLPI[n].Relationship) {
       case 0: // Processor core
-         if(!(cfg.sys.coreMap[coreType][procGroup] & sysLPI[i].ProcessorMask)) ++cfg.sys.coreCount[coreType];
-         cfg.sys.coreMap[coreType][procGroup] |= sysLPI[i].ProcessorMask;
-         if(sysLPI[i].ProcessorCore.Flags) {
-            cui8 SMT = (ui8)PopulationCount64(sysLPI[i].ProcessorMask);
+         if(!(cfg.sys.coreMap[coreType][procGroup] & sysLPI[n].ProcessorMask)) ++cfg.sys.coreCount[coreType];
+         cfg.sys.coreMap[coreType][procGroup] |= sysLPI[n].ProcessorMask;
+         // Which virtual cores share a physical core is knowable only here, one record at a time: the maps
+         // above are unions and cannot answer it afterwards, which is why SetSMTLoading used to rebuild the
+         // sibling layout from a core count and a stride and got it wrong three ways (ISSUES.MD G1, G2, G7).
+         // A core with no SMT contributes the same bit to both maps, so it survives either policy
+         cfg.sys.coreSibling[0][procGroup] |= LowestSetBit64(sysLPI[n].ProcessorMask);
+         cfg.sys.coreSibling[1][procGroup] |= HighestSetBit64(sysLPI[n].ProcessorMask);
+         if(sysLPI[n].ProcessorCore.Flags) {
+            cui8 SMT = (ui8)PopulationCount64(sysLPI[n].ProcessorMask);
             if(!cfg.sys.SMT || cfg.sys.SMT < SMT) // Set (maximum) SMT count per physical core
                cfg.sys.SMT = SMT;
          }
@@ -45,22 +69,22 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       case 1: // Numa node
          break;
       case 2: // Cache
-         switch(sysLPI[i].Cache.Level) {
+         switch(sysLPI[n].Cache.Level) {
          case 1:
-            if(sysLPI[i].Cache.Type == CacheInstruction) // Set (smallest) L1 code size
-               if(!cfg.sys.cache[coreType].L1Code || cfg.sys.cache[coreType].L1Code > sysLPI[i].Cache.Size)
-                  cfg.sys.cache[coreType].L1Code = sysLPI[i].Cache.Size;
-            if(sysLPI[i].Cache.Type == CacheData) // Set (smallest) L1 code size
-               if(!cfg.sys.cache[coreType].L1Data || cfg.sys.cache[coreType].L1Data > sysLPI[i].Cache.Size)
-                  cfg.sys.cache[coreType].L1Data = sysLPI[i].Cache.Size;
+            if(sysLPI[n].Cache.Type == CacheInstruction) // Set (smallest) L1 code size
+               if(!cfg.sys.cache[coreType].L1Code || cfg.sys.cache[coreType].L1Code > sysLPI[n].Cache.Size)
+                  cfg.sys.cache[coreType].L1Code = sysLPI[n].Cache.Size;
+            if(sysLPI[n].Cache.Type == CacheData) // Set (smallest) L1 code size
+               if(!cfg.sys.cache[coreType].L1Data || cfg.sys.cache[coreType].L1Data > sysLPI[n].Cache.Size)
+                  cfg.sys.cache[coreType].L1Data = sysLPI[n].Cache.Size;
             break;
          case 2:
-            if(!cfg.sys.cache[coreType].L2 || cfg.sys.cache[coreType].L2 > sysLPI[i].Cache.Size) // Set (smallest) L2 size
-               cfg.sys.cache[coreType].L2 = sysLPI[i].Cache.Size;
+            if(!cfg.sys.cache[coreType].L2 || cfg.sys.cache[coreType].L2 > sysLPI[n].Cache.Size) // Set (smallest) L2 size
+               cfg.sys.cache[coreType].L2 = sysLPI[n].Cache.Size;
             break;
          case 3:
-            if(!cfg.sys.cacheL3 || cfg.sys.cacheL3 > sysLPI[i].Cache.Size) // Set (smallest) L3 size
-               cfg.sys.cacheL3 = sysLPI[i].Cache.Size;
+            if(!cfg.sys.cacheL3 || cfg.sys.cacheL3 > sysLPI[n].Cache.Size) // Set (smallest) L3 size
+               cfg.sys.cacheL3 = sysLPI[n].Cache.Size;
             break;
          }
          break;
@@ -69,7 +93,31 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       }
    }
    mfree1(sysLPI);
-   cfg.sys.groupCount = ((cfg.sys.coreCount[0] + cfg.sys.coreCount[0] + 63) >> 6) + 1; ///--- Modify to account for >64 virtual cores !!!
+
+   // ProcessorCore.Flags is set only for a core carrying more than one virtual core, so a CPU without SMT
+   // never assigned cfg.sys.SMT at all and every later expression that shifted or multiplied by it
+   // inherited the 0 -- SetSMTLoading's undefined shift by ui64(0 - 1) among them (ISSUES.MD G1). One
+   // virtual core per physical core is what "no SMT" means; say so once, here
+   if(!cfg.sys.SMT) cfg.sys.SMT = 1;
+
+   // groupCount was ((coreCount[0] + coreCount[0] + 63) >> 6) + 1: the SMT core count omitted, the non-SMT
+   // count doubled, and a trailing +1 that made the count 2 as soon as a single non-SMT core existed
+   // (ISSUES.MD G4). Only group 0 is ever populated -- the walk above indexes with procGroup, which is 0
+   // and never assigned again -- so the second group sent five loops over an all-zero map, printed an
+   // all-dots second row in the thread bitmap, and handed SetSMTLoading the empty map it scanned to 64.
+   // Counting the groups the walk actually populated states the same quantity, and assumes nothing about
+   // the topology it is counting
+   for(cfg.sys.groupCount = 0, j = 0; j < MAX_THREADS_WORDS; ++j) ///--- Modify to account for >64 virtual cores !!!
+      if(cfg.sys.coreMap[0][j] | cfg.sys.coreMap[1][j]) cfg.sys.groupCount = ui8(j + 1);
+
+   // An enumeration that named no processor core leaves nothing to test: the core map is empty, so no
+   // thread is created, and wmain would print an empty results table and return 0 -- "successful completion
+   // of stability test" for a CPU that was never exercised. In the 'W' path it is a division by zero
+   if(!cfg.sys.groupCount) {
+      wprintf(wstrMessage[32]);
+      return -23;
+   }
+
    for(j = 0; j < cfg.sys.groupCount; ++j) cfg.coreMap[j] = cfg.sys.coreMap[0][j] | cfg.sys.coreMap[1][j];
    cfg.sys.vCoreCount = cfg.sys.coreCount[1] * cfg.sys.SMT + cfg.sys.coreCount[0];
    cfg.sys.cpuSSE4_1  = IsProcessorFeaturePresent(PF_SSE4_1_INSTRUCTIONS_AVAILABLE);
