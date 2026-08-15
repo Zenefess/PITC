@@ -2021,7 +2021,7 @@ verified by execution rather than by reading.
    requested timing mode.
 3. ~~**B1, B2, B3** — make `W` produce a complete, correct `cpu.values` on every topology and every ISA level.~~
    **Done.**
-4. **A9, A10, C1** — reject or handle every `procUnits` combination the parser can produce.
+4. ~~**A9, A10, C1** — reject or handle every `procUnits` combination the parser can produce.~~ **Done.**
 5. **E1, E2** — fix the sweep-mode hang and raise the timer resolution, so pulse timing means what it says.
 6. **C2, C3, C4, C5, C6** — the memory-safety set.
 7. **A7, D1, D2, D3, D5** — the concurrency set; A7 corrupts the report exactly when it matters most.
