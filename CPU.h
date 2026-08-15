@@ -12,7 +12,6 @@
 
 #include <iostream>
 #include <windows.h>
-#include <timeapi.h>
 #include <process.h>
 #include "memory management.h"
 #include "class_timers.h"
@@ -152,6 +151,68 @@ inline bool ThreadsRunningSSE(void) {
    return !(AllFalse((ui128&)threadBits[0], max128) && AllFalse((ui128&)threadBits[1], max128) && AllFalse((ui128&)threadBits[2], max128) && AllFalse((ui128&)threadBits[3], max128));
 }
 ///--- Expand beyond 512 cores ---///
+
+//--- High-resolution pulse timing ---//
+// Windows' scheduler tick is 15.625ms unless a process asks for better, so a Sleep()-driven pulse boundary
+// lands up to a tick late and a pulse shorter than a tick is not representable at all. A waitable timer
+// created with CREATE_WAITABLE_TIMER_HIGH_RESOLUTION is serviced by the kernel's high-resolution timer
+// instead, which is accurate to well under a millisecond, and unlike timeBeginPeriod it does not raise the
+// tick rate for every process on the machine - which would itself alter the idle behaviour under test
+
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION // Declared by the Windows 10 1803 SDK and later
+   #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x02
+#endif
+
+constexpr csi64 UNITS_PER_SECOND = 10000000; // Waitable timer due-time units (100ns) per second
+constexpr csi64 UNITS_PER_MS     = 10000;    // Waitable timer due-time units (100ns) per millisecond
+
+/// Creates the object a computation thread waits on at each pulse boundary. Every thread must own one:
+/// SetWaitableTimer on a shared handle would cancel the interval another thread is already waiting on
+/// @return Timer handle, to be closed by the calling thread, or 0 if no waitable timer could be created
+static cHANDLE CreatePulseTimer(void) {
+   cHANDLE hTimer = CreateWaitableTimerExW(0, 0, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE);
+
+   // Kernels older than Windows 10 1803 reject the flag; the tick-quantised timer is then the best available
+   return hTimer ? hTimer : CreateWaitableTimerExW(0, 0, 0, TIMER_MODIFY_STATE | SYNCHRONIZE);
+}
+
+/// Converts a tic count into the 100ns units a waitable timer's due time is measured in
+/// @param tics Duration in performance-counter tics
+/// @return The same duration in 100ns units; the split keeps multi-hour durations from overflowing
+static inline csi64 TicsTo100ns(csi64 tics) {
+   return (tics / timer.siFrequency) * UNITS_PER_SECOND + ((tics % timer.siFrequency) * UNITS_PER_SECOND) / timer.siFrequency;
+}
+
+/// Suspends the calling thread for the given number of 100ns units
+/// @param hTimer Timer from CreatePulseTimer, or 0 to fall back to the tick-quantised Sleep
+/// @param units Delay in 100ns units; zero or less returns immediately
+static void PulseWait(cHANDLE hTimer, csi64 units) {
+   LARGE_INTEGER dueTime;
+
+   if(units <= 0) return;
+
+   dueTime.QuadPart = -units; // A negative due time is relative to now; a positive one is an absolute date
+
+   if(hTimer && SetWaitableTimer(hTimer, &dueTime, 0, 0, 0, false))
+      WaitForSingleObject(hTimer, INFINITE);
+   else // Rounded up, so a sub-millisecond delay never becomes a Sleep(0) that merely yields the time slice
+      Sleep(DWORD((units + (UNITS_PER_MS - 1)) / UNITS_PER_MS));
+}
+
+/// Suspends the calling thread for the given number of milliseconds
+/// @param hTimer Timer from CreatePulseTimer, or 0 to fall back to the tick-quantised Sleep
+/// @param milliseconds Delay in milliseconds
+static inline void PulseSleep(cHANDLE hTimer, cui32 milliseconds) { PulseWait(hTimer, csi64(milliseconds) * UNITS_PER_MS); }
+
+/// Suspends the calling thread until the global timer reaches targetTics, re-arming for any early wake-up.
+/// The residual error is the timer's wake-up accuracy rather than the scheduler tick a Sleep(1) poll costs
+/// @param hTimer Timer from CreatePulseTimer, or 0 to fall back to the tick-quantised Sleep
+/// @param targetTics Absolute tic count to wait for; a count already reached returns immediately
+static void PulseWaitUntil(cHANDLE hTimer, csi64 targetTics) {
+   for(timer.Update(); targetTics > timer.siCurrentTics; timer.Update())
+      PulseWait(hTimer, TicsTo100ns(targetTics - timer.siCurrentTics));
+}
+//--- High-resolution pulse timing ---//
 
 // Force 1 thread per SMT core
 static void SetSMTLoading(void) {

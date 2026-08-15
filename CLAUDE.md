@@ -141,7 +141,11 @@ the widest of `ThreadsRunningAVX512/AVX/SSE` (`CPU.h`) so the poll itself uses a
   count, so exactly one thread is active at a time.
 - **Staggered** (bit 2): offset by `1 << (coreNum & 7)` cycles — a doubling ramp across each group of 8 cores.
 - **Sweeping** (bit 6): the sleep duration is recomputed each cycle as a linear ramp across the test's total
-  duration, continuously sweeping the duty cycle rather than holding it fixed.
+  duration, continuously sweeping the duty cycle rather than holding it fixed. The ramp is only meaningful
+  *inside* the run's window, so the loop re-checks `endTics` against a fresh reading immediately after
+  `timer.Update()`, and the ramp itself is computed in `si64` and clamped to `[0, cycleTime]` before it is
+  narrowed. Evaluating it past `endTics` used to make the subtraction negative, and the unsigned delay that
+  came out of the cast was ~49 days (ISSUES.MD E1) — do not remove either guard.
 - **Time-synchronised** (bit 3): suppresses the per-thread random start/period jitter (`offset[0..1]`) that is
   otherwise applied to deliberately desynchronise threads.
 
@@ -150,6 +154,19 @@ Parallel when it carries none. The shape `switch` in `ComputationPulse` accordin
 than 1 (R-R) and 4 (Staggered) as Parallel, and adds `startTics` outside the `switch`: `nextTic` starts life as
 a *duration* (`activeTics`), so any path that fails to add the start timestamp leaves the thread comparing a
 QPC reading against a few million tics, permanently asleep — the whole-run idle of ISSUES.MD A4.
+
+Every wait a worker thread performs — the start-up delay and each pulse boundary — goes through the
+pulse-timing group in `CPU.h` (`CreatePulseTimer`, `PulseWait` / `PulseSleep`, `PulseWaitUntil`), never
+`Sleep`. Each thread creates **its own** waitable timer with `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` and
+closes it before clearing its completion bit; a shared handle would not work, because `SetWaitableTimer`
+cancels whatever interval the object is already counting. This is what makes the millisecond-resolution
+options mean what they say: Windows' default 15.625 ms scheduler tick quantises `Sleep`, and because
+`nextTic` fixes the period, every millisecond an off-phase overruns is taken out of the *following*
+on-phase — `Tf[10]10` delivered a 3 ms on-phase at 15 % duty rather than 10 ms at 50 %. `timeBeginPeriod`
+is deliberately *not* used, and `<timeapi.h>` is deliberately no longer included: raising the tick rate is
+a machine-wide change that would perturb the C-state behaviour the pulse shapes exist to exercise, and it
+would add a `winmm.lib` dependency. `CreatePulseTimer` degrades to an ordinary waitable timer on kernels
+older than Windows 10 1803, and `PulseWait` to `Sleep` if even that fails.
 
 ### Memory-backed mode and the arena
 

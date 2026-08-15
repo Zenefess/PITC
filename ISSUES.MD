@@ -37,7 +37,7 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1, A2, A3, A4, A5, A6, A9, A10, B1, B2, B3, C1 and F1 are fixed** — see the `Fixed` notes on those
+**A1, A2, A3, A4, A5, A6, A9, A10, B1, B2, B3, C1, E1, E2 and F1 are fixed** — see the `Fixed` notes on those
 entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
 bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
 failure; A4–A6 and F1 were the false-pass family of Appendix B item 2, where the configuration itself
@@ -46,6 +46,15 @@ guaranteed that no work was done, or no time was spent doing it. Rejecting those
 **K1** and two bullets of **K4**. B1–B3 made `W` able to produce a correct `cpu.values` at all: the
 per-thread ranges now tile the table exactly, the SSE ladders cover each of the 16 lanes once, and a
 finishing thread clears only its own completion bit.
+
+E1 and E2 are the scheduling pair. E1's ~49-day sleep is closed at both ends — the executor leaves its loop
+as soon as a fresh reading shows the deadline has passed, and the sweep ramp is clamped to `[0, cycleTime]`
+before it is narrowed — which also closes the overrun half of **E5**. E2 replaced every `Sleep` in a worker
+thread with a per-thread `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` waitable timer, so the pulse edges and the
+start-up delay are accurate to well under a millisecond instead of being quantised to the 15.625 ms
+scheduler tick; `timeBeginPeriod` was rejected as a machine-wide change to the idle behaviour under test,
+and `<timeapi.h>`, whose presence named E2, is gone. Neither entry changes a job kernel, so `cpu.values`
+does not need regenerating. E3, E4's benchmark half, and E6–E12 are untouched.
 
 A9, A10 and C1 are the malformed-`I`-string family, and one pre-flight rule closes all three: a unit
 selection must name at least one processing unit (`-15`) and at most one of FPU/SSE4.1/AVX2/AVX-512 (`-16`).
@@ -60,6 +69,12 @@ three more files: `CPU.cpp` by twelve lines (nine of them ahead of the memory-al
 C8–C13 are all below the edits), `CPU_job_cycles.h` by six at the dispatch table, and `en-GB.h` by five.
 Citations into those files read correspondingly low, and several were already stale before these fixes — as
 the preamble says, re-confirm every line number against the current source before acting on an entry.
+
+E1 and E2 shifted two more. `CPU.h` lost its `<timeapi.h>` include at line 15 and gained a 62-line
+pulse-timing group before `SetSMTLoading`, so citations between those two points read one line high and
+everything below `SetSMTLoading` — A7's `Failed()`, and B4, B5, B7 and B8 in `GenerateValues` — reads
+sixty-one lines low on top of the two B1–B3 already added. `CPU_methods.h` grew by twelve lines, all of them
+at or below its line 18, so every citation into it reads low: the loop cited at `:63–71` now begins at `:67`.
 
 Every other entry below still stands.
 
@@ -874,7 +889,29 @@ guarantee is not there in the source.
 
 ## E. Scheduling and timing
 
-### E1. Sweeping-pulse mode can `Sleep` for ~49 days at the end of a run — **High**
+### E1. Sweeping-pulse mode can `Sleep` for ~49 days at the end of a run — **High** — *Fixed*
+
+> **Fixed** in both of the ways this entry recommends. `ComputationPulse` now re-tests `endTics` against a
+> fresh reading immediately after `timer.Update()` and leaves the loop when the run is over, so the ramp is
+> only ever evaluated inside the window it is defined on; and the ramp itself is computed in `si64`, clamped
+> to `[0, cycleTime]`, and only then narrowed, so no timestamp can produce a wrapped delay even if one
+> reached it. The two halves were verified separately: with the re-check removed, the clamp alone still
+> bounds every delay to one cycle. The `Sleep` became E2's `PulseSleep`, which does not change this
+> arithmetic.
+>
+> **One correction to the analysis below.** The delay is `DWORD(cycleTime - ratio) + offset[0]`, and that
+> addition is unsigned 32-bit, so a small negative is *absorbed* by the thread's random 0–63 ms jitter
+> (`-1` plus an `offset[0]` of 14 gives a 13 ms sleep, not a hang). The hang needs the sleep branch to be
+> entered more than `offset[0]` ramp steps past `endTics`, one step being `(endTics - startTics) / cycleTime`
+> tics — 900 ms for preset `-6`, 529 ms for `-7` (whose cycle is 3 400 ms, not 2 500 — see E7), 15 ms for a
+> 30-second `Ts` run. Two consequences: with **T-Sync** (`-7`, `Ts St`) `offset[0]` is 0 and a single step is
+> enough, so that preset hangs whenever a thread reaches the sleep branch one step late; without it (`-6`)
+> the overshoot must beat the jitter, which for a one-step overshoot happened on 5 of 512 seeds and for a
+> 72-step overshoot on all 512. Because `rand()` is unseeded and per-thread (D6), every thread of a run
+> draws the *same* `offset[0]`, so this is a per-run rather than a per-thread lottery. The "coin flip" is
+> real — which branch the post-deadline iteration takes is unpredictable — but on the 30-minute presets
+> getting far enough past `endTics` needs the thread to be descheduled for most of a second, not merely to
+> lose the toss.
 
 `CPU_methods.h:63–71`:
 
@@ -900,7 +937,26 @@ converted to `DWORD` — roughly 4.29 × 10^9 milliseconds.
   returns. **The program hangs at the end of the test and prints no results.**
 * **Fix:** clamp the delay to `[0, cycleTime]` and re-check `endTics` after `timer.Update()`.
 
-### E2. `timeapi.h` is included but the timer resolution is never raised — **High**
+### E2. `timeapi.h` is included but the timer resolution is never raised — **High** — *Fixed*
+
+> **Fixed** with the waitable timer this entry recommends over `timeBeginPeriod`. `CPU.h` gained a
+> pulse-timing group: `CreatePulseTimer` (one `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` timer per thread,
+> degrading to an ordinary waitable timer on kernels older than Windows 10 1803 and to `Sleep` if neither
+> can be created), `PulseWait` / `PulseSleep` (a relative due time and one `WaitForSingleObject`), and
+> `PulseWaitUntil`, which replaces the `do { Sleep(1); … }` start-up poll with a wait for the exact
+> remaining interval, re-armed for any early wake-up. Each thread owns its timer and closes it before
+> clearing its completion bit — `SetWaitableTimer` on a shared handle would cancel the interval another
+> thread was already waiting on. `timeBeginPeriod` was deliberately not used: it raises the tick rate for
+> every process on the machine, which would itself perturb the C-state residency the pulse shapes exist to
+> exercise, and it would add a `winmm.lib` dependency the project does not otherwise carry. The include
+> that named this entry is now genuinely unused and was removed.
+>
+> Measured by driving the real executor over a virtual clock with a 15.625 ms tick: preset `-4`'s on-phase
+> was 236 ms against a requested 250 ms and is now 250.0 ms; `Tf[10]10` delivered a 3.0 ms on-phase at 15 %
+> duty and now delivers 10.0 ms at 50 %; the start-up wait overshot by up to 14.8 ms and now lands within
+> 0.5 ms. One refinement to the analysis below: the pulse *period* was never quantised — `nextTic` fixes it
+> arithmetically, and the following on-phase absorbs whatever the off-phase overran — so what the tick
+> distorted was the on/off split inside each cycle, which is what the `[on]off` arguments actually name.
 
 `CPU.h:15` includes `<timeapi.h>`, yet `timeBeginPeriod` is never called anywhere in the tree. Windows'
 default scheduler tick is 15.625 ms unless a process requests otherwise, and every pulse boundary in this
@@ -951,7 +1007,14 @@ case 4: // Staggered
 
 `Tt` and `T[` are now range-checked against zero (A5, A6) but are otherwise still unvalidated (F4).
 
-### E5. The main loop condition reads a stale timestamp — **Medium**
+### E5. The main loop condition reads a stale timestamp — **Medium** — *Partly fixed*
+
+> **Partly fixed** by E1's re-check. The condition still reads the previous iteration's timestamp, and still
+> reads a value another thread may have written (D2), but the body now re-tests `endTics` against a fresh
+> reading before acting on it, so a run no longer starts a pulse or a sleep after its deadline: a 60-second
+> constant-mode run used to exit one `offTime` (900 ms) late and now exits at the deadline, having executed
+> the same number of job cycles. E6's overrun — a long round-robin or staggered sleep already in progress
+> when the deadline passes — is untouched and still open.
 
 `CPU_methods.h:63` evaluates `timer.siCurrentTics < tcfg->endTics` before `timer.Update()` runs at
 `CPU_methods.h:64`, so the loop always executes one iteration past the end time — and reads a value another
