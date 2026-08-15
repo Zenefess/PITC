@@ -37,7 +37,7 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1–A7, A9, A10, B1, B2, B3, B5, B6, C1–C6, D1, D2, D3, D5, E1, E2, F1, G1, G2, G4, G5, G6, G7, H1, H2,
+**A1–A7, A9, A10, B1, B2, B3, B5, B6, C1–C7, C11, D1, D2, D3, D5, E1, E2, F1, G1–G7, H1, H2,
 H7, J1, J2 and J7 are fixed** — see the
 `Fixed` notes on those entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
 bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
@@ -230,9 +230,9 @@ part **every E-core in the machine went untested at every setting**, `U` argumen
 onto 12 distinct cores on 6 P + 8 E, 32 onto 16 on 8 P + 16 E — because `coreType` puts the E-cores in the
 non-SMT class and the P-core threads then restarted over them. Post-fix both cover every core.
 
-**G3 and G9 remain open**, and G9 is worth reading alongside G2 and G5: the "non-SMT / SMT" split these
-fixes now handle correctly is still *called* something it does not mean on a hybrid part, and that
-misnomer is why G5's severity was mis-scoped when it was first written down.
+**G3 and G9 remain open** — G3 was taken in the batch below — and G9 is worth reading alongside G2 and G5:
+the "non-SMT / SMT" split these fixes now handle correctly is still *called* something it does not mean on a
+hybrid part, and that misnomer is why G5's severity was mis-scoped when it was first written down.
 
 Two stale cross-references were corrected while the section was open: C7 and C11 both cite "the
 64-virtual-core ceiling (G2)", which is **G3**.
@@ -248,6 +248,58 @@ code in the instruction table and two messages at the end of the array. `CLAUDE.
 its exit-code and thread-lifecycle sections describe the enumeration's four rules, the sibling bitmaps and
 the class-map affinity walk, and the known-constraints bullet that named G5 is gone, leaving one that names
 G9 — the misnomer that outlived it.
+
+G3 is the scaling batch, and it is one sentence with a long tail: **nothing in this program had a way to say
+which processor group a core belongs to.** `GetLogicalProcessorInformation` does not report one, so the walk,
+the four core maps, `cfg.coreMap`, the thread bitmap in the banner and `SetThreadAffinityMask` all carried a
+bare 64-bit mask, and every one of them meant "group 0" without saying so. `EnumerateTopology` (`CPU.h:554`)
+now walks the `Ex` form, whose every record carries a `GROUP_AFFINITY`; the maps are indexed `[class][group]`;
+`NextSelectedCore` (`CPU.h:696`) is a cursor that crosses groups; and threads are pinned with
+`SetThreadGroupAffinity`, which is the only call that can reach a core outside the caller's own group.
+
+**The entry's predicted symptom turned out not to be the one that happens, and the real one is worse.** The
+affinity walk cannot shift its mask to 0, because `threadCount` is counted from the same truncated map the
+walk consults: the two agreed with each other and were wrong together. What the old code did on a machine of
+more than 64 logical processors was enumerate the one group the calling thread was in, create that group's
+worth of threads, pin them correctly, print that group's bitmap, and **return 0** — a clean bill of health
+for a CPU of which it had tested one group. On the 64-group topology in the harness that is 8 of 512 virtual
+cores graded `.Pass.` and 504 never executing an instruction. `MAX_THREADS` is now a real ceiling rather than
+a claim the code did not honour: a core that would take the virtual core total past 512 is refused and the
+surplus reported, where before nothing bounded the walk at all.
+
+**C7 and C11 came with it**, because they are the two entries whose own text says lifting this ceiling makes
+them live, and shipping the lift without them would have traded a silent partial test for a heap overflow at
+about 150 threads and a non-terminating loop at 256. C7's second half — the `wcstombs` conversion writing
+into the buffer it is reading — was a defect at any thread count and is closed too; its `swprintf` half is
+not, and is noted on the entry. **F2 and C10 were deliberately left**: the `Uc`/`Ut` parsers are a separate
+High entry about argument parsing, not about groups, and G3 does not make them worse in kind — only more
+visible, since the element their wrong word index scribbles on can now be a real second group. One message
+is added, `wstrMessage[33]`, warning that the machine has more virtual cores than this build tests; it is a
+warning, not an exit code, so `wstrInstructions_English` is unchanged. No job kernel is touched, so
+**`cpu.values` does not need regenerating**.
+
+Verification followed the G1 batch's method. `EnumerateTopology`, `NextSelectedCore` and `SetSMTLoading` were
+extracted verbatim from `CPU.h` into a harness with a stand-in Windows API, and driven over fourteen
+synthetic topologies — six of one group and eight of more, including 64 groups of 8 and three over-capacity
+machines of 640, 540 and 520 virtual cores — for all four `U` policies against three core-map selections
+each, plus the API-failure, no-cores and zero-`Size`-record paths. The current forms fail none of 57 247
+checks; the pre-fix forms see 64 of 128, 40 of 160, 8 of 512 and 64 of 640 on the multi-group topologies and
+are indistinguishable from the current ones on all six single-group ones.
+
+Three files moved. `CPU.cpp` **lost** 38 — 857 now 819 — because the topology walk moved out of `wmain` into
+`CPU.h`: 85 lines went from `:16`, and 47 came back in five places below it (the results buffer's sizing at
+`:637`, the banner at `:665`, the spawn loop at `:683`, the affinity call at `:712` and the narrow conversion
+at `:792`). A citation into `wmain` therefore reads **85 lines high** above the arena block and between 38
+and 85 high below it, which reverses the direction every earlier batch shifted them in — re-derive rather
+than adjust. `CPU.h` gained 171 — 660 now 831 — six at `:26` for `MAX_GROUPS` and 165 at `:536` for
+`EnumerateTopology` and `NextSelectedCore`, so a citation reads 6 low from `:26` to `:530` and 171 low below
+that: `SetSMTLoading`, `Failed()`, `Evaluate` and `GenerateValues`, and so A7, B4, B5, B7 and B8, on top of
+every earlier shift. `en-GB.h` gained one message at the end of the array, 33 entries now 34. `CLAUDE.md` was
+updated to match — its exit-code and thread-lifecycle sections describe the group-aware enumeration, the
+cursor and the `MAX_THREADS` refusal, and the known-constraints bullet that named the 64-core ceiling is
+replaced by two, one on the ceiling that remains at 512 and one on `Uc`/`Ut`.
+
+**G9 is now the last topology entry open**, and G8's remaining half with it.
 
 Every other entry below still stands.
 
@@ -1004,7 +1056,28 @@ characters + NUL); anything longer overruns the global.
   storage. `/GS-` in `Release|x64` (`CPU.vcxproj:149`) removes the usual mitigation.
 * **Fix:** `lstrcpynW(wstrLang, &argv[i][1], min(c, (int)_countof(wstrLang)));`
 
-### C7. The results buffer and the `wcstombs` in-place conversion overflow at high thread counts — **Medium**
+### C7. The results buffer and the `wcstombs` in-place conversion overflow at high thread counts — **Medium** — *Fixed*
+
+> **Fixed, with G3**, which is what made it live: the entry's own trigger line says so. `wstrOutput` is now
+> allocated after `threadCount[2]` is known and sized from it — `4096 + threadCount[2] * 1024` wide
+> characters (`CPU.cpp:648`) — against a widest row, AVX-512 printing two 512-bit values in hexadecimal, of a
+> little under 300 characters, and at most two unit rows per thread, because `wmain` already rejects a unit
+> selection naming more than one of FPU/SSE4.1/AVX2/AVX-512. The allocation is checked, and a failure exits
+> `-17` with the existing message rather than formatting into a null pointer.
+>
+> The narrow conversion is a separate allocation, which is the half of the entry that was a defect rather
+> than a limit: writing the narrow string into `wstrOutput` starting at wide-character index `c` asks a
+> 2c-byte buffer to hold 3c bytes, and asks it *while reading the wide string it is overwriting*. `wcstombs`
+> is now called first with a null destination — the form that reports the length the conversion needs, which
+> a multi-byte locale makes larger than `c` — and its `(size_t)-1` is examined at both calls. `WriteFile` is
+> given the byte count `wcstombs` returned rather than the character count `c`, which is a second reason the
+> 8-bit results file could be wrong.
+>
+> The `swprintf` calls keep the legacy two-argument form. With the buffer sized from the thread count there
+> is no input that reaches its end, so this is a robustness item rather than the overflow the entry names;
+> **that part of the entry's suggested fix is not done.** Note that the sibling defect in the UTF-16 branch,
+> **F3** — `WriteFile` given `c` bytes for `c` wide characters — is untouched and still truncates that file
+> to half its length.
 
 `wstrOutput` is 32 768 wide characters (`CPU.cpp:17`) and every `swprintf` into it (`CPU.cpp:571–655`) uses the
 legacy two-argument form with no size limit. The conversion at `CPU.cpp:667` writes the narrow string *into
@@ -1056,7 +1129,14 @@ guarantees it is non-zero. The same variable is used unchecked at `CPU.cpp:503,5
 unbounded. `Uc` reaches an undefined shift count at the 32nd character and `Ut` at the 64th. See F1 for the
 accompanying indexing errors.
 
-### C11. The arena-slice loop uses `ui8` counters against `si16` thread counts — **Low**
+### C11. The arena-slice loop uses `ui8` counters against `si16` thread counts — **Low** — *Fixed*
+
+> **Fixed, with G3**, which is what took it off "latent". `k` — the index into `value[1]`, which counts
+> across both thread classes — and `l`, which walks one class against an `si16` population, are both `si16`
+> now; `m`, which counts the two classes, stays `ui8`. Above 255 threads the old `l` wrapped before reaching
+> `threadCount[m]` and the inner loop could not terminate, while `k` wrapped and handed the 256th thread the
+> first thread's arena slice. A machine of more than 255 selected virtual cores is exactly what G3 makes
+> reachable.
 
 `CPU.cpp:513,552–553` declare `ui8 k, l, m` and compare `l` against `threadCount[m]` (`si16`). Above 255
 threads the counters wrap and the loop cannot terminate. Latent behind the 64-core ceiling (G3), but the
@@ -1798,7 +1878,61 @@ On a CPU with no SMT, `cfg.sys.SMT` is never assigned (`CPU.cpp:38–42` only wr
 * **Impact:** on an Intel P/E-core part, "one thread per physical core" silently tests the P-cores only and
   ignores every E-core — while the banner still reports the full thread bitmap.
 
-### G3. Hard 64-virtual-core ceiling despite `MAX_THREADS == 512` — **High**
+### G3. Hard 64-virtual-core ceiling despite `MAX_THREADS == 512` — **High** — *Fixed*
+
+> **Fixed**, and the impact line below is wrong in a way worth reading, because the real behaviour is quieter
+> and worse. The three blockers the entry names are each closed: `EnumerateTopology` (`CPU.h:554`) walks
+> `GetLogicalProcessorInformationEx(RelationAll, …)`, whose every record carries a `GROUP_AFFINITY` — the
+> mask *and* the group it is a mask of; the core maps, the sibling bitmaps and `cfg.coreMap` are written and
+> read at `[group]` throughout; and threads are pinned with `SetThreadGroupAffinity`, through a
+> `NextSelectedCore` cursor (`CPU.h:696`) that crosses group boundaries as it walks the selected cores of a
+> thread's own class. `MAX_GROUPS` (`CPU.h:32`) is 64, Windows' architectural maximum, and is deliberately
+> not `MAX_THREADS_WORDS`: that is the width of a bitmap indexed by *thread*, and the two are equal only
+> because 512 threads and a 64-processor group both divide by 64. A group of fewer than 64 virtual cores
+> separates them, and `groupCount` now scans to `MAX_GROUPS`.
+>
+> **The predicted symptom does not occur, and what does is a false claim of health.**
+> `while(mask & ~cfg.coreMap[procGroup]) mask <<= 1;` cannot shift to 0, because `threadCount` is counted
+> from the same truncated map the walk consults — the two are consistent with each other and wrong together.
+> `GetLogicalProcessorInformation` returns records for *the processor group the calling thread is in* and no
+> other, so on any machine of more than 64 logical processors the tool enumerated one group, created one
+> group's worth of threads, pinned them correctly within that group, printed a thread bitmap of that group,
+> and returned 0. A 128-thread machine was reported as tested when half of it had never executed an
+> instruction; a 512-thread machine spread over 64 groups was reported as tested when 8 of its 512 virtual
+> cores had. For a tool whose entire output is a verdict about a CPU, silently grading one eighth of it
+> `.Pass.` is the failure mode, not the unpinned threads.
+>
+> `cfg.sys.vCoreCount` is now the count of virtual cores actually accepted rather than
+> `coreCount[1] * SMT + coreCount[0]`, which is the same number on every uniform and hybrid topology but
+> assumes one SMT width for the whole machine. A core that would take that count past `MAX_THREADS` is
+> **refused rather than recorded**, and the surplus reported through the new `wstrMessage[33]`: a thread's
+> index is its ordinal among the selected cores, so `threadData`, the four result planes and the completion
+> bitmap are all indexed by it, and a 640-processor machine would otherwise have written past the end of
+> them. `MAX_THREADS` is therefore a real, reported ceiling where it used to be a claim the code did not
+> honour. The banner prints one row per group, each ending at the highest virtual core *that group* holds,
+> rather than the machine's virtual core count for every row.
+>
+> Two entries this made live were fixed with it, because lifting a ceiling that hides a defect is not
+> lifting it: **C7** (the results buffer, whose overflow starts at about 150 threads) and **C11** (the
+> arena-slice loop's `ui8` counters, which cannot terminate above 255). **F2 and C10 were not** — the `Uc`
+> and `Ut` parsers are a separate, already-High entry, and G3 does not make them worse in kind, only more
+> visible: their wrong word index used to scribble on `cfg.coreMap` elements nothing read, and now a second
+> element can be a second processor group.
+>
+> Verified off-target, in the same way the G1 batch was: `EnumerateTopology`, `NextSelectedCore` and
+> `SetSMTLoading` were extracted verbatim from `CPU.h` into a harness with a stand-in for the Windows API,
+> and driven over fourteen synthetic topologies — six of one group (uniform 2-way and 4-way SMT, a 6-core
+> and a 1-core non-SMT part, and two hybrid P/E mixes) and eight of more: 2×64, 4×40, 64+64+32, two groups
+> each carrying a hybrid mix, 64 groups of 8, and three deliberately over-capacity machines of 640, 540 and
+> 520 virtual cores, the last with mixed 4-way and 1-way cores so the trim lands inside a group. Each was
+> run for all four `U` policies against three core-map selections (all cores, every third core, one whole
+> group deselected), plus the API-failure, no-cores and zero-`Size`-record paths. The current forms fail
+> none of 57 247 checks: one thread per selected core, no two threads sharing a core, no selected core left
+> without one, every thread on a core of its own class, every virtual core the enumeration accepted covered,
+> and each group's banner row covering that group. The pre-fix forms see 64 of 128, 40 of 160, 8 of 512, 64
+> of 640, 63 of 520 and 60 of 540 on the multi-group topologies, and are indistinguishable from the current
+> ones on all six single-group topologies — which is why nothing about this was ever going to show on a
+> desktop.
 
 All buffers are sized for 512 threads (`CPU.h:20`, `CPU.cpp:18`), but the enumeration and affinity code assume
 a single 64-bit mask. The author's own `///--- Modify to account for >64 virtual cores !!!` markers appear at
@@ -2688,9 +2822,14 @@ verified by execution rather than by reading.
    consider whether the FP kernels' 1-ULP blindness is acceptable, and
    extend `W` to validate the `JobMem*` and `JobALU_*` kernels; regenerate golden values once, together.~~ **Done.**
 10. ~~**G1, G2, G4, G6** — topology correctness~~ **Done**, with **G5** and **G7**. A hybrid CPU now runs one
-    thread on each of its cores, which no release has done. Next: **G3** to lift the 64-core ceiling, then
-    **G9** to stop calling E-cores "non-SMT" — the misnomer that hid G5's real severity — and **G8**, whose
-    remaining half the sibling bitmaps G2 added make straightforward.
-11. **F2–F15** — the parser and output set.
-12. Documentation (**K**) and process (**L**) alongside the code changes they describe. A CI job that builds a
+    thread on each of its cores, which no release has done.
+11. ~~**G3** — the 64-virtual-core ceiling~~ **Done**, with **C7** and **C11**, the two entries that named it
+    as the only thing keeping them latent. A machine of more than one processor group is now enumerated,
+    selected, pinned and reported whole, where before the tool tested the one group it happened to be in and
+    returned 0 for the rest. Next: **G9** to stop calling E-cores "non-SMT" — the misnomer that hid G5's real
+    severity — and **G8**, whose remaining half the sibling bitmaps G2 added make straightforward.
+12. **F2–F15** — the parser and output set. **F2** and **C10** are the `Uc`/`Ut` pair G3 deliberately left
+    alone, and G3 makes them the more worth taking: the element their wrong word index writes into can now be
+    a second processor group rather than storage nothing reads.
+13. Documentation (**K**) and process (**L**) alongside the code changes they describe. A CI job that builds a
     clean clone is the highest-value single addition.

@@ -5,7 +5,6 @@
  * Desc: Pulsed integrity tests for CPUs.                   *
  *                                                          *
  * To do: *) Add utilisation of (code) caches               *
- *        *) Expand core handling to >64 cores              *
  *                                                          *
  * MIT license             Copyright (c) David William Bull *
  ************************************************************/
@@ -14,112 +13,27 @@
 #include "CPU_methods.h"
 
 csi32 wmain(csi32 argc, cwchptrc argv[]) {
-   al64 declare1d64z(wchar, wstrOutput, 32768);
-        declare1d64z(SYSTEM_LOGICAL_PROCESSOR_INFORMATION, sysLPI, MAX_THREADS * 4);
-        VALUES_HEADER header;
-        ptr   outFile;
-        ui64  mask;
-        DWORD bytesProc = -1;
-        int   c = 1, d;
-        si16  threadCount[3] = { 0, 0, 0 }; // 0=Non-SMT, 1=SMT, 2=Total
-        si16  i;
-        ui8   j, k;
-        ui8   procGroup = 0;
-        ui8   outUTF    = 0;
+   VALUES_HEADER header;
+   ptr   outFile;
+   ui64  mask;
+   DWORD bytesProc = 0;
+   int   c = 1, d;
+   si16  threadCount[3] = { 0, 0, 0 }; // 0=Non-SMT, 1=SMT, 2=Total
+   si16  i;
+   si16  k;     // Indexes value[] over every selected core, so it counts to MAX_THREADS, not to 255
+   ui8   j;
+   ui8   outUTF = 0;
 
    setlocale(LC_ALL, "");
 
-   // GetLogicalProcessorInformation reports failure by returning FALSE, having replaced bytesProc with the
-   // size it wants -- and its return value was discarded, so the walk below read an untouched buffer as
-   // though it held topology records and built a core map out of whatever was in it (ISSUES.MD G6). The
-   // buffer holds MAX_THREADS * 4 records, several times what a processor group of 64 virtual cores can
-   // describe, so a failure here is a system that cannot be enumerated rather than one that needs a larger
-   // second attempt
-   bytesProc = DWORD(sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION) * MAX_THREADS * 4);
-   if(!GetLogicalProcessorInformation(sysLPI, &bytesProc)) {
-      wprintf(wstrMessage[31], ui32(GetLastError()));
-      mfree1(sysLPI);
-      return -23;
-   }
+   // The topology is read before anything else: nothing below can be sized, selected or pinned without it,
+   // and a machine that cannot be described is one this build must not claim to have tested. The walk itself
+   // moved into EnumerateTopology when it moved onto GetLogicalProcessorInformationEx, which is the only
+   // form of the call that reports which processor group a mask belongs to (ISSUES.MD G3)
+   csi32 topology = EnumerateTopology();
 
-   // bytesProc now holds the number of bytes written, always a whole number of records. The walk counted it
-   // down instead, testing (si32&)bytesProc > 0 -- a DWORD reinterpreted as signed, so a required size above
-   // 2GiB would have read as negative. A record count is what the walk is counting, so count records
-   cui32 lpiCount = bytesProc / ui32(sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION));
+   if(topology) return topology;
 
-   for(ui32 n = 0; n < lpiCount; ++n) { ///--- Modify to account for >64 virtual cores !!!
-      cui8 coreType = (PopulationCount64(sysLPI[n].ProcessorMask) > 1 ? 1 : 0);
-
-      switch(sysLPI[n].Relationship) {
-      case 0: // Processor core
-         if(!(cfg.sys.coreMap[coreType][procGroup] & sysLPI[n].ProcessorMask)) ++cfg.sys.coreCount[coreType];
-         cfg.sys.coreMap[coreType][procGroup] |= sysLPI[n].ProcessorMask;
-         // Which virtual cores share a physical core is knowable only here, one record at a time: the maps
-         // above are unions and cannot answer it afterwards, which is why SetSMTLoading used to rebuild the
-         // sibling layout from a core count and a stride and got it wrong three ways (ISSUES.MD G1, G2, G7).
-         // A core with no SMT contributes the same bit to both maps, so it survives either policy
-         cfg.sys.coreSibling[0][procGroup] |= LowestSetBit64(sysLPI[n].ProcessorMask);
-         cfg.sys.coreSibling[1][procGroup] |= HighestSetBit64(sysLPI[n].ProcessorMask);
-         if(sysLPI[n].ProcessorCore.Flags) {
-            cui8 SMT = (ui8)PopulationCount64(sysLPI[n].ProcessorMask);
-            if(!cfg.sys.SMT || cfg.sys.SMT < SMT) // Set (maximum) SMT count per physical core
-               cfg.sys.SMT = SMT;
-         }
-         break;
-      case 1: // Numa node
-         break;
-      case 2: // Cache
-         switch(sysLPI[n].Cache.Level) {
-         case 1:
-            if(sysLPI[n].Cache.Type == CacheInstruction) // Set (smallest) L1 code size
-               if(!cfg.sys.cache[coreType].L1Code || cfg.sys.cache[coreType].L1Code > sysLPI[n].Cache.Size)
-                  cfg.sys.cache[coreType].L1Code = sysLPI[n].Cache.Size;
-            if(sysLPI[n].Cache.Type == CacheData) // Set (smallest) L1 code size
-               if(!cfg.sys.cache[coreType].L1Data || cfg.sys.cache[coreType].L1Data > sysLPI[n].Cache.Size)
-                  cfg.sys.cache[coreType].L1Data = sysLPI[n].Cache.Size;
-            break;
-         case 2:
-            if(!cfg.sys.cache[coreType].L2 || cfg.sys.cache[coreType].L2 > sysLPI[n].Cache.Size) // Set (smallest) L2 size
-               cfg.sys.cache[coreType].L2 = sysLPI[n].Cache.Size;
-            break;
-         case 3:
-            if(!cfg.sys.cacheL3 || cfg.sys.cacheL3 > sysLPI[n].Cache.Size) // Set (smallest) L3 size
-               cfg.sys.cacheL3 = sysLPI[n].Cache.Size;
-            break;
-         }
-         break;
-      case 3: // Processor package
-         break;
-      }
-   }
-   mfree1(sysLPI);
-
-   // ProcessorCore.Flags is set only for a core carrying more than one virtual core, so a CPU without SMT
-   // never assigned cfg.sys.SMT at all and every later expression that shifted or multiplied by it
-   // inherited the 0 -- SetSMTLoading's undefined shift by ui64(0 - 1) among them (ISSUES.MD G1). One
-   // virtual core per physical core is what "no SMT" means; say so once, here
-   if(!cfg.sys.SMT) cfg.sys.SMT = 1;
-
-   // groupCount was ((coreCount[0] + coreCount[0] + 63) >> 6) + 1: the SMT core count omitted, the non-SMT
-   // count doubled, and a trailing +1 that made the count 2 as soon as a single non-SMT core existed
-   // (ISSUES.MD G4). Only group 0 is ever populated -- the walk above indexes with procGroup, which is 0
-   // and never assigned again -- so the second group sent five loops over an all-zero map, printed an
-   // all-dots second row in the thread bitmap, and handed SetSMTLoading the empty map it scanned to 64.
-   // Counting the groups the walk actually populated states the same quantity, and assumes nothing about
-   // the topology it is counting
-   for(cfg.sys.groupCount = 0, j = 0; j < MAX_THREADS_WORDS; ++j) ///--- Modify to account for >64 virtual cores !!!
-      if(cfg.sys.coreMap[0][j] | cfg.sys.coreMap[1][j]) cfg.sys.groupCount = ui8(j + 1);
-
-   // An enumeration that named no processor core leaves nothing to test: the core map is empty, so no
-   // thread is created, and wmain would print an empty results table and return 0 -- "successful completion
-   // of stability test" for a CPU that was never exercised. In the 'W' path it is a division by zero
-   if(!cfg.sys.groupCount) {
-      wprintf(wstrMessage[32]);
-      return -23;
-   }
-
-   for(j = 0; j < cfg.sys.groupCount; ++j) cfg.coreMap[j] = cfg.sys.coreMap[0][j] | cfg.sys.coreMap[1][j];
-   cfg.sys.vCoreCount = cfg.sys.coreCount[1] * cfg.sys.SMT + cfg.sys.coreCount[0];
    cfg.sys.cpuSSE4_1  = IsProcessorFeaturePresent(PF_SSE4_1_INSTRUCTIONS_AVAILABLE);
    cfg.sys.cpuAVX2    = IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE);
    cfg.sys.cpuAVX512  = IsProcessorFeaturePresent(PF_AVX512F_INSTRUCTIONS_AVAILABLE);
@@ -646,7 +560,10 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       MEMORYSTATUSEX memStatus = { ui32(sizeof(MEMORYSTATUSEX)) };
       cbool memStatusValid     = GlobalMemoryStatusEx(&memStatus) ? true : false;
       ui64  os, bos, recSize, vecUnits;
-      ui8   l, m;
+      // l walks a thread class, whose population is an si16: as a ui8 it wrapped at 256 and the loop below
+      // could not terminate, which the 64-virtual-core ceiling was all that kept out of reach (ISSUES.MD C11)
+      si16  l;
+      ui8   m;
 
       // Bytes per record for the selected unit set, and the size of a record's vector portion in the 8-byte
       // units resArray.alu is indexed by; the two always satisfy recSize == (vecUnits + 1) * 8 whenever the
@@ -720,6 +637,23 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          }
    }
 
+   // The results table is one row per thread per selected unit, and the widest row -- AVX-512, two 512-bit
+   // values printed in hexadecimal -- is a little under 300 characters. wstrOutput was a fixed 32 768 wide
+   // characters however many threads were running, which the table passes at about 150 (ISSUES.MD C7); the
+   // 64-virtual-core ceiling is what kept that unreachable, so lifting it is what makes the sizing necessary.
+   // At most two unit rows can be selected at once -- the ALU bit plus one of FPU/SSE/AVX2/AVX-512 -- so a
+   // kibicharacter per thread is a little over half as much again as the widest pair of rows can need. The
+   // thread bitmap above it is one row per processor group rather than per thread, and 96 characters covers
+   // a row of 64 cores and its indent, so the two terms between them bound everything written below
+   csi32 outChars = 4096 + si32(cfg.sys.groupCount) * 96 + si32(threadCount[2]) * 1024;
+
+   al64 declare1d64z(wchar, wstrOutput, outChars);
+
+   if(!wstrOutput) {
+      wprintf(wstrMessage[22], (si64(outChars) * si64(sizeof(wchar))) >> 20);
+      return -17;
+   }
+
    printf("\n");
    // Output configuration properties
    c = swprintf(wstrOutput, wstrInterface[0]);
@@ -733,8 +667,15 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    c += swprintf(&wstrOutput[c], wstrInterface[5], threadCount[2], (fl64(cfg.tics) / fl64(timer.siFrequency)));
    if(cfg.procSync & 0x020) c += swprintf(&wstrOutput[c], wstrInterface[6], cfg.offTime);
    c += swprintf(&wstrOutput[c], wstrInterface[7]);
+   // One row per processor group, one character per virtual core *of that group*, the row ending at the
+   // group's highest. The width was the virtual core count of the whole machine for every row, which
+   // describes a machine of one group and no other (ISSUES.MD G3): a second group would have been printed to
+   // the first group's width, its cores beyond that width missing and its row padded with dots for cores
+   // that are not in it. Ending at the highest core the group holds assumes nothing about the numbering
    for(i = 0; i < cfg.sys.groupCount; ++i) {
-      for(mask = 1, d = cfg.sys.coreCount[1] * cfg.sys.SMT + cfg.sys.coreCount[0]; mask && d; mask <<= 1, --d)
+      cui64 groupMap = cfg.sys.coreMap[0][i] | cfg.sys.coreMap[1][i];
+
+      for(mask = 1; mask && mask <= groupMap; mask <<= 1)
          c += swprintf(&wstrOutput[c], L"%c", (mask & cfg.coreMap[i] ? '!' : '.'));
       c += swprintf(&wstrOutput[c], L"\n               ");
    }
@@ -744,16 +685,17 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
 
    // Spawn child processes
    for(d = 0, j = 0; j < 2; ++j) {
-      // The affinity walk consults the selected cores of the thread's own class. It walked the combined map
-      // from bit 0 for both classes, so on any topology carrying non-SMT *and* SMT threads the second class
-      // was pinned over cores the first already held while the top of the map idled -- and that is every
-      // hybrid P/E-core part at every setting, because coreType is inferred from a core's sibling count, so
-      // its E-cores are the non-SMT class and its P-cores the SMT one (ISSUES.MD G5, G9). Walking the class
-      // map also keeps packetSizeRAM and resArray.records[j], both selected by class, describing the core
-      // the thread is actually pinned to. The two class maps are disjoint, so restarting mask at bit 0 for
-      // each class costs nothing beyond skipping the other class's bits, and threadCount[j] is the
-      // population count of this very map, so there is exactly one core here for each thread of the class
-      cui64 classMap = cfg.sys.coreMap[j][procGroup] & cfg.coreMap[procGroup]; ///--- Modify to account for >64 virtual cores !!!
+      // The affinity cursor walks the selected cores of the thread's own class, group by group. It consulted
+      // the combined map from bit 0 for both classes, so on any topology carrying non-SMT *and* SMT threads
+      // the second class was pinned over cores the first already held while the top of the map idled -- and
+      // that is every hybrid P/E-core part at every setting, because coreType is inferred from a core's
+      // sibling count, so its E-cores are the non-SMT class and its P-cores the SMT one (ISSUES.MD G5, G9).
+      // Walking the class map also keeps packetSizeRAM and resArray.records[j], both selected by class,
+      // describing the core the thread is actually pinned to. The two class maps are disjoint, so restarting
+      // the cursor at group 0 bit 0 for each class costs nothing beyond skipping the other class's bits, and
+      // threadCount[j] is the population count of these very maps, so there is exactly one core in them for
+      // each thread of the class
+      ui8 coreGroup = 0;
 
       for(i = 0, mask = 1; i < threadCount[j]; ++d, ++i, mask <<= 1) {
          threadData[d].packetSizeRAM = resArray.blockSize[j];
@@ -772,17 +714,27 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          SetThreadRunning(d); // Interlocked: a thread spawned earlier may be clearing this same byte
 
          // _beginthreadex reports failure with 0, and hands back a handle this thread owns and must close;
-         // _beginthread's is closed by the CRT when the thread exits, so it is never valid to pass to
-         // SetThreadAffinityMask. Creating suspended applies the mask before the thread executes anything,
+         // _beginthread's is closed by the CRT when the thread exits, so it is never valid to pass to an
+         // affinity call. Creating suspended applies the affinity before the thread executes anything,
          // rather than after it has already begun running on whichever core the scheduler chose
          cHANDLE thread = (HANDLE)_beginthreadex(0, 0, ComputationPulse, &threadData[d], CREATE_SUSPENDED, 0);
+
+         GROUP_AFFINITY affinity = {}; // Its Reserved[3] must be zero; the initialiser is what guarantees it
 
          // A thread that never starts never clears its completion bit, hanging the wait loop below forever
          if(!thread) { ClearThreadRunning(d); wprintf(wstrMessage[23], d); return -19; }
 
-         while(mask & ~classMap) mask <<= 1;
+         if(NextSelectedCore(mask, coreGroup, j)) {
+            affinity.Mask  = mask;
+            affinity.Group = ui16(coreGroup);
+         }
 
-         if(!SetThreadAffinityMask(thread, mask)) wprintf(wstrMessage[24], d);
+         // SetThreadAffinityMask takes a bare 64-bit mask, which the OS reads as a mask of the thread's own
+         // processor group, so it cannot pin a thread to a core of any other group and fails outright once
+         // the walk has shifted past the last selected bit of group 0 (ISSUES.MD G3). SetThreadGroupAffinity
+         // names the group. A cursor that found no further core leaves an empty mask, which it rejects --
+         // the same warning as any other affinity the OS will not accept
+         if(!SetThreadGroupAffinity(thread, &affinity, 0)) wprintf(wstrMessage[24], d);
 
          if(ResumeThread(thread) == DWORD(-1)) { ClearThreadRunning(d); CloseHandle(thread); wprintf(wstrMessage[23], d); return -19; }
 
@@ -842,12 +794,24 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             return -10;
          }
       } else { // 8-bit encodings
-         wcstombs((chptr)&wstrOutput[c], wstrOutput, c);
-         if(!WriteFile(outFile, (chptr)&wstrOutput[c], c, &bytesProc, 0)) {
+         // The conversion used to write the narrow string into wstrOutput itself, starting at wide-character
+         // index c, which asks a 2c-byte buffer to hold 3c bytes -- and asks it while it is still reading the
+         // wide string it is overwriting (ISSUES.MD C7). A separate allocation is the only spelling of this
+         // that cannot overlap its own source. wcstombs with a null destination reports the length the
+         // conversion needs, which a multi-byte locale makes larger than the character count c is
+         csize_t narrowLen = wcstombs(0, wstrOutput, 0);
+         chptr   strNarrow = (narrowLen == csize_t(-1) ? 0 : (chptr)zalloc64(narrowLen + 1u));
+
+         // (size_t)-1 is what wcstombs returns for a character the locale cannot represent, and it was never
+         // examined: the length it does not describe was then handed to WriteFile as a byte count
+         if(!strNarrow || wcstombs(strNarrow, wstrOutput, narrowLen + 1u) == csize_t(-1) ||
+            !WriteFile(outFile, strNarrow, DWORD(narrowLen), &bytesProc, 0)) {
             wprintf(wstrMessage[11], wstrOut);
+            mfree1(strNarrow);
             CloseHandle(outFile);
             return -10;
          }
+         mfree1(strNarrow);
       }
       wprintf(wstrMessage[0], wstrOut);
       CloseHandle(outFile);
