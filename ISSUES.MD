@@ -2190,7 +2190,7 @@ verified by execution rather than by reading.
    **Done.**
 4. ~~**A9, A10, C1** — reject or handle every `procUnits` combination the parser can produce.~~ **Done.**
 5. ~~**E1, E2** — fix the sweep-mode hang and raise the timer resolution, so pulse timing means what it says.~~ **Done.**
-6. **C2, C3, C4, C5, C6** — the memory-safety set.
+6. ~~**C2, C3, C4, C5, C6** — the memory-safety set.~~ **Done.**
 7. **A7, D1, D2, D3, D5** — the concurrency set; A7 corrupts the report exactly when it matters most.
 8. **H1, H2, B6** — pin the floating-point model, stop the Debug/Release divergence, and version the
    `cpu.values` format so a toolchain change can never be mistaken for a hardware fault.
