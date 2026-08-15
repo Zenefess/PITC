@@ -243,9 +243,14 @@ policy (`SetSMTLoading` in `CPU.h`), allocates the arena, then creates one `Comp
 (`CPU_methods.h`) per selected virtual core with `_beginthreadex` — **suspended**, so `SetThreadGroupAffinity`
 lands before the thread executes anything — and resumes it. `_beginthread` is not usable here: the CRT closes
 *its* handle when the thread exits, so the handle must not be retained, let alone passed to an API. The
-handle `_beginthreadex` returns belongs to `wmain`, which closes it after resuming. A creation or resume
-failure aborts the run with `-19` rather than leaving a completion bit no thread will ever clear. Both thread
-entry points are therefore `ui32 __stdcall` and end by returning rather than calling `_endthread`.
+handle `_beginthreadex` returns belongs to `wmain`, which **keeps it in `threadHandle[]` until the thread has
+been waited on**: the completion bitmap says only that a thread has reached its last statement, and `wmain`
+reads the result planes and frees the arena as soon as it empties, so `JoinThreads` (`CPU.h`) is what makes
+"every thread has finished" true before either happens (ISSUES.MD D8). A creation or resume failure aborts the
+run with `-19` rather than leaving a completion bit no thread will ever clear, and releases the handles it
+already holds with `ReleaseThreads` rather than waiting on threads that would run to the end of a test nobody
+is going to read. Both thread entry points are therefore `ui32 __stdcall` and end by returning rather than
+calling `_endthread`.
 
 **Everything about a core is a (group, mask) pair, never a bare mask.** `EnumerateTopology` walks
 `GetLogicalProcessorInformationEx(RelationAll, …)`, whose every record carries a `GROUP_AFFINITY`;
@@ -323,12 +328,22 @@ Completion is signalled through `threadBits`, a global bitmap with one bit per t
 is byte-wide and interlocked**: a thread clears its own bit via `_InterlockedAnd8` when it exits, and `wmain`
 sets a bit with `SetThreadRunning` (`_InterlockedOr8`) before spawning. A plain `|=` there was a lost-update
 race against a worker already clearing a different bit of the same byte, which hung the poll below
-(ISSUES.MD D1). `wmain` spins on `ThreadsRunning()` — a reference bound at startup to the widest of
-`ThreadsRunningAVX512/AVX/SSE` (`CPU.h`) so the poll itself uses available SIMD. Those three read the *same*
-64 bytes: a `ui64` array means a 512-bit view spans 8 elements, a 256-bit view 4 and a 128-bit view 2, so the
-AVX2 poll steps `[0], [4]` and the SSE poll `[0], [2], [4], [6]`. Stepping one element per vector re-read
-bits already examined and left the tail of the map unchecked (ISSUES.MD D3). `MAX_THREADS_WORDS`, not
-`MAX_THREADS_BYTES`, sizes the allocation, because `declare1d64z` counts elements.
+(ISSUES.MD D1). `wmain` spins on `ThreadsRunning()` — a reference bound at startup to the widest poll the CPU
+can execute, `ThreadsRunningAVX512/AVX/SSE/Scalar` (`CPU.h`). All four read the *same* 64 bytes: a `ui64`
+array means a 512-bit view spans 8 elements, a 256-bit view 4 and a 128-bit view 2, so the AVX2 poll steps
+`[0], [4]` and the SSE poll `[0], [2], [4], [6]`. Stepping one element per vector re-read bits already
+examined and left the tail of the map unchecked (ISSUES.MD D3). `MAX_THREADS_WORDS`, not `MAX_THREADS_BYTES`,
+sizes the allocation, because `declare1d64z` counts elements.
+
+**The SSE poll is not the baseline**, and the selection must keep testing `cfg.sys.cpuSSE4_1` for it:
+`AllFalse` of two `ui128` is `_mm_testz_si128`, an SSE4.1 instruction, so binding it on nothing but the
+absence of AVX2 executed an illegal instruction on a CPU carrying SSE2 and no more — before any test began,
+and before the pre-flight check that names a missing instruction set, which an ALU-only run never reaches at
+all (ISSUES.MD D4). `ThreadsRunningScalar` is that baseline, and is the only one of the four that reads the
+map through the `vui64` declaration: no `_mm*_load` intrinsic takes a volatile pointer, so the three vector
+polls take their address from `ThreadBitsView`, whose `std::atomic_signal_fence` is inlined into the wait
+loop with the load and stops the map being read once and cached for the rest of the run (D9). Casting the
+qualifier away without it compiled the whole wait loop down to a single `ret` under gcc -O2.
 
 A worker must never touch the global `timer` beyond reading `siFrequency`: `CLASS_TIMER::Update` is a
 multi-field read-modify-write, so every thread calling it was an unsynchronised race that left `siTotalTics`,
@@ -341,7 +356,8 @@ time-synchronised shapes need.
 `ComputationPulse` implements the pulse shapes from the `procSync` bits before entering its loop:
 
 - **Constant** (bit 4): `nextTic` is set to the end time, so the compute branch never yields.
-- **Parallel** (bit 1): all threads pulse together.
+- **Parallel** (bit 1): all threads pulse together — and, unless the run is time-synchronised, this is the one
+  shape that is *jittered*, so that "together" is not lockstep.
 - **Round-robin** (bit 0): thread *n*'s start is offset by *n* cycles and its cycle stretched by the thread
   count, so exactly one thread is active at a time.
 - **Staggered** (bit 2): offset by `1 << (coreNum & 7)` cycles — a doubling ramp across each group of 8 cores.
@@ -351,8 +367,23 @@ time-synchronised shapes need.
   `timer.Update()`, and the ramp itself is computed in `si64` and clamped to `[0, cycleTime]` before it is
   narrowed. Evaluating it past `endTics` used to make the subtraction negative, and the unsigned delay that
   came out of the cast was ~49 days (ISSUES.MD E1) — do not remove either guard.
-- **Time-synchronised** (bit 3): suppresses the per-thread random start/period jitter (`offset[0..1]`) that is
-  otherwise applied to deliberately desynchronise threads.
+- **Time-synchronised** (bit 3): suppresses the jitter a parallel run is otherwise given, so `Spt`'s threads
+  share one pulse edge where `Sp`'s deliberately do not.
+
+The jitter is `jitterSpan`, `JitterSeed` and `NextJitter` (`CPU.h`), and four properties of it are
+load-bearing. **It is drawn from a per-thread generator**, seeded from `rand_s`, the performance counter and
+the thread's index: `rand()`'s state is per-thread storage initialised to the same default seed in the MSVC
+CRT and `srand` is never called, so every thread of every run drew the same two values — 41 and 18 467 — and
+the offsets desynchronised nothing (ISSUES.MD D6). **One span in tics governs both halves**, a quarter of the
+shorter of the on and off phases: the pair it replaces was a millisecond `offset[0]` and a tic-counted
+`offset[1]`, one of which was in the wrong unit (D7), and a window wider than that quarter can consume a
+pulse whole. **The start offset is drawn once and the period jitter every cycle, centred on zero**, so the
+train shifts without distorting the duty cycle and the mean period stays `cycleTics`; adding a fixed
+`offset[1]` to every cycle was a permanent change of period, and a fixed `offset[0]` to every sleep took up
+to 63 ms out of each *following* on-phase, because `nextTic` fixes the period arithmetically. And **only the
+parallel shape is jittered**: round-robin and staggered are arrangements of the threads against each other,
+which any perturbation erodes — a jittered `Sr Tf[250]100` across 8 threads spends 194 s of a 30-minute run
+with two threads computing at once, against the zero its description promises.
 
 Bits 0–2 select *one* shape, so `wmain` rejects a `procSync` carrying more than one of them and substitutes
 Parallel when it carries none. The shape `switch` in `ComputationPulse` accordingly treats every value other
@@ -565,6 +596,10 @@ Verify against current source before relying on any of these:
   "non-SMT / SMT". That is now what the code computes (`CoreClass`, ISSUES.MD G9) rather than what it
   accidentally did, and the run says so through `wstrMessage[34]`, but the option letters are still `N` and
   `S` — renaming them would break every existing command line.
+- **A `-19` abort does not wait for the threads it already spawned.** Those threads are running the test they
+  were given, which can be hours long, so the handles are released rather than waited on and `~RESULTS_ARRAYS`
+  frees the arena under them on the way out. The process is exiting with an error either way; every path that
+  goes on to *read* a result joins first (ISSUES.MD D8).
 - Cache-targeting (`I1`/`I2`/`I3`) is accepted, displayed, and does nothing.
 
 ### Result comparison must stay bit-exact

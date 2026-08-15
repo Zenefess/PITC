@@ -14,6 +14,10 @@
 
 csi32 wmain(csi32 argc, cwchptrc argv[]) {
    VALUES_HEADER header;
+   // Handles of the worker threads, in thread order, so that this function can wait for them to end rather
+   // than for the completion bit each of them clears from inside its own body (ISSUES.MD D8). The 'W' path
+   // returns before the test path spawns anything, so the one array serves both
+   HANDLE threadHandle[MAX_THREADS] = {};
    ptr   outFile;
    ui64  mask;
    int   c = 1, d;
@@ -40,8 +44,14 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    cfg.sys.cpuAVX2    = IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE);
    cfg.sys.cpuAVX512  = IsProcessorFeaturePresent(PF_AVX512F_INSTRUCTIONS_AVAILABLE);
 
-   // Set vector-dependant functions to use largest instruction width available
-   static bool (&ThreadsRunning)(void) = cfg.sys.cpuAVX512 ? ThreadsRunningAVX512 : cfg.sys.cpuAVX2 ? ThreadsRunningAVX : ThreadsRunningSSE;
+   // Set vector-dependant functions to use largest instruction width available. The SSE poll is not the
+   // baseline it was being used as: AllFalse of two ui128 is _mm_testz_si128, an SSE4.1 instruction, so
+   // selecting it on nothing but the absence of AVX2 faulted with an illegal instruction on a CPU carrying
+   // SSE2 and no more -- before any test began, and before the pre-flight check at the end of the parse
+   // could name the missing instruction set. An ALU-only run does not ask for SSE4.1 and never reaches that
+   // check at all, so nothing else in the program stood between such a CPU and the fault (ISSUES.MD D4)
+   static bool (&ThreadsRunning)(void) = cfg.sys.cpuAVX512 ? ThreadsRunningAVX512 : cfg.sys.cpuAVX2  ? ThreadsRunningAVX
+                                       : cfg.sys.cpuSSE4_1 ? ThreadsRunningSSE    : ThreadsRunningScalar;
 
    /// Defaults ///
    cfg.tics        = timer.siFrequency * 900; // 15 minute duration
@@ -379,14 +389,20 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
 
                // _beginthreadex reports failure with 0, and hands back a handle this thread owns and must
                // close; _beginthread's is closed by the CRT when the thread exits, so it is never valid to
-               // hold. A thread that never starts never clears its bit, hanging the wait loop below forever
-               cHANDLE thread = (HANDLE)_beginthreadex(0, 0, GenerateValues, &threadData[t], 0, 0);
+               // hold. A thread that never starts never clears its bit, hanging the wait loop below forever.
+               // The handle is kept until every thread has been waited on rather than closed here, because
+               // the completion bit each thread clears is cleared from inside the thread (ISSUES.MD D8)
+               threadHandle[t] = (HANDLE)_beginthreadex(0, 0, GenerateValues, &threadData[t], 0, 0);
 
-               if(!thread) { ClearThreadRunning(t); wprintf(wstrMessage[23], t); return -19; }
-
-               CloseHandle(thread);
+               if(!threadHandle[t]) {
+                  ClearThreadRunning(t); ReleaseThreads(threadHandle, t); wprintf(wstrMessage[23], t); return -19;
+               }
             }
             while(ThreadsRunning()) Sleep(100);
+
+            // The bitmap says only that every thread has reached its last statement; the threads themselves
+            // are still executing it, and the results they wrote are read immediately below (ISSUES.MD D8)
+            JoinThreads(threadHandle, cfg.sys.vCoreCount);
 
             // Test for computational error. Read from a flag of its own rather than from the two sentinel
             // values that used to be written into entry 0's results, which the thread that owns entry 0
@@ -836,13 +852,20 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          // _beginthreadex reports failure with 0, and hands back a handle this thread owns and must close;
          // _beginthread's is closed by the CRT when the thread exits, so it is never valid to pass to an
          // affinity call. Creating suspended applies the affinity before the thread executes anything,
-         // rather than after it has already begun running on whichever core the scheduler chose
-         cHANDLE thread = (HANDLE)_beginthreadex(0, 0, ComputationPulse, &threadData[d], CREATE_SUSPENDED, 0);
+         // rather than after it has already begun running on whichever core the scheduler chose. The handle
+         // is kept until the thread has been waited on rather than closed at the end of this iteration: the
+         // completion bit that releases the wait loop below is cleared from inside the thread, several
+         // statements and one CRT thread shutdown before the thread ends (ISSUES.MD D8)
+         threadHandle[d] = (HANDLE)_beginthreadex(0, 0, ComputationPulse, &threadData[d], CREATE_SUSPENDED, 0);
 
          GROUP_AFFINITY affinity = {}; // Its Reserved[3] must be zero; the initialiser is what guarantees it
 
-         // A thread that never starts never clears its completion bit, hanging the wait loop below forever
-         if(!thread) { ClearThreadRunning(d); wprintf(wstrMessage[23], d); return -19; }
+         // A thread that never starts never clears its completion bit, hanging the wait loop below forever.
+         // The threads already spawned are running the test they were given and are not waited on here; the
+         // handles are released because this function is leaving with an error rather than a result
+         if(!threadHandle[d]) {
+            ClearThreadRunning(d); ReleaseThreads(threadHandle, d); wprintf(wstrMessage[23], d); return -19;
+         }
 
          if(NextSelectedCore(mask, coreGroup, ui8(j))) {
             affinity.Mask  = mask;
@@ -854,14 +877,20 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          // the walk has shifted past the last selected bit of group 0 (ISSUES.MD G3). SetThreadGroupAffinity
          // names the group. A cursor that found no further core leaves an empty mask, which it rejects --
          // the same warning as any other affinity the OS will not accept
-         if(!SetThreadGroupAffinity(thread, &affinity, 0)) wprintf(wstrMessage[24], d);
+         if(!SetThreadGroupAffinity(threadHandle[d], &affinity, 0)) wprintf(wstrMessage[24], d);
 
-         if(ResumeThread(thread) == DWORD(-1)) { ClearThreadRunning(d); CloseHandle(thread); wprintf(wstrMessage[23], d); return -19; }
-
-         CloseHandle(thread);
+         if(ResumeThread(threadHandle[d]) == DWORD(-1)) {
+            ClearThreadRunning(d); ReleaseThreads(threadHandle, d + 1); wprintf(wstrMessage[23], d); return -19;
+         }
       }
    }
    while(ThreadsRunning()) Sleep(100);
+
+   // Every thread has cleared its completion bit, which it does from inside ComputationPulse: the results
+   // table and the KUPS score below are read, and ~RESULTS_ARRAYS frees the arena those threads work over,
+   // while the threads themselves are still executing. Waiting on the handles is what makes them finished
+   // rather than nearly so (ISSUES.MD D8)
+   JoinThreads(threadHandle, threadCount[2]);
 
    // Output results
    printf("\n");

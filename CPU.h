@@ -11,6 +11,8 @@
 #define _CRT_RAND_S
 
 #include <iostream>
+#include <atomic>   // atomic_signal_fence, the compiler barrier the completion-bitmap polls read through
+#include <stdlib.h> // rand_s, which is declared only for a translation unit that defined _CRT_RAND_S above
 #include <string.h> // memcmp, for the byte-exact comparisons in ValidateKernelFamilies
 #include <windows.h>
 #include <process.h>
@@ -457,6 +459,19 @@ static inline void ClearThreadRunning(csi32 thread) {
    _InterlockedAnd8(&((vchptr)threadBits)[thread >> 3], ui8(~(1u << (thread & 0x07))));
 }
 
+/// Hands the vector polls below an address the load intrinsics will accept, with the guarantee the map's
+/// volatile qualifier is there to give restored by a compiler barrier. The map changes under the reader's
+/// feet, but no _mm*_load intrinsic takes a volatile pointer, so every vector poll casts the qualifier away
+/// and the compiler is formally free to load the map once and spin on that copy for the rest of the run
+/// (ISSUES.MD D9). No load may be carried across the barrier, and the barrier is inlined into wmain's wait
+/// loop along with the load that follows it, so each poll reads the map afresh; it emits no instruction
+/// @return Address of the completion bitmap, without the volatile qualifier
+static inline ptr ThreadBitsView(void) {
+   std::atomic_signal_fence(std::memory_order_acq_rel);
+
+   return (ptr)threadBits;
+}
+
 ///--- Expand beyond 512 cores ---///
 // threadBits is an array of ui64, so a 512-bit view of it spans 8 elements, a 256-bit view 4 and a 128-bit
 // view 2. Advancing by one element per vector step re-read bits already examined and left the tail of the
@@ -464,17 +479,68 @@ static inline void ClearThreadRunning(csi32 thread) {
 // references to addresses their alignment does not permit. The loads are unaligned forms because the poll
 // must stay well-defined for any future change to the map's size or alignment; the addresses below are all
 // naturally aligned today, so no instruction is added on any current CPU
+//
+// The scalar poll is the baseline the other three are selected over, and it is not decoration: AllFalse of
+// two ui128 is _mm_testz_si128, an SSE4.1 instruction, so binding the SSE poll on nothing but the absence of
+// AVX2 executed an illegal instruction on a Core 2 or an early Athlon 64 X2 before any test began -- and
+// before the pre-flight check that names a missing instruction set could be reached, which an ALU-only run
+// never reaches at all (ISSUES.MD D4). Its reads keep the volatile qualifier, so it needs no barrier
+inline bool ThreadsRunningScalar(void) {
+   ui64 bits = 0;
+
+   for(ui32 i = 0; i < MAX_THREADS_WORDS; ++i) bits |= threadBits[i];
+
+   return bits ? true : false;
+}
 inline bool ThreadsRunningAVX512(void) {
-   return !AllFalse((si512&)threadBits[0], max512);
+   cui64ptrc bits = (cui64ptrc)ThreadBitsView();
+
+   return !AllFalse((si512&)bits[0], max512);
 }
 inline bool ThreadsRunningAVX(void) {
-   return !(AllFalse(_mm256_loadu_si256((cui256ptr)&threadBits[0]), max256) && AllFalse(_mm256_loadu_si256((cui256ptr)&threadBits[4]), max256));
+   cui64ptrc bits = (cui64ptrc)ThreadBitsView();
+
+   return !(AllFalse(_mm256_loadu_si256((cui256ptr)&bits[0]), max256) && AllFalse(_mm256_loadu_si256((cui256ptr)&bits[4]), max256));
 }
 inline bool ThreadsRunningSSE(void) {
-   return !(AllFalse(_mm_loadu_si128((cui128ptr)&threadBits[0]), max128) && AllFalse(_mm_loadu_si128((cui128ptr)&threadBits[2]), max128) &&
-            AllFalse(_mm_loadu_si128((cui128ptr)&threadBits[4]), max128) && AllFalse(_mm_loadu_si128((cui128ptr)&threadBits[6]), max128));
+   cui64ptrc bits = (cui64ptrc)ThreadBitsView();
+
+   return !(AllFalse(_mm_loadu_si128((cui128ptr)&bits[0]), max128) && AllFalse(_mm_loadu_si128((cui128ptr)&bits[2]), max128) &&
+            AllFalse(_mm_loadu_si128((cui128ptr)&bits[4]), max128) && AllFalse(_mm_loadu_si128((cui128ptr)&bits[6]), max128));
 }
 ///--- Expand beyond 512 cores ---///
+
+typedef HANDLE *const HANDLEptrc;
+
+/// Waits for every worker thread to actually end, then releases the handles. The completion bitmap cannot
+/// stand in for this: a thread clears its own bit from inside its body, with its timer close, its return and
+/// the CRT's own thread shutdown all still ahead of it, so the poll above releases wmain while the workers
+/// are still executing -- over the result planes wmain is about to read and the arena it is about to free
+/// (ISSUES.MD D8). Waiting on the handles is what makes "every thread has finished" true rather than
+/// "every thread is about to"
+/// @param handle Thread handles from _beginthreadex, in thread order; a null entry is skipped
+/// @param count  Number of handles to wait on
+static void JoinThreads(HANDLEptrc handle, csi32 count) {
+   for(si32 i = 0; i < count; ++i) {
+      if(!handle[i]) continue;
+
+      WaitForSingleObject(handle[i], INFINITE);
+      CloseHandle(handle[i]);
+
+      handle[i] = 0;
+   }
+}
+
+/// Releases the handles of the threads already spawned, without waiting on any of them. This is the abort
+/// path's counterpart to JoinThreads: those threads would run to the end of the test they were given, and
+/// wmain is returning an error rather than reading their results. Closing a handle does not end the thread
+/// it names, it gives up only this thread's claim on the object
+/// @param handle Thread handles from _beginthreadex, in thread order; a null entry is skipped
+/// @param count  Number of handles to release
+static void ReleaseThreads(HANDLEptrc handle, csi32 count) {
+   for(si32 i = 0; i < count; ++i)
+      if(handle[i]) { CloseHandle(handle[i]); handle[i] = 0; }
+}
 //--- Thread completion bitmap ---//
 
 //--- High-resolution pulse timing ---//
@@ -552,6 +618,49 @@ static void PulseWaitUntil(cHANDLE hTimer, csi64 targetTics) {
       PulseWait(hTimer, TicsTo100ns(targetTics - curTics));
 }
 //--- High-resolution pulse timing ---//
+
+//--- Pulse jitter ---//
+// A parallel thread that is not time-synchronised offsets its pulse train by a random amount and jitters its
+// period, so that the threads do not all step at one instant: that difference is the whole of what 'Spt'
+// promises over 'Sp'. Both offsets used to be drawn from rand(), which cannot deliver it -- the MSVC CRT
+// keeps rand()'s state in per-thread storage initialised to the same default seed and srand is never called,
+// so every thread of a run drew the same two values and the offsets desynchronised nothing (ISSUES.MD D6).
+// They were also drawn once per thread and then applied to every cycle, which is a permanent change of
+// period and of duty cycle rather than jitter (D7); the generator below is cheap enough to be read at every
+// pulse boundary, which is what makes the per-cycle half of that pair an offset that averages out
+
+constexpr cui64 JITTER_GAMMA = 0x09E3779B97F4A7C15; // SplitMix64's increment, and the seed's per-thread stride
+constexpr cui64 JITTER_MIX_1 = 0x0BF58476D1CE4E5B9; // First multiplier of SplitMix64's finaliser
+constexpr cui64 JITTER_MIX_2 = 0x094D049BB133111EB; // Second multiplier of SplitMix64's finaliser
+
+/// Seeds one thread's jitter generator. rand_s reads the OS generator, needs no seeding and is safe to call
+/// from any thread; the performance counter and the thread's own index are mixed in regardless, so that a
+/// CRT which cannot reach the generator still leaves every thread of every run with a sequence of its own
+/// @param coreNum Index of the calling thread
+/// @return A seed for NextJitter
+static inline cui64 JitterSeed(cui32 coreNum) {
+   ui32 entropy = 0;
+
+   if(rand_s(&entropy)) entropy = 0; // Non-zero is a failure; the two terms below still differ per thread
+
+   return (cui64(entropy) << 32) ^ cui64(CurrentTics()) ^ ((cui64(coreNum) + 1) * JITTER_GAMMA);
+}
+
+/// Draws the next value of a thread's jitter sequence. SplitMix64: a counter through a multiply-xor-shift
+/// finaliser, which is uniform over the whole of its period and costs a handful of cycles beside a pulse
+/// @param state Generator state, advanced in place
+/// @param span  Width of the window to draw from, in tics
+/// @return A value in [0, span), or 0 if span is not positive
+static inline csi64 NextJitter(ui64 &state, csi64 span) {
+   ui64 z = (state += JITTER_GAMMA);
+
+   z = (z ^ (z >> 30)) * JITTER_MIX_1;
+   z = (z ^ (z >> 27)) * JITTER_MIX_2;
+   z ^= z >> 31;
+
+   return span > 0 ? si64(z % cui64(span)) : 0;
+}
+//--- Pulse jitter ---//
 
 //--- Processor topology ---//
 
