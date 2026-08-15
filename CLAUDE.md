@@ -56,8 +56,9 @@ pre-flight rejections in `wmain` — an unsupported vector unit, more than one `
 of zero or less, a zero pulse on-time, an `I` string naming no processing unit, an `I` string naming more
 than one of FPU/SSE4.1/AVX2/AVX-512, a memory request the machine cannot satisfy (`-17`, shared by the
 pre-flight size check and a failed `malloc64`), and a per-thread slice too small to hold one call's four
-records (`-18`). Add a code and the table in `wstrInstructions_English` and the message in `wstrMessage_*`
-have to grow with it.
+records (`-18`). `-19` is the one runtime failure that aborts a run: a worker thread that could not be
+created or resumed, in either the test or the `W` path. Add a code and the table in
+`wstrInstructions_English` and the message in `wstrMessage_*` have to grow with it.
 
 ## Architecture
 
@@ -128,12 +129,32 @@ standing between a hand-built `I` string and a wild jump.
 ### Thread lifecycle and scheduling
 
 `wmain` (`CPU.cpp`) enumerates topology via `GetLogicalProcessorInformation`, applies the core map and SMT
-policy (`SetSMTLoading` in `CPU.h`), allocates the arena, then `_beginthread`s one `ComputationPulse`
-(`CPU_methods.h`) per selected virtual core and pins it with `SetThreadAffinityMask`.
+policy (`SetSMTLoading` in `CPU.h`), allocates the arena, then creates one `ComputationPulse`
+(`CPU_methods.h`) per selected virtual core with `_beginthreadex` — **suspended**, so `SetThreadAffinityMask`
+lands before the thread executes anything — and resumes it. `_beginthread` is not usable here: the CRT closes
+*its* handle when the thread exits, so the handle must not be retained, let alone passed to an API. The
+handle `_beginthreadex` returns belongs to `wmain`, which closes it after resuming. A creation or resume
+failure aborts the run with `-19` rather than leaving a completion bit no thread will ever clear. Both thread
+entry points are therefore `ui32 __stdcall` and end by returning rather than calling `_endthread`.
 
-Completion is signalled through `threadBits`, a global bitmap with one bit per thread. A thread clears its own
-bit via `_InterlockedAnd8` when it exits; `wmain` spins on `ThreadsRunning()` — a reference bound at startup to
-the widest of `ThreadsRunningAVX512/AVX/SSE` (`CPU.h`) so the poll itself uses available SIMD.
+Completion is signalled through `threadBits`, a global bitmap with one bit per thread. **Every access to it
+is byte-wide and interlocked**: a thread clears its own bit via `_InterlockedAnd8` when it exits, and `wmain`
+sets a bit with `SetThreadRunning` (`_InterlockedOr8`) before spawning. A plain `|=` there was a lost-update
+race against a worker already clearing a different bit of the same byte, which hung the poll below
+(ISSUES.MD D1). `wmain` spins on `ThreadsRunning()` — a reference bound at startup to the widest of
+`ThreadsRunningAVX512/AVX/SSE` (`CPU.h`) so the poll itself uses available SIMD. Those three read the *same*
+64 bytes: a `ui64` array means a 512-bit view spans 8 elements, a 256-bit view 4 and a 128-bit view 2, so the
+AVX2 poll steps `[0], [4]` and the SSE poll `[0], [2], [4], [6]`. Stepping one element per vector re-read
+bits already examined and left the tail of the map unchecked (ISSUES.MD D3). `MAX_THREADS_WORDS`, not
+`MAX_THREADS_BYTES`, sizes the allocation, because `declare1d64z` counts elements.
+
+A worker must never touch the global `timer` beyond reading `siFrequency`: `CLASS_TIMER::Update` is a
+multi-field read-modify-write, so every thread calling it was an unsynchronised race that left `siTotalTics`,
+`dTotal` and `dScale` meaningless and made each thread's "now" whatever another thread last wrote
+(ISSUES.MD D2). `ComputationPulse` and `PulseWaitUntil` take their timestamps from `CurrentTics()` (`CPU.h`),
+a bare `QueryPerformanceCounter` read into a local. A side effect worth keeping: `wmain`'s single
+`timer.Update()` before the spawn loop now gives every thread an identical `startTics`, which is what the
+time-synchronised shapes need.
 
 `ComputationPulse` implements the pulse shapes from the `procSync` bits before entering its loop:
 
@@ -303,11 +324,12 @@ current source before relying on any of these:
 - **Single processor group / 64 virtual cores.** `MAX_THREADS` is 512 and the buffers are sized for it, but
   topology enumeration, the `U` core-map parsing and the affinity mask in `wmain` all assume one 64-bit mask.
   This is the top item on `CPU.cpp`'s To-do list.
-- **`ThreadsRunningAVX`/`ThreadsRunningSSE` stride bug.** They index `threadBits[0],[2]` and `[0],[1],[2],[3]`
-  where a 4-`ui64` (`si256`) and 2-`ui64` (`ui128`) stride requires `[0],[4]` and `[0],[2],[4],[6]`. Windows
-  above the first ~320 thread bits go unchecked on non-AVX-512 CPUs. Masked today by the 64-core limit.
-- **`Failed()` clears a whole byte** (`_InterlockedAnd8(threadByte, 0x0)`), not just the failing thread's bit,
-  so one failure can make `wmain` believe up to 8 threads have finished while they are still running.
+- **The affinity mask restarts at bit 0 for the SMT pass** (ISSUES.MD G5). `mask` is re-initialised to 1 when
+  the spawn loop advances from the non-SMT thread class to the SMT one, so on a topology carrying *both*
+  classes the SMT threads are pinned to virtual cores the non-SMT threads already hold, while other cores
+  idle. Harmless while `threadCount[0] == 0` — a uniform SMT CPU, which is the common case — but it now has
+  teeth: until ISSUES.MD D5 was fixed, `SetThreadAffinityMask` was handed a `_beginthread` handle and pinned
+  nothing at all, so no mask, right or wrong, ever reached the scheduler.
 - Cache-targeting (`I1`/`I2`/`I3`) is accepted, displayed, and does nothing.
 
 ### Result comparison must stay bit-exact

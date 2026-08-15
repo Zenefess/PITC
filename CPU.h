@@ -18,6 +18,10 @@
 
 constexpr auto MAX_THREADS       = 512;
 constexpr auto MAX_THREADS_BYTES = (MAX_THREADS + 7) >> 3;
+// declare1d64z's third argument is an element count, not a byte count. Passing MAX_THREADS_BYTES reserved
+// 64 ui64 -- 4096 thread bits -- for a map that needs 8, so the buffer's true capacity silently disagreed
+// with MAX_THREADS. It is the same units mix-up that produced the stride bug in the ThreadsRunning* polls
+constexpr auto MAX_THREADS_WORDS = (MAX_THREADS_BYTES + 7) >> 3;
 
 al32 struct GLOBAL_CFG { // 96 bytes
    struct _C_D_ { ui32 L1Code, L1Data, L2; };
@@ -118,7 +122,7 @@ al64 CLASS_TIMER timer;
 
      declare1d64z(THREAD_CFG, threadData, MAX_THREADS);
      declare2d64z(RESULTS, value, 4, MAX_THREADS); // Result values: 0==Input, 1=Processed, 2=Output, 3=Error
-     declare1d64z(vui64, threadBits, MAX_THREADS_BYTES);
+     declare1d64z(vui64, threadBits, MAX_THREADS_WORDS);
      declare1d64z(wchar, wstrOut, 1024);
      RESULTS_ARRAYS resArray;
 
@@ -140,17 +144,42 @@ extern void JobMemSSE(fl64x2ptrc);    extern void JobMemALU_SSE(fl64x2ptrc, si64
 extern void JobMemAVX2(fl64x4ptrc);   extern void JobMemALU_AVX2(fl64x4ptrc, si64ptrc);
 extern void JobMemAVX512(fl64x8ptrc); extern void JobMemALU_AVX512(fl64x8ptrc, si64ptrc);
 
+//--- Thread completion bitmap ---//
+// One bit per thread, cleared by each thread as it exits. Every write is interlocked and byte-wide: a worker
+// clears its own bit with _InterlockedAnd8, so a plain read-modify-write from wmain over the same byte can
+// drop that clear and leave the wait loop below polling for a thread that has already exited
+
+/// Marks a thread as running, leaving the other seven bits of its byte untouched
+/// @param thread Index of the thread whose completion bit is to be set
+static inline void SetThreadRunning(csi32 thread) {
+   _InterlockedOr8(&((vchptr)threadBits)[thread >> 3], ui8(1u << (thread & 0x07)));
+}
+
+/// Marks a thread as finished, leaving the other seven bits of its byte untouched
+/// @param thread Index of the thread whose completion bit is to be cleared
+static inline void ClearThreadRunning(csi32 thread) {
+   _InterlockedAnd8(&((vchptr)threadBits)[thread >> 3], ui8(~(1u << (thread & 0x07))));
+}
+
 ///--- Expand beyond 512 cores ---///
+// threadBits is an array of ui64, so a 512-bit view of it spans 8 elements, a 256-bit view 4 and a 128-bit
+// view 2. Advancing by one element per vector step re-read bits already examined and left the tail of the
+// map unexamined altogether -- bytes 48~63 for the AVX2 poll, 40~63 for the SSE one -- and bound vector
+// references to addresses their alignment does not permit. The loads are unaligned forms because the poll
+// must stay well-defined for any future change to the map's size or alignment; the addresses below are all
+// naturally aligned today, so no instruction is added on any current CPU
 inline bool ThreadsRunningAVX512(void) {
    return !AllFalse((si512&)threadBits[0], max512);
 }
 inline bool ThreadsRunningAVX(void) {
-   return !(AllFalse((si256&)threadBits[0], max256) && AllFalse((si256&)threadBits[2], max256));
+   return !(AllFalse(_mm256_loadu_si256((cui256ptr)&threadBits[0]), max256) && AllFalse(_mm256_loadu_si256((cui256ptr)&threadBits[4]), max256));
 }
 inline bool ThreadsRunningSSE(void) {
-   return !(AllFalse((ui128&)threadBits[0], max128) && AllFalse((ui128&)threadBits[1], max128) && AllFalse((ui128&)threadBits[2], max128) && AllFalse((ui128&)threadBits[3], max128));
+   return !(AllFalse(_mm_loadu_si128((cui128ptr)&threadBits[0]), max128) && AllFalse(_mm_loadu_si128((cui128ptr)&threadBits[2]), max128) &&
+            AllFalse(_mm_loadu_si128((cui128ptr)&threadBits[4]), max128) && AllFalse(_mm_loadu_si128((cui128ptr)&threadBits[6]), max128));
 }
 ///--- Expand beyond 512 cores ---///
+//--- Thread completion bitmap ---//
 
 //--- High-resolution pulse timing ---//
 // Windows' scheduler tick is 15.625ms unless a process asks for better, so a Sleep()-driven pulse boundary
@@ -174,6 +203,20 @@ static cHANDLE CreatePulseTimer(void) {
 
    // Kernels older than Windows 10 1803 reject the flag; the tick-quantised timer is then the best available
    return hTimer ? hTimer : CreateWaitableTimerExW(0, 0, 0, TIMER_MODIFY_STATE | SYNCHRONIZE);
+}
+
+/// Reads the performance counter. The global timer is shared by every thread and CLASS_TIMER::Update is a
+/// multi-field read-modify-write over siPrevTics, siTotalTics, siElapsedTics, dTotal, dScale and
+/// dGrandTotal, so calling it from a worker is an unsynchronised data race that leaves those fields
+/// meaningless and makes each thread's notion of "now" whatever another thread last wrote. Only
+/// timer.siFrequency may be read from a worker: it is written once, by the constructor, before wmain runs
+/// @return The current performance-counter reading, in tics
+static inline csi64 CurrentTics(void) {
+   si64 tics;
+
+   QueryPerformanceCounter((LARGE_INTEGER *)&tics);
+
+   return tics;
 }
 
 /// Converts a tic count into the 100ns units a waitable timer's due time is measured in
@@ -209,8 +252,8 @@ static inline void PulseSleep(cHANDLE hTimer, cui32 milliseconds) { PulseWait(hT
 /// @param hTimer Timer from CreatePulseTimer, or 0 to fall back to the tick-quantised Sleep
 /// @param targetTics Absolute tic count to wait for; a count already reached returns immediately
 static void PulseWaitUntil(cHANDLE hTimer, csi64 targetTics) {
-   for(timer.Update(); targetTics > timer.siCurrentTics; timer.Update())
-      PulseWait(hTimer, TicsTo100ns(targetTics - timer.siCurrentTics));
+   for(si64 curTics = CurrentTics(); targetTics > curTics; curTics = CurrentTics())
+      PulseWait(hTimer, TicsTo100ns(targetTics - curTics));
 }
 //--- High-resolution pulse timing ---//
 
@@ -240,6 +283,12 @@ static void SetSMTLoading(void) {
 
 // Print computational failure data
 static void Failed(cui64 coreNum, vchptrc threadByte, cui8 unit) {
+   // threadByte addresses the byte holding eight threads' completion bits, so zeroing it told wmain that all
+   // eight had finished: its wait loop could then return while up to seven of them were still writing
+   // value[3] and resArray.iter, and read the results table out from under them. coreNum is
+   // (threadByte << 3) + threadBit, so the failing thread's bit within that byte is coreNum & 0x07
+   cui8 threadMask = ui8(~(1u << (coreNum & 0x07)));
+
    wprintf(wstrInterface[11], coreNum);
    switch(unit) {
    case 0:
@@ -264,7 +313,7 @@ static void Failed(cui64 coreNum, vchptrc threadByte, cui8 unit) {
    case 4:
       wprintf(L"%lld  %s %lld\n", value[2][coreNum].alu, wstrInterface[12], value[3][coreNum].alu);
    }
-   _InterlockedAnd8(threadByte, 0x0);
+   _InterlockedAnd8(threadByte, threadMask);
    return;
 }
 
@@ -283,8 +332,8 @@ static inline cui8 Evaluate(csi16 thread, csi8 unit) {
    return 0;
 }
 
-// Generates output values
-static void GenerateValues(ptr dataPtr) {
+// Generates output values. __stdcall and ui32-returning to match _beginthreadex's start-address signature
+static ui32 __stdcall GenerateValues(ptr dataPtr) {
    RESULTS         resultCopy;
    cTHREAD_CFGptrc tcfg = (THREAD_CFGptrc)dataPtr;
 
@@ -357,5 +406,5 @@ static void GenerateValues(ptr dataPtr) {
 
    _InterlockedAnd8(&((chptr)threadBits)[tcfg->threadByte], threadMask);
 
-   _endthread();
+   return 0; // Returning ends the thread: _beginthreadex's thunk calls _endthreadex with this value
 }

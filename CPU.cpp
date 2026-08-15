@@ -337,11 +337,19 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             memcpy_s(value[3], RESULTS_BUF_SIZE, value[0], RESULTS_BUF_SIZE);
 
             for(i = 0; i < cfg.sys.vCoreCount; ++i) {
-               threadBits[i >> 6] |= 1uLL << (i & 0x03F);
-
                threadData[i].threadByte = i >> 3;
                threadData[i].threadBit  = i & 0x07;
-               ptrc handle = (ptr)_beginthread(GenerateValues, 0, &threadData[i]);
+
+               SetThreadRunning(i); // Interlocked: a thread spawned earlier may be clearing this same byte
+
+               // _beginthreadex reports failure with 0, and hands back a handle this thread owns and must
+               // close; _beginthread's is closed by the CRT when the thread exits, so it is never valid to
+               // hold. A thread that never starts never clears its bit, hanging the wait loop below forever
+               cHANDLE thread = (HANDLE)_beginthreadex(0, 0, GenerateValues, &threadData[i], 0, 0);
+
+               if(!thread) { ClearThreadRunning(i); wprintf(wstrMessage[23], i); return -19; }
+
+               CloseHandle(thread);
             }
             while(ThreadsRunning()) Sleep(100);
 
@@ -646,12 +654,24 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          threadData[d].threadByte    = d >> 3;
          threadData[d].threadBit     = d & 0x07;
 
-         threadBits[d >> 6] |= 1uLL << (d & 0x03F);
+         SetThreadRunning(d); // Interlocked: a thread spawned earlier may be clearing this same byte
 
-         ptrc handle = (ptr)_beginthread(ComputationPulse, 0, &threadData[d]);
+         // _beginthreadex reports failure with 0, and hands back a handle this thread owns and must close;
+         // _beginthread's is closed by the CRT when the thread exits, so it is never valid to pass to
+         // SetThreadAffinityMask. Creating suspended applies the mask before the thread executes anything,
+         // rather than after it has already begun running on whichever core the scheduler chose
+         cHANDLE thread = (HANDLE)_beginthreadex(0, 0, ComputationPulse, &threadData[d], CREATE_SUSPENDED, 0);
+
+         // A thread that never starts never clears its completion bit, hanging the wait loop below forever
+         if(!thread) { ClearThreadRunning(d); wprintf(wstrMessage[23], d); return -19; }
 
          while(mask & ~cfg.coreMap[procGroup]) mask <<= 1; ///--- Modify to account for >64 virtual cores !!!
-         SetThreadAffinityMask(handle, mask);
+
+         if(!SetThreadAffinityMask(thread, mask)) wprintf(wstrMessage[24], d);
+
+         if(ResumeThread(thread) == DWORD(-1)) { ClearThreadRunning(d); CloseHandle(thread); wprintf(wstrMessage[23], d); return -19; }
+
+         CloseHandle(thread);
       }
    while(ThreadsRunning()) Sleep(100);
 
