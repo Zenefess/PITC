@@ -34,9 +34,15 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n-20 : Unable to write the \"cpu.values\" header"
  "\n-21 : Contents of \"cpu.values\" are not valid for this build"
  "\n-22 : A job kernel disagrees with the register-resident kernel for its unit"
- "\n-23 : Unable to enumerate the processor topology of the system\n"
+ "\n-23 : Unable to enumerate the processor topology of the system"
+ "\n-24 : Missing, malformed or out-of-range value for a command-line option"
+ "\n-25 : Unrecognised command-line option"
+ "\n-26 : The selected core map contains no cores to test\n"
  "\nCommand-line options   ---   Example: pitc.exe I3x Mc8 Spt Tcd8.0t3600 Ua"
  "\n--------------------"
+ "\n      Options are applied in the order given: where two of them set the same property, the last one wins."
+ "\n      'B' and the presets reset the processing units and the memory configuration, so give either of them"
+ "\n      before any 'I' or 'M' option; 'Ts' clears the pulse off-time, so give ']' after 'S' where both are used."
  "\n B  : Run the benchmark. Options after 'B' override defaults; eg. pitc.exe B Iaf mt1024 !!! CACHE USE NOT YET IMPLEMENTED !!!"
  "\n      Utilises the ALU and largest vector unit of all (virtual) cores in the system, level 3 cache, and 8MB memory per thread for 60 seconds."
  "\n Ix : Set intruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av !!! CACHE USE NOT YET IMPLEMENTED !!!"
@@ -56,9 +62,10 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      Global options: Dx==Set start-up delay, Tx==Set test duration                             |  Replace 'x' with a decimal value; eg. d10.0"
  "\n      Fixed-length pulse options (in milliseconds): [x==Active duration, ]x==Inactive duration  |  Replace 'x' with a whole number; eg. [250"
  "\n      Sweeping-length pulse option (in milliseconds): [x==Cycle duration"
- "\n Ux : Set core usage options. One of the first two options (C,T) can be stacked with the one of the remaining (S, O); eg. Uc!.!!...!s"
+ "\n Ux : Set core usage options. One of the first two options (C,T) can be stacked with one of the remaining (A,E,O); eg. Uc!.!!...!e"
  "\n      C==Binary sequence map of physical cores to utilise, T==Binary sequence map of virtual cores to utilise"
- "\n         Format for core utilisation map is: ','/'.'/'_'==Core disabled, Any other character==Core enabled"
+ "\n         Core disabled: '.' ',' '_' '-' '0'  |  Core enabled: '!' '*' '#' '+' '1' 'x' 'X'  |  Any other character ends the map"
+ "\n         The map is the whole selection: a core it does not name is not utilised, and an empty selection is refused"
  "\n      A==Forces utilisation of every virtual core of each active physical core"
  "\n      E==Only utilise the first virtual core of each active physical core, O==Only utilise the last virtual core of each active physical core"
  "\n         A physical core carrying a single virtual core is kept by both; on a hybrid CPU that is every efficiency core"
@@ -76,7 +83,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      9==Staggered fixed-width pulsed stress on all virtual cores. 4 hour duration"
  "\n      0==Synchronised fixed-width pulsed stress on all virtual cores, using ALU & SSE code-paths with 2MB memory per core. 1 hour duration\n\n";
 
-cwchptrc wstrMessage_English[35] = {
+cwchptrc wstrMessage_English[41] = {
    L"\nSuccessfully wrote results to \"%s\" file.\n\n",
    L"\n\nNew \"cpu.values\" file generated.\n\n",
    L"\n\n\"cpu.values\" file not found. Generate via 'W' command-line option.\n\n",
@@ -86,7 +93,7 @@ cwchptrc wstrMessage_English[35] = {
    L"\n\nCannot create \"cpu.values\" file.\n\n",
    L"\n\nFailed to write all input entries to \"cpu.values\" file.\n\n",
    L"\n\nFailed to write all output entries to \"cpu.values\" file.\n\n",
-   L"\n\nUnable to create file \"%s\".\n\n",
+   L"\nNo valid filename for the results file in the argument \"%s\"; expected 'O[name]'.\n\n",
    L"\n\nCannot create \"%s\" file.\n\n",
    L"\n\nFailed to write results to \"%s\" file.\n\n",
    L"\nSystem processor cores do not support the SSE4.1 instruction set.\n",
@@ -113,7 +120,13 @@ cwchptrc wstrMessage_English[35] = {
    L"\nWARNING: The system has %d virtual cores; this build tests at most %d, so %d will not be tested.\n",
    L"\nHybrid CPU: %d performance core(s) at %d-way SMT, and %d efficiency core(s) at %d-way SMT.\n"
     "  The two core classes are those rather than non-SMT and SMT cores, so 'Mn' and the first cache record\n"
-    "  describe the efficiency cores, and 'Ms' and the second describe the performance cores.\n"
+    "  describe the efficiency cores, and 'Ms' and the second describe the performance cores.\n",
+   L"\nThe '%c' option of the argument \"%s\" requires a whole number from %lld to %lld.\n\n",
+   L"\nThe '%c' option of the argument \"%s\" requires a decimal value from %.1f to %.1f.\n\n",
+   L"\nUnrecognised command-line argument \"%s\". Run with no arguments for the option reference.\n\n",
+   L"\nUnrecognised '%c' option in the argument \"%s\". Run with no arguments for the option reference.\n\n",
+   L"\nWARNING: The language \"%s\" is not available in this build; the interface remains in en-GB.\n",
+   L"\nThe 'U' core map selected no cores; there is nothing to test.\n\n"
 };
 
 cwchptrc wstrInterface_English[13] = {

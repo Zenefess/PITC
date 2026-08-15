@@ -92,11 +92,22 @@ disagrees with the register-resident kernel for its unit, raised by `ValidateKer
 `-23` is a processor topology that could not be enumerated — `GetLogicalProcessorInformationEx` failing at
 either of its two calls, a buffer that could not be allocated for it, or a walk that named no processor core
 — raised by `EnumerateTopology` before anything else in `wmain` and shared by three messages (ISSUES.MD G6,
-G3). Add a code and the table in `wstrInstructions_English` and the message in `wstrMessage_*` have to grow
-with it. Not every message is an exit code: `wstrMessage[24]` warns that a thread could not be pinned,
-`wstrMessage[33]` that the machine carries more virtual cores than `MAX_THREADS`, and `wstrMessage[34]` names
-the two core classes of a hybrid CPU, because there the split is not the non-SMT/SMT one the options are
-documented against (ISSUES.MD G9); none of the three stops the run.
+G3). `-24`, `-25` and `-26` are the command-line rejections: a numeric option with no value, a malformed one
+or one outside its documented range; an option letter, argument or preset digit this build does not
+recognise; and a `U` core map that selects no core at all, which is refused before `threadCount[2]` is used
+as a divisor (ISSUES.MD F4, F9, F2, C8). Add a code and the table in `wstrInstructions_English` and the
+message in `wstrMessage_*` have to grow with it. Not every message is an exit code: `wstrMessage[24]` warns
+that a thread could not be pinned, `wstrMessage[33]` that the machine carries more virtual cores than
+`MAX_THREADS`, `wstrMessage[34]` names the two core classes of a hybrid CPU, because there the split is not
+the non-SMT/SMT one the options are documented against (ISSUES.MD G9), and `wstrMessage[39]` reports a
+language code this build does not carry; none of the four stops the run.
+
+**An unrecognised or malformed argument is fatal, and deliberately so.** Every one of these used to be
+skipped in silence, so a mistyped option ran a configuration other than the one on the command line and
+reported `.Pass.` for it (ISSUES.MD F9) — which is the class of outcome the whole program exists to avoid.
+The top-level `switch` and the inner switches for `I`, `M`, `O`, `S`, `T` and `U` therefore all carry a
+`default` arm, `B` and `W` reject a trailing character, and `-` validates its digit *before* applying the
+memory and unit preamble that used to run whatever followed the dash.
 
 ## Architecture
 
@@ -395,6 +406,37 @@ all three before setting its own — so the last one given wins, and a `T` argum
 or a start-up delay leaves the mode untouched. That is what keeps `B Tt120` and `-1 Tt600` constant-load runs
 (ISSUES.MD F1); do not hoist the clear back out to the top of the option's parse loop.
 
+### Command-line parsing
+
+Four functions in the `//--- Command-line parsing ---//` group of `CPU.h` are the whole of the option
+grammar below the level of the letter, and none of what they replaced should be reintroduced inline.
+
+`ParseWholeNumber` and `ParseDecimal` are **the only route a number takes into `cfg`**. Each requires the
+value to begin where the option says it does — a digit or a sign, never the whitespace `wcstoll` and `wcstod`
+would otherwise skip past to find a value in the next field — compares `stopChar` against that first
+character, and range-checks against the `OPT_*` bounds beside them before assigning anything. A failed read
+is `-24`, not a silent zero: an option with no value used to produce a zero-length test, a zero pulse
+on-time or a zero allocation, all three of which report `.Pass.` (ISSUES.MD F4, A5, A6). They also set the
+parse index **absolutely**, `ui32(stopChar - str) - 1`, and `j` in `wmain` is a `ui32` for the same reason —
+the old `j += ui8(stopChar - &argv[i][j] - 1)` moved the index backwards on a value field longer than 255
+characters, and the option loop then could not terminate.
+
+`CoreMapChar` and `ParseCoreMap` read the `Uc` and `Ut` maps. Three properties are load-bearing:
+
+- **Every index comes from the topology, never from the character's position in the argument.** `Ut`
+  character *n* is bit `n & 63` of group `n >> 6`; `Uc` character *n* is the *n*-th physical core, whose span
+  of virtual cores is read from `cfg.sys.coreSibling` exactly as `SetSMTLoading` expands one. The old
+  expressions — `coreMap[(j - 1) >> 3] |= 0x01ull << j`, and `0x03ull << (j << 1)` for `Uc` — put the first
+  character on core 2, addressed a 64-bit word as though it held eight cores, assumed two virtual cores per
+  physical core at a fixed stride, and shifted by 64 or more on a long enough map (ISSUES.MD F2, C10).
+- **The map is cleared first and masked with the cores the enumeration reported**, so it is the whole of the
+  selection and cannot name a core the machine does not have. `wmain` refuses a selection of none with `-26`
+  before `threadCount[2]` is divided by (C8).
+- **The map ends at the first character that is not part of one**, which is what lets a further `U`
+  sub-option follow it — the documented `Uc!.!!...!a` spelling. That is why the enabling characters are an
+  explicit set in `CoreMapChar` rather than "any other character": the two cannot both be true. Add a
+  character to either set and `en-GB.h` and `README.md` have to say so.
+
 ## Shared headers vendored from an external library
 
 `typedefs.h`, `memory management.h`, `common functions.h`, `vector structures.h`, `class_timers.h` and
@@ -447,11 +489,13 @@ manual. The rules that bite most often when editing here:
 ## Localisation
 
 `translations.h` selects a language by pointing three globals at one header's string tables; `en-GB.h` is the
-only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[35]`
+only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[41]`
 and `wstrInterface_*[13]`, then extending both `translations.h` and the `L` case in `CPU.cpp`.
 
-Note the `L` option's selection logic is inverted (`if(lstrcmpiW(...))` is truthy when the codes *differ*), so
-every input currently resolves to English. Fix that when adding a second language. The code itself is copied
+The `L` option's selection logic was inverted — `lstrcmpiW` returns 0 when the codes *match*, so testing it
+directly selected a language exactly when the argument did not name it, and every input resolved to English
+(ISSUES.MD F7). It is now `!lstrcmpiW(...)`, and a code this build does not carry prints `wstrMessage[39]`
+and stays in en-GB rather than reaching one by accident. The code itself is copied
 into `wstrLang[6]`, and the copy is clamped to that capacity — `lstrcpynW`'s third argument is the size of the
 *destination*, so passing the argument's length overran the globals that follow it (ISSUES.MD C6). A longer
 code is therefore truncated to five characters; widen `wstrLang` if a language ever needs more. Some strings
@@ -466,12 +510,11 @@ Verify against current source before relying on any of these:
 
 - **`MAX_THREADS` is a real ceiling, at 512.** Enumeration and affinity are now group-aware end to end
   (ISSUES.MD G3), so the 64-virtual-core limit is gone, but the thread-indexed tables are still fixed at 512
-  entries and a core beyond that is refused with a warning rather than tested. The remaining `///--- Modify
-  to account for non-SMT CPUs !!!` markers are on the `Uc` parser, not on the group handling.
-- **`Uc` and `Ut` are unusable and were not fixed with G3** (ISSUES.MD F2, C10): both are off by two in the
-  core they name, index `cfg.coreMap` as though a 64-bit word held eight cores, and shift by 64 or more on a
-  long enough map. That last one used to write into a `cfg.coreMap` element nothing read; now that a second
-  element can be a second processor group, it writes into one that does.
+  entries and a core beyond that is refused with a warning rather than tested.
+- **A `U` core map is the whole of the selection**, and a core it does not name is not utilised (ISSUES.MD
+  F2). That is a change from the parser it replaced, whose characters could only modify the full map the
+  enumeration produced; a short map therefore selects fewer cores than it used to, and a map of all-disabled
+  characters is refused with `-26` rather than reaching a division by zero (C8).
 - **On a hybrid CPU, `Mn`/`Ms` and the two cache records mean "efficiency core / performance core"**, not
   "non-SMT / SMT". That is now what the code computes (`CoreClass`, ISSUES.MD G9) rather than what it
   accidentally did, and the run says so through `wstrMessage[34]`, but the option letters are still `N` and
