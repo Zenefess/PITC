@@ -271,6 +271,15 @@ same bit to both maps, so one thread per physical core keeps it either way. Rebu
 by 64 on a CPU reporting no SMT at all (ISSUES.MD G1, G2, G7). **A bitmap added to `GLOBAL_CFG` must be
 freed in its destructor**, which is what the `mfree` call there is for.
 
+`Ua` reads the same two bitmaps in the other direction, one physical core at a time: each first-sibling bit
+is paired with the lowest last-sibling bit at or above it, `(last | (last - first))` is that core's span, and
+the span is added to a **separate accumulator** when the map already holds any virtual core of the core. The
+separate accumulator is the point — the arm used to be `cfg.coreMap[i] |= (cfg.coreMap[i] << j) & …` over a
+stride of `cfg.sys.SMT`, which reads the map it is writing, so at 4-way SMT the accumulated shift selected
+the *next* physical core (ISSUES.MD G8). It consults `coreMap[0] | coreMap[1]` rather than the class-1 map
+alone, because since G9 a class-0 core can carry SMT. `cfg.sys.SMT[]` has **no reader left in the program**:
+it is recorded and reported, never computed with, and no new use of it should reintroduce a stride.
+
 Completion is signalled through `threadBits`, a global bitmap with one bit per thread. **Every access to it
 is byte-wide and interlocked**: a thread clears its own bit via `_InterlockedAnd8` when it exits, and `wmain`
 sets a bit with `SetThreadRunning` (`_InterlockedOr8`) before spawning. A plain `|=` there was a lost-update

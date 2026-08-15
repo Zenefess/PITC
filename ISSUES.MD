@@ -37,7 +37,7 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1–A7, A9, A10, B1, B2, B3, B5, B6, C1–C7, C11, D1, D2, D3, D5, E1, E2, F1, G1–G7, G9, H1, H2,
+**A1–A7, A9, A10, B1, B2, B3, B5, B6, C1–C7, C11, D1, D2, D3, D5, E1, E2, F1, G1–G9, H1, H2,
 H7, J1, J2 and J7 are fixed** — see the
 `Fixed` notes on those entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
 bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
@@ -315,9 +315,16 @@ notice rather than an exit code, so `wstrInstructions_English` gains no row, tho
 and `README.md` now say what a core class is. No job kernel is touched, so **`cpu.values` does not need
 regenerating**.
 
-**G8's remaining half is taken next**, in the commit that follows this one: with the classification correct,
-`SetSMTLoading`'s "use all virtual cores" arm is the last thing in the topology code still reasoning about
-cores by a stride.
+**G8's remaining half came with it**, in the commit after: `SetSMTLoading`'s "use all virtual cores" arm was
+the last thing in the topology code still reasoning about cores by a stride, and it is now an exact
+expansion — one iteration per physical core, pairing each first-sibling bit with its last to name the core's
+span, and adding the span to a separate accumulator for the cores the map already holds a virtual core of.
+Nothing is read while it is written, no shift count comes from an SMT width, and the union of both class maps
+is consulted rather than the class-1 map alone, which is a third defect the entry does not name and which G9
+had just made reachable: on a hybrid part whose classes share an SMT width, the class-0 cores were never
+expanded. **`cfg.sys.SMT` now has no reader left in the program** — it is recorded and reported, never
+computed with — which closes the arithmetic G1, G2 and G7 were three symptoms of. **Every G entry is now
+fixed.**
 
 Two files moved. `CPU.h` gained 116 — 833 now 949 — sixteen in and above `GLOBAL_CFG` at `:34`, for the
 core-class note and the per-class SMT widths, and 100 at `:555` for `CoreClass`, `WalkTopology` and the
@@ -327,7 +334,9 @@ every earlier shift. `en-GB.h` gained five, two in the option reference and thre
 array, 34 entries now 35. `CPU.cpp` is unchanged in length; only its comments moved. `CLAUDE.md` and
 `README.md` were updated to match — `CLAUDE.md`'s thread-lifecycle section describes `CoreClass` and the
 three passes, and the known-constraints bullet that named G9 as live now says what the classes mean and that
-`Mn`/`Ms` keep their spelling.
+`Mn`/`Ms` keep their spelling. G8 then added 29 more to `CPU.h` — 949 now 978 — all of them at
+`SetSMTLoading`, so citations below it read 145 low in total against the source before this pair of commits:
+`Failed()`, `Evaluate` and `GenerateValues`, and so A7, B4, B5, B7 and B8.
 
 Every other entry below still stands.
 
@@ -2084,14 +2093,46 @@ evidently to skip to the first SMT core; the loop as written can only ever retur
 UB case in G1). On a hybrid CPU where E-cores occupy the low bits, this silently applies the SMT mask at the
 wrong offset.
 
-### G8. `SetSMTLoading`'s "use all virtual cores" arm shadows its loop variable and over-smears — **Medium**
+### G8. `SetSMTLoading`'s "use all virtual cores" arm shadows its loop variable and over-smears — **Medium** — *Fixed*
 
-> **Half overtaken, not fixed.** The inner `ui8 i` is gone: the `default` arm that needed the outer `i`
-> pre-initialised was replaced by G1 and G2, so `case 3` declares nothing of its own and uses the outer
-> variable. The substantive half is untouched — the statement still reads `cfg.coreMap[i]` while writing it,
-> so a 4-way SMT part still accumulates shifts past the intended sibling span, and the `j == 0` iteration is
-> still a no-op. The per-core sibling bitmaps G2 added would let this arm be written as an exact expansion
-> too, which is the obvious way to take it.
+> **Fixed**, in the two halves this entry has. The first was overtaken by G1 and G2: the inner `ui8 i` went
+> with the `default` arm that needed the outer one pre-initialised, so `case 3` had declared nothing of its
+> own since that batch. The second is this one, and it is the exact expansion the note below proposed.
+>
+> The arm now walks `cfg.sys.coreSibling[0]` one bit at a time — one iteration per physical core of the group
+> — pairing each first-sibling bit with the lowest last-sibling bit at or above it to name that core's span,
+> and adding the span to a **separate accumulator** when the map already holds any virtual core of it. Every
+> defect in the statement it replaces goes with the shape of it: nothing is read while it is written, so
+> nothing smears; there is no `j == 0` iteration to be a no-op; and no shift count comes from an SMT width,
+> so a 4-way part cannot reach past a core's own siblings. `cfg.sys.SMT` has no reader left anywhere in the
+> program — it is now recorded and reported (G9) and never computed with, which is the end of the story G1,
+> G2 and G7 began.
+>
+> **A third defect, not in the entry, went with them.** The statement masked with `cfg.sys.coreMap[1]`, the
+> class-1 map, so it could only ever expand cores of that class. That is harmless where class 1 means "the
+> SMT cores", but G9 makes the classes mean "performance" and "efficiency" on a hybrid part, and on one whose
+> classes share an SMT width — Zen 4 with Zen 4c — the class-0 cores are 2-way and were never expanded. The
+> expansion consults the union of both class maps, which is the set of virtual cores the machine has.
+>
+> The span is `(last | (last - first))`, which is every bit from the first sibling to the last, and it
+> assumes a physical core's virtual cores are consecutive within its group. That assumption is inherited
+> rather than introduced: two bitmaps holding each core's *first* and *last* virtual core is what G2 records,
+> and neither policy it serves means anything without it. The span is ANDed with the group's own core map, so
+> a bit belonging to no core cannot enter a map the banner prints, and a malformed pair leaves `last` at 0
+> and the span empty rather than reaching across the group.
+>
+> `Ua` is the reachable trigger, along with presets `-2`, `-5`, `-7`, `-9` and `-0` and the `B` benchmark, all
+> of which set `cfg.SMTLoad = 3`. It is only visible when something has already narrowed the map, because the
+> arm's job is to widen it: with no `U` map given, `cfg.coreMap` already holds every virtual core and there is
+> nothing to expand. That is why the harness drives it against four starting selections rather than the
+> default one.
+>
+> Verified off-target with the harness G9 was, extended by nothing — the `Ua` cases were already in it and
+> were the only checks the G9 commit left failing. Over seventeen topologies, four starting selections and
+> all four `U` policies, the current forms fail **none of 1 876 checks** where the G9 commit failed 27 and the
+> pre-fix forms fail 46 of 1 859. The 27 span every topology carrying a core of more than one virtual core:
+> at 2-way SMT a selection of last siblings expands into the *next* core, at 4-way the same selection reaches
+> two cores past it, and on the shared-SMT-width hybrid part the class-0 cores did not expand at all.
 
 `CPU.h:163–167`:
 
@@ -2145,16 +2186,16 @@ also a no-op.
 >
 > Verified off-target, in the same way the G1 and G3 batches were. `EnumerateTopology`'s walk, `CoreClass`,
 > `SetSMTLoading` and `NextSelectedCore` were transcribed pre- and post-fix into a harness with a stand-in for
-> `GetLogicalProcessorInformationEx`, and driven over sixteen synthetic topologies — five conventional (2-way,
-> 4-way, two non-SMT, a 64-thread part), five hybrid (P-cores at the low bits and at the high, SMT disabled,
-> three tiers, and one whose classes share an SMT width), four multi-group including 64 groups and a
-> two-group hybrid, and two over-capacity machines — each against four starting core selections and all four
-> `U` policies, with the expectations computed from the topology description rather than from either
-> transcription. The pre-fix forms fail 44 of 1 750 checks: two topologies whose class maps and per-class core
-> counts are wrong outright, four whose narrow class is given the wide class's SMT width, twelve misfiled
-> cache records, and 24 `Ua` selections. The post-fix forms fail 25 of 1 766, **all of them `Ua`** — which is
-> G8, fixed in the commit after this one; every classification, cache, count, selection and affinity check
-> passes.
+> `GetLogicalProcessorInformationEx`, and driven over seventeen synthetic topologies — five conventional
+> (2-way, 4-way, two non-SMT, a 64-thread part), five hybrid (P-cores at the low bits and at the high, SMT
+> disabled, three tiers, and one whose classes share an SMT width), five multi-group including 64 groups, a
+> two-group hybrid and one leaving a group number unused, and two over-capacity machines — each against four
+> starting core selections and all four `U` policies, with the expectations computed from the topology
+> description rather than from either transcription. The pre-fix forms fail 46 of 1 859 checks: two
+> topologies whose class maps and per-class core counts are wrong outright, four whose narrow class is given
+> the wide class's SMT width, twelve misfiled cache records, and 26 `Ua` selections. The post-fix forms fail
+> 27 of 1 876, **all of them `Ua`** — which is G8, fixed in the commit after this one; every classification,
+> cache, count, selection and affinity check passes.
 
 `CPU.cpp:32` — `cui8 coreType = (PopulationCount64(sysLPI[i].ProcessorMask) > 1 ? 1 : 0);` — infers
 "SMT-ness" from the sibling count. On an Intel hybrid part the E-cores (1 thread) become `coreType 0` and the

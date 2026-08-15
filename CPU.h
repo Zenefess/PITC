@@ -821,7 +821,8 @@ static cbool NextSelectedCore(ui64 &mask, ui8 &group, cui8 threadClass) {
 
 /// Applies the SMT loading policy to the core map: a cfg.SMTLoad of 1 keeps the first virtual core of each
 /// physical core, 2 the last, 3 adds every virtual core of each active physical core, and 0 leaves the map
-/// as the enumeration and any 'U' argument left it.
+/// as the enumeration and any 'U' argument left it. All three are exact expressions of one physical core at
+/// a time, taken from the sibling bitmaps the enumeration records, and none of them reasons about a stride.
 ///
 /// The two one-virtual-core policies were a single 'default' arm that built its mask arithmetically -- one
 /// bit per cfg.sys.coreCount[1] entry, spaced cfg.sys.SMT apart, shifted up to the first set bit of the SMT
@@ -833,17 +834,47 @@ static cbool NextSelectedCore(ui64 &mask, ui8 &group, cui8 threadClass) {
 /// the core map was then built (G1). And the scan could only ever yield 0 or 64, because any non-zero map
 /// is non-zero shifted right by zero, so it never found the offset it was written to find (G7).
 /// Masking with the per-core sibling bitmaps the enumeration records needs none of that arithmetic: it is
-/// exact for hybrid parts, for non-SMT parts, and for any virtual core numbering the OS reports
+/// exact for hybrid parts, for non-SMT parts, and for any virtual core numbering the OS reports.
+///
+/// The "use all virtual cores" arm was `cfg.coreMap[i] |= (cfg.coreMap[i] << j) & cfg.sys.coreMap[1][i]`
+/// over j < the SMT width, and read the map it was writing, so each iteration smeared the already-smeared
+/// map: at 4-way SMT the accumulated shift reaches past a core's own siblings and selects the *next*
+/// physical core, which had been selected against, and the j == 0 iteration was a no-op (ISSUES.MD G8). Only
+/// the class-1 map was consulted as well, so on a hybrid part whose two classes are both SMT -- a Zen 4 plus
+/// Zen 4c machine, where the class split is by core design rather than SMT width (G9) -- the class-0 cores
+/// were never expanded at all. The expansion below adds a physical core's whole span, once, to a separate
+/// accumulator, for exactly the cores the map already holds a virtual core of
 static void SetSMTLoading(void) {
-   ui8 i, j;
+   ui8 i;
 
    if(!cfg.SMTLoad) return;
 
    switch(cfg.SMTLoad) {
-   case 3: // Use all virtual cores
-      for(i = 0; i < cfg.sys.groupCount; ++i)
-         for(j = 0; j < cfg.sys.SMT[1]; ++j)
-            cfg.coreMap[i] |= (cfg.coreMap[i] << j) & cfg.sys.coreMap[1][i];
+   case 3: // Use every virtual core of each active physical core
+      for(i = 0; i < cfg.sys.groupCount; ++i) {
+         cui64 groupMap = cfg.sys.coreMap[0][i] | cfg.sys.coreMap[1][i];
+         ui64  selected = cfg.coreMap[i]; // Accumulated separately: a map read while it is written smears
+         ui64  firsts   = cfg.sys.coreSibling[0][i];
+
+         // One iteration per physical core of the group, walking the first-sibling bitmap. Pairing each
+         // first with the lowest last-sibling bit at or above it names one core, because a core's siblings
+         // are consecutive and no core's span can hold another's -- which is the same assumption the two
+         // sibling bitmaps already encode, a core being described by its first virtual core and its last
+         while(firsts) {
+            cui64 first = LowestSetBit64(firsts);
+            cui64 last  = LowestSetBit64(cfg.sys.coreSibling[1][i] & ~(first - 1ull));
+            // 'last - first' is every bit between the two, so 'last | (last - first)' is the core. Every core
+            // contributes its highest virtual core to the second bitmap, so a first bit the enumeration wrote
+            // always has a last at or above it; a pair that disagreed would leave 'last' at 0, where the span
+            // is the one bit rather than the 2^64 - first the subtraction would otherwise wrap to. Masking
+            // with the group's own cores keeps a bit belonging to no core out of a map the banner prints
+            cui64 span  = (last ? last | (last - first) : first) & groupMap;
+
+            if(span & cfg.coreMap[i]) selected |= span;
+            firsts ^= first;
+         }
+         cfg.coreMap[i] = selected;
+      }
       break;
    case 1: // Use the first virtual core of each physical core
    case 2: // Use the last virtual core of each physical core
