@@ -16,6 +16,7 @@
 csi32 wmain(csi32 argc, cwchptrc argv[]) {
    al64 declare1d64z(wchar, wstrOutput, 32768);
         declare1d64z(SYSTEM_LOGICAL_PROCESSOR_INFORMATION, sysLPI, MAX_THREADS * 4);
+        VALUES_HEADER header;
         ptr   outFile;
         ui64  mask;
         DWORD bytesProc = -1;
@@ -364,12 +365,26 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                wprintf(wstrMessage[6]);
                return -5;
             }
-            if(!WriteFile(outFile, value[0], RESULTS_BUF_SIZE, &bytesProc, 0)) {
+
+            // The header records the build and the kernel arithmetic these values were produced by, and a
+            // hash of each block, so a file left over from an earlier revision is reported as a stale file
+            // rather than reaching the comparison and accusing the CPU. Each write is checked for length --
+            // WriteFile reports a partial write as success -- and each failure path closes the file
+            FillValuesHeader(header, value[0], value[3]);
+
+            if(!WriteBlock(outFile, &header, ui32(sizeof(VALUES_HEADER)))) {
+               wprintf(wstrMessage[25]);
+               CloseHandle(outFile);
+               return -20;
+            }
+            if(!WriteBlock(outFile, value[0], ui32(RESULTS_BUF_SIZE))) {
                wprintf(wstrMessage[7]);
+               CloseHandle(outFile);
                return -6;
             }
-            if(!WriteFile(outFile, value[3], RESULTS_BUF_SIZE, &bytesProc, 0)) {
+            if(!WriteBlock(outFile, value[3], ui32(RESULTS_BUF_SIZE))) {
                wprintf(wstrMessage[8]);
+               CloseHandle(outFile);
                return -7;
             }
 
@@ -485,14 +500,48 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       wprintf(wstrMessage[2]);
       return -1;
    }
-   if(!ReadFile(outFile, value[0], RESULTS_BUF_SIZE, &bytesProc, 0)) {
+
+   // Every read below is checked for length, and the header is checked before the blocks it describes.
+   // ReadFile reports reaching the end of the file as success, so a truncated, empty or unrelated file used
+   // to pass both reads with value[0] and value[2] left holding stale zeroes, which every thread then
+   // reported as "!Fail!" -- the most common user error of all presenting as a fleet-wide hardware fault
+   if(!ReadBlock(outFile, &header, ui32(sizeof(VALUES_HEADER))) || header.magic != VALUES_FILE_MAGIC) {
+      wprintf(wstrMessage[26]);
+      CloseHandle(outFile);
+      return -21;
+   }
+   // The size is tested alongside the version, not with the magic value above: a header of another length is
+   // a header of another layout, and naming the version the file was written in is the more useful diagnosis
+   if(header.version != VALUES_FILE_VERSION || header.headerSize != ui32(sizeof(VALUES_HEADER))) {
+      wprintf(wstrMessage[27], header.version, VALUES_FILE_VERSION);
+      CloseHandle(outFile);
+      return -21;
+   }
+   // Seeds transformed by different arithmetic, or by a build that rounds differently, would grade this CPU
+   // against results it was never going to produce. KernelFingerprint runs the same ladder that generated
+   // the file, so an edit to any kernel it walks invalidates every file written before that edit
+   if(header.blockSize != cui64(RESULTS_BUF_SIZE) || header.buildID != VALUES_BUILD_ID ||
+      header.kernelID != KernelFingerprint()) {
+      wprintf(wstrMessage[28]);
+      CloseHandle(outFile);
+      return -21;
+   }
+   if(!ReadBlock(outFile, value[0], ui32(RESULTS_BUF_SIZE))) {
       wprintf(wstrMessage[3]);
+      CloseHandle(outFile);
       return -2;
    }
    memcpy_s(value[1], RESULTS_BUF_SIZE, value[0], RESULTS_BUF_SIZE);
-   if(!ReadFile(outFile, value[2], RESULTS_BUF_SIZE, &bytesProc, 0)) {
+   if(!ReadBlock(outFile, value[2], ui32(RESULTS_BUF_SIZE))) {
       wprintf(wstrMessage[4]);
+      CloseHandle(outFile);
       return -3;
+   }
+   if(HashBytes(value[0], RESULTS_BUF_SIZE, VALUES_HASH_BASIS) != header.seedHash ||
+      HashBytes(value[2], RESULTS_BUF_SIZE, VALUES_HASH_BASIS) != header.valueHash) {
+      wprintf(wstrMessage[29]);
+      CloseHandle(outFile);
+      return -21;
    }
    memcpy_s(value[3], RESULTS_BUF_SIZE, value[2], RESULTS_BUF_SIZE);
    CloseHandle(outFile);

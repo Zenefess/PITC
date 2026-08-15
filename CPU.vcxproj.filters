@@ -35,6 +35,9 @@
     <ClInclude Include="CPU.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="CPU_build.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="en-GB.h">
       <Filter>Header Files</Filter>
     </ClInclude>

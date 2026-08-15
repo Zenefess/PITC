@@ -9,6 +9,16 @@
 
 #include <cmath>
 #include "typedefs.h"
+#include "CPU_build.h"
+
+// This unit holds the scalar ALU and FPU kernels: the path that must run on any x64 CPU, and the only path
+// available when no vector unit is selected. A per-file /arch override here lets the compiler emit
+// EVEX-encoded scalar instructions, which fault with an illegal instruction on every CPU without AVX-512 --
+// and, below /fp:strict, lets it contract JobFPU's trailing x * (x * k + c) into an FMA that rounds once
+// where the source rounds twice, so a "cpu.values" written by one build fails under the other
+#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
+   #error "CPU_jobs_standard.cpp must compile at the SSE2 baseline. See ISSUES.MD H1."
+#endif
 
 #ifndef UNLOOPx4
 #define UNLOOPx4(code) code code code code

@@ -37,8 +37,8 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1–A7, A9, A10, B1, B2, B3, C1–C6, D1, D2, D3, D5, E1, E2 and F1 are fixed** — see the `Fixed` notes on
-those entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
+**A1–A7, A9, A10, B1, B2, B3, B6, C1–C6, D1, D2, D3, D5, E1, E2, F1, H1 and H2 are fixed** — see the
+`Fixed` notes on those entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
 bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
 failure; A4–A6 and F1 were the false-pass family of Appendix B item 2, where the configuration itself
 guaranteed that no work was done, or no time was spent doing it. Rejecting those configurations also closed
@@ -132,6 +132,40 @@ so B4, B5, B7 and B8, on top of every earlier shift.
 in the instruction table and two messages at the end of the array. `CLAUDE.md` was updated to match — its
 exit-code, thread-lifecycle and known-constraints sections now describe the code as it stands, and the two
 bullets that named A7 and D3 as live constraints are replaced by one naming G5.
+
+B6, H1 and H2 are the provenance batch, and they are one story from three directions: nothing in the build
+or in `cpu.values` recorded what had produced the file, so the tool's likeliest failure — a file left over
+from an earlier kernel revision or a differently-rounded build — arrived at the comparison intact and was
+reported as a CPU fault. H1 and H2 remove the two ways two builds of the same source could disagree about
+what a correct result is (an `/arch` override on the baseline unit, and an unpinned floating-point model),
+and each is now enforced by an `#error` rather than by the project file alone: `CPU_jobs_standard.cpp`
+refuses to compile with any `/arch` above the SSE2 baseline, and the new `CPU_build.h` refuses to compile
+any kernel unit without `/fp:strict`. B6 then makes the file say what produced it — magic value, format
+version, block geometry, build ID, kernel fingerprint and a hash of each block, in a 64-byte header — and
+checks every read and write for length, which none of the four calls did. Two exit codes are added, `-20`
+and `-21`, and `wstrMessage_*` grew from 25 entries to 30.
+
+**Any `cpu.values` generated before this batch must be regenerated with `W`**: it has no header. That is the
+one user-visible cost, and it is the point — the same check is what will reject a file after the next kernel
+edit, which `CLAUDE.md` previously had to ask the author to remember. The kernel fingerprint is computed by
+running the golden ladder over a fixed seed, so it tracks the kernels rather than a revision constant
+somebody has to bump; the ladder itself is now a single `RunGoldenLadder` shared by both halves of
+`GenerateValues` and by the fingerprint, which makes the "same pattern in both halves" invariant structural.
+`RESULTS` is untouched, and the header is verified 64 bytes with no padding. **B4, B5, B7, B8 and H3–H7 are
+untouched**; H3 in particular is now the visible remainder of H1's area, and H5 and H6 were already largely
+overtaken by commit `39f0d4b`.
+
+`CPU.h` is 101 lines longer than it was — 410 now 511 — and moved in three steps: one include at `:18`, a
+132-line `"cpu.values" file format` group between the `Job*` externs and the thread-completion bitmap, and
+32 lines *removed* from `GenerateValues` when its two ISA ladders collapsed onto `RunGoldenLadder`. A
+citation into `CPU.h` therefore reads 1 line low between `:18` and `:146`, 133 low from there to
+`GenerateValues`, and 101 low below it — B4, B7 and B8 among them — on top of every earlier shift.
+`CPU.cpp` gained 49 — 741 now 790 — one declaration at `:19`, fourteen in the `W` path and 34 at the file
+read, so a citation reads 1 low above the `W` case, 15 low between it and the read, and 49 low below the
+read — every C, E and F entry in `wmain` past that point. `en-GB.h` gained seven, two exit codes in the
+instruction table and five messages at the end of the array. `CLAUDE.md` was updated to match: its build,
+golden-value-model, `GenerateValues` and exit-code sections now describe the format and the two guards as
+they stand.
 
 Every other entry below still stands.
 
@@ -555,7 +589,50 @@ what every memory-backed run (`B`, every preset, any `M`) actually dispatches th
   eight function families must stay arithmetically identical by hand (there is no shared implementation), this
   is exactly the invariant that most needs a check.
 
-### B6. `cpu.values` is untagged and its reads and writes are unvalidated — **Medium**
+### B6. `cpu.values` is untagged and its reads and writes are unvalidated — **Medium** — *Fixed*
+
+> **Fixed** with both halves this entry asks for, and one leak it does not mention.
+>
+> Every read and every write of the file now goes through `ReadBlock` / `WriteBlock` (`CPU.h`), which treat a
+> short transfer as failure: the byte count is the only evidence either way, and it was being discarded on
+> all four calls. Each failure path closes `outFile` before returning — the two *read* paths leaked it too,
+> not just the writes.
+>
+> The file gained a 64-byte `VALUES_HEADER` ahead of the two blocks, holding a magic value (`"PITCVALS"`), a
+> format version, the block geometry (`RESULTS_BUF_SIZE`, so a change to `MAX_THREADS` or to `RESULTS` is
+> caught), a build ID, a fingerprint of the job kernels, and an FNV-1a hash of each block. `wmain` validates
+> the header before reading the blocks it describes and the hashes immediately after, and `W` writes it
+> ahead of them. A file that fails any of those checks exits `-21` with a message naming which check failed,
+> instead of being loaded and turned into a fleet of `!Fail!` reports blamed on the silicon. `-20` covers a
+> header that could not be written. Both are documented in `wstrInstructions_English`, and `wstrMessage_*`
+> grew from 25 entries to 30.
+>
+> **Any existing `cpu.values` is rejected by this change and must be regenerated with `W`** — it has no
+> header, so it does not carry the magic value.
+>
+> Two design points worth recording, because the obvious alternatives are worse:
+>
+> * The kernel identifier is computed, not declared. `KernelFingerprint` (`CPU.h`) runs the same ladder that
+>   generates the file over a fixed seed and hashes the 16 lanes it produces, so it changes whenever the
+>   arithmetic of any kernel that ladder walks changes. A hand-maintained revision constant would have been
+>   simpler and would have relied on exactly the discipline `CLAUDE.md` says the format should enforce. The
+>   ladder is `RunGoldenLadder`, shared with both halves of `GenerateValues`, so a fingerprint can never
+>   describe a different function from the one that wrote the block. It covers the register-resident kernels
+>   — which *are* what produces the file; the `JobMem*` and `Job ALU_*` variants are outside it, and remain
+>   B5's subject.
+> * The compiler version is deliberately *not* part of the build ID. Under the `/fp:strict` that H2 pins, a
+>   toolset upgrade cannot change a result, and folding `_MSC_FULL_VER` in would force a regeneration after
+>   every Visual Studio update. The floating-point model and record size are in it, because they can.
+>
+> The entry's remark about a corrupt file introducing a negative or NaN seed is covered by the block hashes
+> rather than by a range check on the seeds: a hash mismatch rejects the file whatever the corruption did to
+> it, whereas a range check would pass any corruption that happened to land inside the range. Nothing here
+> defends the file against deliberate tampering, and it is not meant to.
+>
+> One residual, in exchange: the fingerprint is computed on the machine reading the file, so a CPU faulty
+> enough to miscompute one ladder run is told to regenerate its `cpu.values` rather than being tested. That
+> is a refusal to run rather than a false verdict, it is far less likely than an error during a full run,
+> and `W` on such a machine fails with `-4` and says so.
 
 `CPU.cpp:458,463` read two 64 KiB blocks and never check `bytesProc`:
 
@@ -1685,7 +1762,24 @@ physical core) have no meaningful interpretation for single-threaded E-cores. `c
 
 ## H. Build configuration and determinism
 
-### H1. `Debug|x64` compiles the *baseline* kernel unit with `/arch:AVX512` — **High**
+### H1. `Debug|x64` compiles the *baseline* kernel unit with `/arch:AVX512` — **High** — *Fixed*
+
+> **Fixed**, in two steps by two hands. The override itself was already gone from the tree before this batch
+> — commit `39f0d4b` deleted the `AdvancedVectorExtensions512` line from `CPU_jobs_standard.cpp`'s item, so
+> that unit now compiles at the global `StreamingSIMDExtensions2` baseline in both x64 configurations, which
+> is impact (1) closed. The same commit pinned `<FloatingPointModel>Strict</FloatingPointModel>` on both x64
+> configurations, which closes impact (2): `/fp:strict` forbids contraction outright, so `JobFPU`'s trailing
+> `x *= x * 1.01010101010101 + 0.00021` cannot become an FMA under any `/arch` setting.
+>
+> What this batch adds is the guard that keeps it fixed. `CPU_jobs_standard.cpp` now `#error`s if `__AVX__`,
+> `__AVX2__` or `__AVX512F__` is defined when it is compiled, so a per-file `/arch` override cannot be
+> reapplied to the baseline unit — from the IDE's property pages or otherwise — without the build failing
+> and saying why. The complementary requirement, that this unit and the other three compile under
+> `/fp:strict`, is enforced by `CPU_build.h`; see H2.
+>
+> Note this is a guard on the *baseline* unit only. The AVX2 and AVX-512 units deliberately carry no
+> matching "must be raised" assertion, because in `Debug|x64` they legitimately compile at the SSE2
+> baseline today — that is **H3**, which is untouched.
 
 `CPU.vcxproj:175–179`:
 
@@ -1706,7 +1800,31 @@ Compiling it with AVX-512 enabled lets the compiler emit EVEX-encoded scalar ins
   and vice versa** — with the mismatch presented to the user as a CPU fault.
 * **Fix:** remove the override, and see H2.
 
-### H2. No floating-point model is pinned, so the golden values are not reproducible by construction — **Medium**
+### H2. No floating-point model is pinned, so the golden values are not reproducible by construction — **Medium** — *Fixed*
+
+> **Fixed** with the entry's first option, `/fp:strict`, in all four places rather than two, and enforced
+> from the source as well as from the project file.
+>
+> Commit `39f0d4b` had already set `<FloatingPointModel>Strict</FloatingPointModel>` on both x64
+> configurations. This batch adds it to both `Win32` configurations as well — they are vestigial and remain
+> broken for the reasons **H7** gives, but the entry's complaint is that *no* configuration pinned the
+> model, and leaving two unpinned would leave that half true. It also adds
+> `<FloatingPointExceptions>false</FloatingPointExceptions>` to `Debug|x64`, which is the divergence the
+> entry's closing sentence names: `Release|x64` set it while `Debug|x64` inherited `/fp:strict`'s default of
+> `/fp:except`, so the two builds were compiling the same kernels under different exception semantics.
+>
+> Enforcement is `CPU_build.h`, a new header included by all four `CPU_jobs_*.cpp` units and by `CPU.h`. It
+> `#error`s under MSVC when `_M_FP_STRICT` is not defined, so a build made outside the project file cannot
+> quietly inherit `/fp:precise` and produce a `cpu.values` that no `/fp:strict` build will validate. The
+> check is skipped for non-MSVC front ends, which do not define `_M_FP_*`.
+>
+> The model is also recorded in the file, as the entry asks: `VALUES_FP_FLAGS` (`CPU_build.h`) encodes the
+> model and whether contraction is permitted, `CPU.h` folds it into `VALUES_BUILD_ID`, and B6's header
+> carries that. `/fp:except` is deliberately *not* encoded — it decides whether an exception is raised, not
+> what a result is, so a build differing only in it produces identical golden values and should not have its
+> file rejected. `#pragma fp_contract(off)` was not added: it is the entry's fallback for a `/fp:precise`
+> build, and `/fp:strict` already disables contraction, so the pragma would only restate what the guard
+> above now guarantees.
 
 No configuration in `CPU.vcxproj` sets `<FloatingPointModel>`, so all four inherit MSVC's default
 `/fp:precise`. For a tool whose entire premise is bit-identical FP results across builds and machines, the
