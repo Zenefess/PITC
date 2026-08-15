@@ -2533,9 +2533,9 @@ verified by execution rather than by reading.
 7. ~~**A7, D1, D2, D3, D5** — the concurrency set; A7 corrupts the report exactly when it matters most.~~ **Done.**
 8. ~~**H1, H2, B6** — pin the floating-point model, stop the Debug/Release divergence, and version the
    `cpu.values` format so a toolchain change can never be mistaken for a hardware fault.~~ **Done.**
-9. **J1, J2, J7, B5** — decide the intended ALU shift behaviour, move the chains to unsigned arithmetic,
+9. ~~**J1, J2, J7, B5** — decide the intended ALU shift behaviour, move the chains to unsigned arithmetic,
    consider whether the FP kernels' 1-ULP blindness is acceptable, and
-   extend `W` to validate the `JobMem*` and `JobALU_*` kernels; regenerate golden values once, together.
+   extend `W` to validate the `JobMem*` and `JobALU_*` kernels; regenerate golden values once, together.~~ **Done.**
 10. **G1, G2, G4, G6** — topology correctness, then **G3** to lift the 64-core ceiling.
 11. **F2–F15** — the parser and output set.
 12. Documentation (**K**) and process (**L**) alongside the code changes they describe. A CI job that builds a
