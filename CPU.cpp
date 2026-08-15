@@ -299,11 +299,14 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                   cfg.procSync &= 0x08F;
                   cfg.procSync |= 0x020;
                   break;
+               // The off-time a sweep does not have is cleared once the whole command line has been read,
+               // rather than here: clearing it as this option is parsed leaves the order of the two mattering
+               // -- 'Ts]500' and 'T]500s' were different runs -- and does nothing for the two presets, which
+               // set the sweep bit without passing through here at all (ISSUES.MD E7)
                case L's': // Sweeping pulse-width thread execution
                case L'S':
                   cfg.procSync &= 0x08F;
                   cfg.procSync |= 0x040;
-                  cfg.offTime   = 0;
                   break;
                case L't': // Test duration
                case L'T':
@@ -563,9 +566,25 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    cui8 syncShape = ui8(cfg.procSync & 0x07); // Round-robin, Parallel and Staggered are mutually exclusive
    if(syncShape & (syncShape - 1))                 { wprintf(wstrMessage[15]); return -12; }
    if(cfg.tics <= 0)                               { wprintf(wstrMessage[16]); return -13; }
-   if(!(cfg.procSync & 0x010) && !cfg.onTime)      { wprintf(wstrMessage[17]); return -14; }
 
    if(!syncShape) cfg.procSync |= 0x02; // An unspecified pulse shape is parallel; it must never stay 0
+
+   // ComputationPulse selects each of Constant, Fixed pulse and Sweeping pulse from its own bit rather than
+   // inferring one from the absence of the others, so a procSync naming none of the three would reach the
+   // single arm left to catch it while the banner named no mode at all. Each of 'T's C/F/S sub-options
+   // replaces the other two and every preset sets one, so this is the guarantee that rule rests on rather
+   // than a state a command line can produce; Constant is the mode the defaults carry (ISSUES.MD E10)
+   if(!(cfg.procSync & 0x070)) cfg.procSync |= 0x010;
+
+   // In a sweeping-pulse run the on-time is the whole cycle -- the ramp divides it into the active and idle
+   // halves as the run progresses -- so an off-time is not part of the request. 'Ts' used to clear it as it
+   // was parsed, which presets -6 and -7 never pass through: both set the sweep bit directly and left
+   // offTime holding its 900ms default, so -6 ran a 2900ms cycle where its 2000ms on-time says 2000ms and
+   // -7 ran 3400ms rather than 2500ms. Clearing it here covers every route into the mode, in any order the
+   // options are given (ISSUES.MD E7)
+   if(cfg.procSync & 0x040) cfg.offTime = 0;
+
+   if(!(cfg.procSync & 0x010) && !cfg.onTime)      { wprintf(wstrMessage[17]); return -14; }
 
    outFile = CreateFileW(L"cpu.values", GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, 0);
    if(outFile == INVALID_HANDLE_VALUE) {
@@ -633,8 +652,6 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    // reads as a clean pass of a CPU that was never touched. Reachable in practice only since the 'U' maps
    // began to work (F2): the map could not previously be cleared
    if(!threadCount[2]) { wprintf(wstrMessage[40]); return -26; }
-
-   timer.Update();
 
    // Prepare results output file
    if(wstrOut[0]) {
@@ -819,6 +836,16 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    wprintf(L"%s", wstrOutput);
    printf("\n");
 
+   // The one clock reading every thread's deadlines are derived from, and the reason it is taken here: the
+   // arena is allocated and seeded between the option loop and this point, which writes every byte of the
+   // request -- hundreds of milliseconds for 'Mc8' across many threads, and far longer for a multi-gigabyte
+   // one. Taken before that, the reading was stale by the whole of the seeding pass: the start-up delay was
+   // silently spent on it, and once seeding outlasted the delay the computed startTics was already in the
+   // past, so the threads began unsynchronised and endTics had moved earlier by the same amount -- a test
+   // shorter than the duration that was asked for (ISSUES.MD E11). It is also the single reading that gives
+   // every thread an identical startTics, which is what the time-synchronised shapes are built on
+   timer.Update();
+
    // Spawn child processes
    for(d = 0, j = 0; j < 2; ++j) {
       // The affinity cursor walks the selected cores of the thread's own class, group by group. It consulted
@@ -927,9 +954,25 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       c+= swprintf(&wstrOutput[c], L"\n");
    }
    if(cfg.procSync & 0x080) { // Print benchmark results
-      si64 accum = 0;
+      // The 64-bit values one job cycle updates in each record: the widest vector unit, which is what the
+      // dispatch table selects, plus the ALU's own lane where the ALU bit is set. The weight was
+      // '(procUnits & 0x1F) >> 1', an arithmetic accident of the bit-field that yields a vector width only
+      // for the three combinations 'B' itself installs -- 'Iasv' weighted by 6, a width no unit has, while
+      // the run executed the AVX2 kernel JobCycle had selected. It described what was requested, where the
+      // score has to describe what was dispatched (ISSUES.MD E12)
+      csi64 unitLanes = si64(cfg.procUnits & 0x010 ? 8 : cfg.procUnits & 0x08 ? 4 : cfg.procUnits & 0x04 ? 2 : cfg.procUnits & 0x02 ? 1 : 0) +
+                        si64(cfg.procUnits & 0x01 ? 1 : 0);
+      si64  accum     = 0;
+
       for(i = 0; i < threadCount[2]; ++i) accum += resArray.iter[i];
-      c += swprintf(&wstrOutput[c], wstrInterface[10], accum * max(si64((cfg.procUnits & 0x01F) >> 1), 1) / (cfg.tics / timer.siFrequency) >> 10);
+
+      // resArray.iter counts records rather than loop iterations, so accum * unitLanes is a count of values
+      // updated whichever code path ran: one iteration is four records in memory-backed mode against one in
+      // register mode, and it counted the idle iterations of a pulsed run as well. The rate is taken from
+      // the tic count, not from a count of whole seconds -- 'B Tt0.5' divided by an integer zero (E4) -- and
+      // in fl64, which carries a product si64 would overflow at a few hundred thread-hours of AVX-512
+      c += swprintf(&wstrOutput[c], wstrInterface[10],
+                    si64(fl64(accum) * fl64(unitLanes) * fl64(timer.siFrequency) / fl64(cfg.tics)) >> 10);
    }
    c += swprintf(&wstrOutput[c], L"\n");
 

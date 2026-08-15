@@ -37,8 +37,8 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1–A12, B1–B8, C1–C13, D1–D9, E1, E2, F1–F15, G1–G9, H1, H2,
-H7, J1, J2 and J7 are fixed** — sections B, C and D are complete — see the
+**A1–A12, B1–B8, C1–C13, D1–D9, E1–E12, F1–F15, G1–G9, H1, H2,
+H7, J1, J2 and J7 are fixed** — sections B, C, D and E are complete — see the
 `Fixed` notes on those entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
 bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
 failure; A4–A6 and F1 were the false-pass family of Appendix B item 2, where the configuration itself
@@ -55,7 +55,25 @@ thread with a per-thread `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` waitable timer,
 start-up delay are accurate to well under a millisecond instead of being quantised to the 15.625 ms
 scheduler tick; `timeBeginPeriod` was rejected as a machine-wide change to the idle behaviour under test,
 and `<timeapi.h>`, whose presence named E2, is gone. Neither entry changes a job kernel, so `cpu.values`
-does not need regenerating. E3, E4's benchmark half, and E6–E12 are untouched.
+does not need regenerating.
+
+E3–E8 and E10–E12 complete section E, and eight of the nine are one rewrite of `ComputationPulse`'s timing.
+The three defects that shared a cause were all unit mismatches: an idle phase counted in milliseconds beside
+a cycle counted in tics (E3's fourth error, E6's `ui32` overflow), and an offset added to both `startTics`
+and `nextTic` (E3). Every pulse quantity is now a tic count derived from the stretched cycle, the loop's
+condition takes its own reading rather than the previous iteration's (E5), no idle phase may end after the
+run does (E6), and the timing mode is selected from all three of its flags rather than inferred from two of
+them (E10). Around it, E7 moved the sweep's off-time clear out of `Ts`'s parse arm to one statement that
+covers the presets as well, E11 moved the clock reading the thread deadlines are derived from to below the
+arena's seeding pass, and E12 rewrote the benchmark score — which closed the rest of **E4**. E8 is
+documentation, and is the shape of the sweep stated in the help text, the README and `CLAUDE.md`.
+No job kernel is touched, so `cpu.values` does not need regenerating.
+The whole of it was exercised off-target, by driving the pre-fix and post-fix executors over a virtual clock
+across the shapes, modes and presets each entry names: 40 checks, of which the pre-fix executor fails 9 —
+a 74-second overrun, a first window 7.9 s long where 900 ms was asked for, half the requested pulse
+frequency, four of eight cores idle for a whole test, and a benchmark counter that could not tell four
+records from one. **E12 changes the published benchmark score**: the default `B` now reports 4.5× its old
+figure, and no number from an earlier build is comparable with one from this.
 
 C2–C5 are the arena-layout family, and they are one edit: the `switch` that used to compute `records[]` and
 four ALU offsets now yields only a record size and a record's vector width, and the sizing, the rounding,
@@ -134,6 +152,17 @@ so B4, B5, B7 and B8, on top of every earlier shift.
 in the instruction table and two messages at the end of the array. `CLAUDE.md` was updated to match — its
 exit-code, thread-lifecycle and known-constraints sections now describe the code as it stands, and the two
 bullets that named A7 and D3 as live constraints are replaced by one naming G5.
+
+E3–E8 and E10–E12 shifted three more files. `CPU_methods.h` gained 39 lines, all of them inside
+`ComputationPulse`: 13 at its head (the timing-mode `switch` and `recStep`), 15 in the staggered and
+parallel arms, and 11 in the main loop, so a citation into that file below its line 24 reads up to 39 lines
+low. `CPU.cpp` gained 43 in five places — 3 at the `Ts` arm (`:302`), 16 at the synchronisation checks
+(`:568`), 2 fewer where `timer.Update()` was (`:655`), 10 above the spawn loop (`:839`) and 16 at the
+benchmark score (`:957`) — so a citation reads 3 low from `:302`, 19 from `:568`, 17 from `:655`, 27 from
+`:839` and 43 below the score. `CPU.h` gained three lines at `:153`, ahead of everything in
+`GenerateValues`, and `en-GB.h` one in the `T` option's help. `CLAUDE.md` was updated to match: its
+pulse-shape bullets, its `procSync` and thread-lifecycle sections and its benchmark description now
+describe the executor as it stands.
 
 B6, H1 and H2 are the provenance batch, and they are one story from three directions: nothing in the build
 or in `cpu.values` recorded what had produced the file, so the tool's likeliest failure — a file left over
@@ -1936,7 +1965,29 @@ program is a `Sleep()` (`CPU_methods.h:55,69`):
 * **Fix:** call `timeBeginPeriod(1)` at start-up and `timeEndPeriod(1)` before returning; better still, use
   `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`.
 
-### E3. Staggered mode double-counts the stagger offset and doubles the cycle at stagger 1 — **Medium**
+### E3. Staggered mode double-counts the stagger offset and doubles the cycle at stagger 1 — **Medium** — *Fixed*
+
+> **Fixed**, all three points. `startTics` now carries the whole of the offset and `nextTic` takes it from
+> `startTics` alone; the cycle is stretched by the stagger rather than by twice it; and the ramp is folded
+> down to the widest doubling the run can hold — `stagger >>= 1` until the thread's first window fits inside
+> the test — so a run too short for the full 128-cycle ramp compresses it instead of leaving the top of each
+> group of 8 cores untested. A fourth error the entry does not name went with them: `sleepDelay` was grown by
+> `cycleTime * coreStag` beside a cycle grown by `2 * coreStag`, so the idle phase was one stagger period
+> where the cycle wanted two, and every window after the first was correspondingly over-long. The idle phase
+> is now derived from the stretched cycle (`cycleTics - activeTics`) in tics, which is the one expression
+> that cannot disagree with it.
+>
+> **One correction to the analysis below.** The double-counted offset does not open the first window late —
+> `nextTic` is the *end* of an active window, not its start, and the thread begins computing the moment
+> `PulseWaitUntil(startTics)` returns. What it does is leave the first window open one whole stagger period
+> too long. Driving the executor over a virtual clock at preset `-8`'s 900 ms/100 ms cycle: core 1's first
+> window was 1 900 ms against the 900 ms requested, core 2's 3 900 ms and core 3's 7 900 ms, each now 900.0 ms
+> — an unbroken 7.9-second burst at the head of a run whose whole purpose is that the load be pulsed. The
+> doubled cycle is as described: core 0 pulsed 60 times in a 120-second run where its 1 000 ms cycle asks for
+> 120, and now pulses 120 times. Every thread's duty cycle now matches its own period exactly (0.9000, 0.4500,
+> 0.2250, 0.1125 for staggers 1–8, against 0.9000/0.4500/0.2250/0.1125 intended). On the third point, measured
+> at a 4 000 ms cycle over 60 seconds: cores 4–7 executed one job cycle each — the one forced before the loop
+> — and nothing else for the whole test, and now compute in every cycle their folded stagger gives them.
 
 `CPU_methods.h:44–49`:
 
@@ -1959,31 +2010,53 @@ case 4: // Staggered
 
 * **Trigger:** presets `-8` and `-9`, or any `Ss` run.
 
-### E4. Integer division by zero in two places — **Medium** — *Partly fixed*
+### E4. Integer division by zero in two places — **Medium** — *Fixed*
 
-* `CPU.cpp:653` — the benchmark score divides by `(cfg.tics / timer.siFrequency)`, an integer count of whole
-  seconds, which is 0 for any run shorter than one second. **Trigger:** `PITC.exe B Tt0.5`. **Still open** —
-  A6 rejects only a duration of zero or less, and 0.5 s is a legitimate request.
+> **Fixed.** The benchmark half went with E12: the score is now a rate taken from the tic count itself rather
+> than from a count of whole seconds, so the divisor is `cfg.tics`, which `-13` already refuses to leave at
+> zero or below. `PITC.exe B Tt0.5` divided by an integer 0 and now reports the half-second's throughput.
+
+* ~~`CPU.cpp:653` — the benchmark score divides by `(cfg.tics / timer.siFrequency)`, an integer count of whole
+  seconds, which is 0 for any run shorter than one second. **Trigger:** `PITC.exe B Tt0.5`.~~ **Fixed** with
+  E12's rewrite of the score; A6 rejects only a duration of zero or less, and 0.5 s is a legitimate request.
 * ~~`CPU_methods.h:69` — the sweep ramp divides by `(tcfg->endTics - tcfg->startTics)`, i.e. `cfg.tics`.
   **Trigger:** `PITC.exe Tst0`.~~ **Fixed** by A6's `cfg.tics <= 0` rejection.
 
 `Tt` and `T[` are now range-checked against zero (A5, A6) but are otherwise still unvalidated (F4).
 
-### E5. The main loop condition reads a stale timestamp — **Medium** — *Partly fixed*
+### E5. The main loop condition reads a stale timestamp — **Medium** — *Fixed*
 
-> **Partly fixed** by E1's re-check. The condition still reads the previous iteration's timestamp, and still
-> reads a value another thread may have written (D2), but the body now re-tests `endTics` against a fresh
-> reading before acting on it, so a run no longer starts a pulse or a sleep after its deadline: a 60-second
-> constant-mode run used to exit one `offTime` (900 ms) late and now exits at the deadline, having executed
-> the same number of job cycles. E6's overrun — a long round-robin or staggered sleep already in progress
-> when the deadline passes — is untouched and still open.
+> **Fixed.** The condition now takes the reading itself — `for(…; (curTics = CurrentTics()) < tcfg->endTics; …)`
+> — so the stale test and the fresh re-test inside the body are one test, done once, and the body is no longer
+> entered after the run has ended. The D2 half went with it when the workers stopped touching the global
+> `CLASS_TIMER`: the value read is a thread-local `QueryPerformanceCounter` reading that no other thread can
+> write. E6's overrun, the last thing this entry's defect could still cause, is closed in that entry.
+>
+> **Partly fixed** before that by E1's re-check. The condition still read the previous iteration's timestamp,
+> but the body re-tested `endTics` against a fresh reading before acting on it, so a run no longer started a
+> pulse or a sleep after its deadline: a 60-second constant-mode run used to exit one `offTime` (900 ms) late
+> and now exits at the deadline, having executed the same number of job cycles.
 
 `CPU_methods.h:63` evaluates `timer.siCurrentTics < tcfg->endTics` before `timer.Update()` runs at
 `CPU_methods.h:64`, so the loop always executes one iteration past the end time — and reads a value another
 thread may have written (D2). This is the proximate cause of E1 and makes every run overshoot its requested
 duration by one pulse.
 
-### E6. Long round-robin and staggered sleeps overrun the requested duration — **Medium**
+### E6. Long round-robin and staggered sleeps overrun the requested duration — **Medium** — *Fixed*
+
+> **Fixed** with the second of the two fixes this entry offers, and in tics rather than in milliseconds: the
+> idle phase is `PulseWaitUntil(pulseTimer, min(curTics + pulseTics, tcfg->endTics))`, so no wait can end
+> after the run does. Measured over a virtual clock at the entry's own example — 64 threads, a 2 s cycle,
+> round-robin — the pre-fix executor issued a single 127.0 s sleep and outlived a 60-second test by 74.0 s;
+> it now sleeps at most to the deadline and the run ends there. What a run can still overshoot by is one job
+> cycle: a cycle already executing when the deadline passes finishes, which is microseconds and is the
+> behaviour the golden-value comparison requires.
+>
+> The unit change closes a second defect this entry does not name. `sleepDelay` was a `ui32` of milliseconds
+> grown by `cycleTime * (threadCount - 1)`, which overflows 32 bits at a long cycle and a wide machine, and
+> was truncated from a tic count to milliseconds before being converted back. It is now `cycleTics -
+> activeTics`, in tics, which is the same quantity the cycle is measured in and cannot disagree with the
+> stretch the pulse shape applied (see E3).
 
 `CPU_methods.h:39,47` grow `sleepDelay` by `cycleTime * (threadCount - 1)` and `cycleTime * coreStag`. With 64
 threads and a 2 s cycle, a round-robin thread issues a single `Sleep(126000)`. Because the loop can only
@@ -1992,7 +2065,16 @@ waits for it.
 
 * **Fix:** sleep in bounded slices, or compute the delay as `min(sleepDelay, endTics - now)`.
 
-### E7. Sweep presets never zero the off-time, so their cycle is 900 ms longer than stated — **Medium**
+### E7. Sweep presets never zero the off-time, so their cycle is 900 ms longer than stated — **Medium** — *Fixed*
+
+> **Fixed**, and by removing the special case rather than by adding a second one. `Ts` no longer clears the
+> off-time as it is parsed; `wmain` clears it once the whole command line has been read, for any run carrying
+> the sweep bit however it got there. Preset `-6` therefore runs the 2 000 ms cycle its on-time names instead
+> of 2 900 ms, and `-7` 2 500 ms instead of 3 400 ms. Clearing it at the end also settles the order the two
+> options are given in: `Ts]500` and `T]500s` were different runs, and are now the same one. The help text's
+> instruction to "give ']' after 'S' where both are used" is gone with the reason for it, replaced by a
+> statement that a sweep has no off-time — which is what `en-GB.h` and `README.md` now say in both the
+> preamble and the `T` option's own lines.
 
 The `Ts` option explicitly sets `cfg.offTime = 0` (`CPU.cpp:263`) because in sweep mode `onTime` *is* the whole
 cycle duration. Presets `-6` and `-7` (`CPU.cpp:405–416`) set the sweep bit directly and set `onTime`, but
@@ -2002,7 +2084,13 @@ therefore `onTime + 900`.
 * **Impact:** `-6` runs a 2 900 ms cycle where its `onTime = 2000` implies 2 000 ms, and `-7` runs 3 400 ms
   rather than 2 500 ms. The two ways of requesting a sweep behave differently.
 
-### E8. The shape of the sweep is undocumented — **Low**
+### E8. The shape of the sweep is undocumented — **Low** — *Fixed*
+
+> **Fixed** as documentation, the behaviour being the design choice this entry says it is. `en-GB.h` and
+> `README.md` now state it on the `T` option's own lines — "Each cycle begins idle and the duty cycle rises
+> in a straight line to 100% at the end of the test duration" — and `CLAUDE.md`'s description of `procSync`
+> bit 6 says the same. Measured over a virtual clock, a 120-second sweep of 2 000 ms cycles spends its first
+> tenth at a 0.042 duty cycle and its last at 0.942, which is the straight line those words describe.
 
 `CPU_methods.h:28` starts `nextTic` at 0, so after the parallel branch adds `startTics` the first iteration
 takes the sleep branch for a full cycle — 0 % duty — and the ramp then raises the duty cycle monotonically to
@@ -2020,13 +2108,21 @@ one-directional or that it begins idle, so a user cannot predict from the docume
 `Tf[0]0` gives `cycleTics == 0` and `cycleTime == 0` (`CPU_methods.h:22`), so `nextTic` advances only by the
 jitter and the thread busy-loops on `Sleep(offset[0])` for the whole test.
 
-### E10. The "Fixed pulse" flag is never read by the executor — **Medium**
+### E10. The "Fixed pulse" flag is never read by the executor — **Medium** — *Fixed*
 
-> **Still open, but no longer observable.** Since F1's fix, bits 4–6 always carry exactly one mode — the
-> default and every preset set one, and each of `T`'s `C`/`F`/`S` replaces it — so "neither Constant nor
-> Sweep" and "Fixed pulse" have become the same state, and the banner can no longer claim a mode the
-> executor is not running. The flag is still never read, so the impact below survives as a latent one:
-> add a fourth mode and the executor will silently treat it as a fixed pulse.
+> **Fixed.** `ComputationPulse` selects its timing mode with `switch(tcfg->procSync & 0x070)`, in which
+> `0x020` and `0x040` share the pulsed arm and `0x010` the constant one, so all three flags are read and
+> `Tf`'s bit is what puts the executor on the pulsed path. The arm that catches a combination this build does
+> not implement is the *constant* one rather than the fixed pulse: a thread that never yields is the only
+> shape that cannot leave a core idle for a test it was told to compute, where "not Constant, therefore a
+> fixed pulse" would have run an unknown mode as a 100 ms/900 ms pulse — a tenth of the load, under another
+> mode's name. `wmain` supplies the guarantee that switch rests on, substituting Constant for a `procSync`
+> naming no mode at all, exactly as it already substitutes Parallel for a `procSync` naming no pulse shape.
+>
+> **Still open, but no longer observable**, before that fix. Since F1's, bits 4–6 always carry exactly one
+> mode — the default and every preset set one, and each of `T`'s `C`/`F`/`S` replaces it — so "neither
+> Constant nor Sweep" and "Fixed pulse" had become the same state, and the banner could no longer claim a
+> mode the executor was not running.
 
 `procSync` bit 5 is parsed from `Tf` (`CPU.cpp:258`) and printed in the banner (`CPU.cpp:575,580`), but a
 search of `CPU_methods.h`, `CPU_job_cycles.h` and `CPU.h` finds no read of `0x020` anywhere. `ComputationPulse`
@@ -2038,7 +2134,13 @@ consults bits 0–3 (the sync switch), 4 (Constant), 6 (Sweep) and 7 (Benchmark)
   pulse settings "did not apply" has no way to tell from the output that the flag is inert. Fixed-pulse
   behaviour is really just "neither Constant nor Sweep", which nothing states.
 
-### E11. Thread deadlines are computed from a clock snapshot taken before the arena is allocated — **Medium**
+### E11. Thread deadlines are computed from a clock snapshot taken before the arena is allocated — **Medium** — *Fixed*
+
+> **Fixed** with the one-line move this entry recommends: the `timer.Update()` that stood before the results
+> file was opened is now the statement immediately above the spawn loop, after the arena has been allocated,
+> seeded and the banner printed. It remains the *only* such call between the option loop and the spawn, which
+> is what gives every thread an identical `startTics` and makes the time-synchronised shapes mean anything;
+> `timer.siCurrentTics` has no other reader in the program, so nothing else moved with it.
 
 `CPU.cpp:478` calls `timer.Update()`, and it is the last such call before the worker threads are configured.
 Between that snapshot and `CPU.cpp:595`, `wmain` allocates the arena (`:517`) and runs the seeding loop
@@ -2058,7 +2160,29 @@ threadData[d].endTics   = threadData[d].startTics + cfg.tics;
   test also runs *shorter* than the requested duration by the seeding time.
 * **Fix:** call `timer.Update()` immediately before the spawn loop.
 
-### E12. The benchmark score's unit weight and iteration accounting are both wrong — **Medium**
+### E12. The benchmark score's unit weight and iteration accounting are both wrong — **Medium** — *Fixed*
+
+> **Fixed**, both halves, and E4's division by zero with them. The weight is now derived the way the dispatch
+> table is — the widest vector unit selected, plus the ALU's own lane where bit 0 is set — so it is a count
+> of the 64-bit values one job cycle updates in a record rather than an arithmetic accident of the bit-field.
+> Checked against the arena's own record-size switch for all nine unit selections `wmain` accepts, it equals
+> `recSize / 8` in every one of them, which is the same statement from the other end: the score's unit and
+> the arena's record now describe the same work. The old weight agreed for the five selections naming a
+> single unit and disagreed for the four naming an ALU *and* a vector unit — including all three that `B`
+> installs, each short by the ALU's lane — while `Iasv` was weighted by 6, a width no unit has.
+>
+> `resArray.iter` counts records rather than loop iterations: `j` advances by `recStep` (4 in memory-backed
+> mode, 1 in register mode) inside the compute branch only, so the idle iterations of a pulsed run are no
+> longer counted as work and the two code paths' figures are counts of the same thing. Measured over a
+> virtual clock, a pulsed 60-second run counted 60 059 iterations for 60 000 job cycles; it now counts
+> 240 000 records for those same 60 000 cycles, and a register-mode run of identical throughput counts
+> 60 000 against the memory-backed 240 000 — a ratio of 4, where the old counter reported the two as equal.
+>
+> **The published score changes**, and no earlier figure is comparable with a later one. For the default `B`
+> on an AVX-512 CPU the new number is 4.5× the old: 4× from counting records instead of calls, and 9/8 from
+> the ALU lane the weight had been dropping. The rate is taken in `fl64` from the tic count — `si64` overflows
+> that product at a few hundred thread-hours of AVX-512, and a count of whole seconds is 0 for `B Tt0.5`
+> (E4) — and is exact to the printed digit at every magnitude a run can reach.
 
 `CPU.cpp:653`:
 
