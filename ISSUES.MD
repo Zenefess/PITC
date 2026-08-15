@@ -37,8 +37,8 @@ against the current source before acting.
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **9** | **25** | **56** | **39** | **129** |
 
-**A1–A7, A9, A10, B1, B2, B3, B5, B6, C1–C6, D1, D2, D3, D5, E1, E2, F1, G1, G2, G4, G6, G7, H1, H2, H7,
-J1, J2 and J7 are fixed** — see the
+**A1–A7, A9, A10, B1, B2, B3, B5, B6, C1–C6, D1, D2, D3, D5, E1, E2, F1, G1, G2, G4, G5, G6, G7, H1, H2,
+H7, J1, J2 and J7 are fixed** — see the
 `Fixed` notes on those entries. The counts in the table above are as first audited and have not been decremented. A1–A3 restored
 bit-exact verification on the SSE and AVX2 paths and made the summary table able to report an AVX-512
 failure; A4–A6 and F1 were the false-pass family of Appendix B item 2, where the configuration itself
@@ -97,7 +97,9 @@ executed; the MSVC build still has to confirm it.
 **D5 has a consequence worth acting on: affinity now actually reaches the scheduler**, where a
 `_beginthread` handle meant no mask ever did. That promotes **G5** — the mask restarting at bit 1 for the
 SMT thread class — from a latent defect to a live one on any topology carrying both non-SMT and SMT threads.
-Uniform SMT CPUs are unaffected, and **G5 should be the next entry taken**. **D4 and D6–D9 are untouched**,
+Uniform SMT CPUs are unaffected, and **G5 should be the next entry taken** — it was, in the topology batch
+below, where measuring it showed the "uniform SMT CPUs are unaffected" qualifier to be the whole of the
+story only for CPUs that are not hybrid. **D4 and D6–D9 are untouched**,
 and D8 in particular now stands alone: with A7 fixed, the only completion bit cleared ahead of a thread's
 last write is that thread's own.
 
@@ -193,7 +195,7 @@ header's `KernelFingerprint` detects that on its own and reports `-21`, so a sta
 than blamed on the CPU — which is the guard doing exactly what B6 added it for. **J3, J4, J5, J6 and B4,
 B7, B8 remain open.**
 
-G1, G2, G4 and G6 are the topology batch, and three of the four are one story: the code knew how many cores
+G1, G2, G4, G5 and G6 are the topology batch, and three of them are one story: the code knew how many cores
 there were and never recorded how they were arranged. `SetSMTLoading` rebuilt the sibling layout from a core
 count and a stride every time it ran, which on a CPU reporting no SMT meant shifting by `ui64(0 - 1)` and by
 64 (G1), on a hybrid part meant a mask describing the P-cores that cleared every E-core (G2), and in either
@@ -209,31 +211,43 @@ is checked, a walk that names no core is refused alongside it, and both raise th
 regenerating**.
 
 The batch was verified off-target, in the same way the concurrency batch was: both `SetSMTLoading` arms, the
-walk and the `groupCount` derivation were transcribed pre- and post-fix into a harness and run over seven
-synthetic topologies, with the pre-fix code's two undefined shifts emulated as x86 executes them. The
-pre-fix forms fail 13 of 35 checks — 0 threads selected on either non-SMT part, every E-core dropped on both
-hybrid parts, `groupCount` 2 on all four — and the current forms fail none of 93. The uniform SMT
-topologies pass both, which is what the entries predicted: this is a class of defect that never appears on
-the machines most likely to be used for testing.
+walk, the `groupCount` derivation and the spawn loop's affinity assignment were transcribed pre- and
+post-fix into a harness and run over seven synthetic topologies — uniform 2-way and 4-way SMT, a 6-core and
+a 1-core non-SMT part, a 32-core 2-way part, and two hybrid P/E mixes — with the pre-fix code's two
+undefined shifts emulated as x86 executes them. The pre-fix forms fail 13 of 35 checks (0 threads selected
+on either non-SMT part, every E-core dropped on both hybrid parts, `groupCount` 2 on all four) and the
+current forms fail none of 205, which include, for all four `U` policies on every topology: one thread per
+selected core, no two threads sharing a core, no selected core left without one, and every thread on a core
+of its own class. The uniform SMT topologies pass both, which is what the entries predicted — this is a
+class of defect that never appears on the machines most likely to be used for testing.
 
-**G5 is the entry this promotes, and it should be next.** G2's fix is what puts the E-cores back in the core
-map; G5 is why six of them still would not be tested. It is a one-line change to where `mask` is
-initialised, and D5's note already named it. **G3 and G9 remain open**, and G9 in particular is worth
-reading alongside G2: the "non-SMT / SMT" split these fixes now handle correctly is still *called* something
-it does not mean on a hybrid part.
+**G5 came with them**, because without it the core map G2 now builds correctly is still pinned onto too few
+cores. It is not the one-line hoist D5's note assumed: the affinity walk now consults the selected cores of
+the thread's *own* class, `cfg.sys.coreMap[j] & cfg.coreMap`, which both makes the assignment one-to-one and
+keeps `packetSizeRAM` and `resArray.records[j]` describing the core the thread is on. Extending the harness
+to the spawn loop measured what the entry's "masked on a uniform SMT CPU" qualifier was hiding: on a hybrid
+part **every E-core in the machine went untested at every setting**, `U` argument or not — 20 threads pinned
+onto 12 distinct cores on 6 P + 8 E, 32 onto 16 on 8 P + 16 E — because `coreType` puts the E-cores in the
+non-SMT class and the P-core threads then restarted over them. Post-fix both cover every core.
+
+**G3 and G9 remain open**, and G9 is worth reading alongside G2 and G5: the "non-SMT / SMT" split these
+fixes now handle correctly is still *called* something it does not mean on a hybrid part, and that
+misnomer is why G5's severity was mis-scoped when it was first written down.
 
 Two stale cross-references were corrected while the section was open: C7 and C11 both cite "the
 64-virtual-core ceiling (G2)", which is **G3**.
 
-Three files moved again. `CPU.cpp` gained 48 — 797 now 845 — 24 of them in the topology walk at `:30` and
-24 more between the walk and `cfg.coreMap`'s assembly at `:96`, so a citation into `wmain` reads 24 lines
-low above the `groupCount` derivation and 48 low below it, on top of every earlier shift; **every C, E and
-F entry in `wmain` is below both**. `CPU.h` gained 35 — 625 now 660 — six at `:33` for the sibling bitmaps
+Three files moved again. `CPU.cpp` gained 60 — 797 now 857 — 24 of them in the topology walk at `:30`, 24
+more between the walk and `cfg.coreMap`'s assembly at `:96`, and twelve at the spawn loop (now `:746`), so a
+citation into `wmain` reads 24 lines low above the `groupCount` derivation, 48 low from there to the spawn
+loop and 60 low below it, on top of every earlier shift; **every C, E and F entry in `wmain` is below the
+first two**. `CPU.h` gained 35 — 625 now 660 — six at `:33` for the sibling bitmaps
 and 29 at `SetSMTLoading`, so a citation reads 6 low from `:33` to `:512` and 35 low below that:
 `Failed()`, `Evaluate` and `GenerateValues`, and so A7, B4, B5, B7 and B8. `en-GB.h` gained three, one exit
 code in the instruction table and two messages at the end of the array. `CLAUDE.md` was updated to match —
-its exit-code and thread-lifecycle sections describe the enumeration's four rules and the sibling bitmaps,
-and the known-constraints bullet that named G5 now says what G2's fix leaves it holding up.
+its exit-code and thread-lifecycle sections describe the enumeration's four rules, the sibling bitmaps and
+the class-map affinity walk, and the known-constraints bullet that named G5 is gone, leaving one that names
+G9 — the misnomer that outlived it.
 
 Every other entry below still stands.
 
@@ -1015,7 +1029,9 @@ row plus 160 per AVX2 row, so `c` passes 21 845 at about 100 threads and 32 768 
 `threadCount[2]` is computed at `CPU.cpp:473–476` by popcount over the user-modifiable core map, and nothing
 guarantees it is non-zero. The same variable is used unchecked at `CPU.cpp:503,508`.
 
-* **Trigger:** a `Uc`/`Ut` map that disables every core, or a `SetSMTLoading` mask that resolves to 0 (G5).
+* **Trigger:** a `Uc`/`Ut` map that disables every core. (The entry also cited a `SetSMTLoading` mask that
+  resolves to 0; that half is closed — the mask is now a bitmap of cores that exist, so it can only empty a
+  map the `U` argument had already emptied.)
 * **Impact:** integer divide-by-zero exception.
 
 ### C9. `allocMem[1]` defaults to 1 byte, and `Ms` alone allocates nothing — **Medium**
@@ -1184,7 +1200,8 @@ never consults `cfg.sys.cpuSSE4_1`. `ThreadsRunningSSE` calls `AllFalse(cui128, 
 > **This makes affinity effective for the first time**, which promotes **G5** from latent to live: `mask`
 > restarts at bit 1 when the spawn loop advances to the SMT thread class, so a topology carrying *both*
 > non-SMT and SMT threads now really does pin two threads to one virtual core while others idle. Uniform SMT
-> CPUs (`threadCount[0] == 0`) are unaffected. **G5 should be taken next.**
+> CPUs (`threadCount[0] == 0`) are unaffected. **G5 should be taken next.** *(It was, with the topology
+> batch — and it was live on every hybrid part rather than latent, because those carry both thread classes.)*
 
 `CPU.cpp:609–612`:
 
@@ -1771,10 +1788,8 @@ On a CPU with no SMT, `cfg.sys.SMT` is never assigned (`CPU.cpp:38–42` only wr
 > On the 6 P-core + 8 E-core topology in the G1 harness, `Uo` selected 6 virtual cores before the fix and
 > selects 14 after: every physical core, one thread each. On 8 P + 16 E it is 8 before and 24 after.
 >
-> **G5 is now what stands between that core map and the cores actually being tested.** The spawn loop
-> restarts its affinity mask at bit 0 for the SMT thread class, so six of those fourteen threads are pinned
-> back over cores the E-core threads already hold, leaving six E-cores idle. G5 is untouched by this batch
-> and is the next entry to take.
+> **G5 had to be taken with it** for those threads to reach the cores this now selects — the spawn loop was
+> pinning the second thread class over cores the first already held. It is fixed in the same batch; see G5.
 
 `CPU.h:173` builds the mask from `cfg.sys.coreCount[1]` (SMT physical cores) only. `cfg.coreMap[i] &= mask` at
 `CPU.h:175` then clears every bit belonging to a non-SMT core.
@@ -1833,14 +1848,28 @@ That is what makes **G1**'s shift-by-64 reachable on hardware that *does* have S
 all-zero `coreMap[1][1]`, runs `k` to 64, and executes `mask <<= 64`. The banner at `CPU.cpp:582–586` also
 prints a second, all-dots thread-bitmap row for a processor group that does not exist.
 
-### G5. The affinity mask restarts at bit 0 for the SMT pass — **Medium**
+### G5. The affinity mask restarts at bit 0 for the SMT pass — **Medium** — *Fixed*
 
-> **Not fixed, and now the last thing standing between a hybrid CPU and a complete test.** G2's fix hands
-> `Ue`, `Uo` and the one-thread-per-physical-core presets a core map that includes every E-core; this loop
-> then pins the P-core threads back over the first of them. Note also that the "masked whenever
-> `threadCount[0] == 0`" qualifier below already did not hold on a hybrid part with no `U` option at all,
-> where both thread classes are populated by default — G5 has been live there since D5 made affinity reach
-> the scheduler.
+> **Fixed**, and the entry understates it. Hoisting `mask` out of the class loop would stop the collision,
+> but it would also let a class-0 thread be pinned to an SMT core and a class-1 thread to a non-SMT one,
+> while `packetSizeRAM` and `resArray.records[j]` — chosen by class, a few lines above — still described the
+> other kind. The walk now consults `cfg.sys.coreMap[j][procGroup] & cfg.coreMap[procGroup]`, the selected
+> cores of the thread's *own* class. `threadCount[j]` is the population count of exactly that expression, so
+> there is one core in it for every thread of the class: the assignment is one-to-one, no selected core is
+> left idle, and the per-class block sizes describe the core the thread is really on. The two class maps are
+> disjoint, so `mask` restarting at bit 0 for each class is now correct rather than merely harmless, and it
+> stays as it was.
+>
+> **The qualifier below is wrong, and that is the part worth reading.** "Masked whenever
+> `threadCount[0] == 0`, i.e. on a uniform SMT CPU" is true of uniform CPUs and of nothing else: `coreType`
+> is inferred from a core's sibling count (**G9**), so on every hybrid P/E-core part the E-cores *are* the
+> non-SMT class and both classes are populated at every setting — with no `U` argument at all, not just
+> under `Ue`/`Uo`. Extending the G1 harness to the spawn loop's walk puts numbers on it: on 6 P-cores + 8
+> E-cores a default run created 20 threads and pinned them onto **12** distinct cores, and on 8 P + 16 E it
+> created 32 and pinned them onto **16** — in both cases every E-core in the machine went untested, at every
+> setting, while its P-cores carried two threads each. Post-fix the same runs cover 20 of 20 and 32 of 32.
+> The five non-hybrid topologies cover every selected core before and after, which is why this never showed
+> on the machines most likely to be used for testing.
 
 `CPU.cpp:592–593`:
 
@@ -2635,8 +2664,8 @@ verified by execution rather than by reading.
 | Any `Mc*` run with ALU + a vector unit | Each thread overruns its arena slice by up to 3 records (**C4**) |
 | ~~`-1`/`-3`/`-4`/`-6`/`-8` on a CPU without SMT~~ | ~~Undefined shift in `SetSMTLoading`; zero threads, empty table, **exit code 0**~~ — one thread per physical core (**G1**, fixed) |
 | ~~Any run on a hybrid P/E-core CPU~~ | ~~`groupCount` becomes 2 for a single populated group, so `SetSMTLoading` shifts by 64~~ — `groupCount` counts populated groups (**G4**, fixed) |
-| ~~`-1`/`-3`/`-4`/`-6`/`-8` on a hybrid P/E CPU~~ | ~~Every E-core silently deselected~~ — every physical core selected; six of them still share a P-core thread's affinity (**G2** fixed, **G5** open) |
-| Any run on a hybrid P/E-core CPU | The SMT thread class re-uses the affinity mask of the non-SMT class, so cores at the top of the map idle (**G5**) |
+| ~~`-1`/`-3`/`-4`/`-6`/`-8` on a hybrid P/E CPU~~ | ~~Every E-core silently deselected~~ — every physical core selected, one thread each (**G2**, fixed) |
+| ~~Any run on a hybrid P/E-core CPU~~ | ~~The SMT thread class re-uses the affinity mask of the non-SMT class, so every E-core goes untested while each P-core carries two threads~~ — one thread per core, on a core of its own class (**G5**, fixed) |
 | Any run on a CPU with SSE2 but not SSE4.1 | Illegal instruction in `ThreadsRunningSSE` before the test starts (**D4**) |
 | Debug build on a non-AVX-512 CPU | Illegal instruction in the scalar ALU/FPU path (**H1**) |
 
@@ -2658,9 +2687,10 @@ verified by execution rather than by reading.
 9. ~~**J1, J2, J7, B5** — decide the intended ALU shift behaviour, move the chains to unsigned arithmetic,
    consider whether the FP kernels' 1-ULP blindness is acceptable, and
    extend `W` to validate the `JobMem*` and `JobALU_*` kernels; regenerate golden values once, together.~~ **Done.**
-10. ~~**G1, G2, G4, G6** — topology correctness~~ **Done**, and **G7** with them. **G5** is the immediate
-    follow-on: without it, the core map G2 now builds correctly on a hybrid part is still pinned onto too
-    few cores. Then **G3** to lift the 64-core ceiling, and **G9** to stop calling E-cores "non-SMT".
+10. ~~**G1, G2, G4, G6** — topology correctness~~ **Done**, with **G5** and **G7**. A hybrid CPU now runs one
+    thread on each of its cores, which no release has done. Next: **G3** to lift the 64-core ceiling, then
+    **G9** to stop calling E-cores "non-SMT" — the misnomer that hid G5's real severity — and **G8**, whose
+    remaining half the sibling bitmaps G2 added make straightforward.
 11. **F2–F15** — the parser and output set.
 12. Documentation (**K**) and process (**L**) alongside the code changes they describe. A CI job that builds a
     clean clone is the highest-value single addition.

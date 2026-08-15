@@ -743,7 +743,18 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    printf("\n");
 
    // Spawn child processes
-   for(d = 0, j = 0; j < 2; ++j)
+   for(d = 0, j = 0; j < 2; ++j) {
+      // The affinity walk consults the selected cores of the thread's own class. It walked the combined map
+      // from bit 0 for both classes, so on any topology carrying non-SMT *and* SMT threads the second class
+      // was pinned over cores the first already held while the top of the map idled -- and that is every
+      // hybrid P/E-core part at every setting, because coreType is inferred from a core's sibling count, so
+      // its E-cores are the non-SMT class and its P-cores the SMT one (ISSUES.MD G5, G9). Walking the class
+      // map also keeps packetSizeRAM and resArray.records[j], both selected by class, describing the core
+      // the thread is actually pinned to. The two class maps are disjoint, so restarting mask at bit 0 for
+      // each class costs nothing beyond skipping the other class's bits, and threadCount[j] is the
+      // population count of this very map, so there is exactly one core here for each thread of the class
+      cui64 classMap = cfg.sys.coreMap[j][procGroup] & cfg.coreMap[procGroup]; ///--- Modify to account for >64 virtual cores !!!
+
       for(i = 0, mask = 1; i < threadCount[j]; ++d, ++i, mask <<= 1) {
          threadData[d].packetSizeRAM = resArray.blockSize[j];
          threadData[d].startTics     = timer.siFrequency * cfg.delayTime / 1000 + timer.siCurrentTics;
@@ -769,7 +780,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          // A thread that never starts never clears its completion bit, hanging the wait loop below forever
          if(!thread) { ClearThreadRunning(d); wprintf(wstrMessage[23], d); return -19; }
 
-         while(mask & ~cfg.coreMap[procGroup]) mask <<= 1; ///--- Modify to account for >64 virtual cores !!!
+         while(mask & ~classMap) mask <<= 1;
 
          if(!SetThreadAffinityMask(thread, mask)) wprintf(wstrMessage[24], d);
 
@@ -777,6 +788,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
 
          CloseHandle(thread);
       }
+   }
    while(ThreadsRunning()) Sleep(100);
 
    // Output results

@@ -204,6 +204,16 @@ handle `_beginthreadex` returns belongs to `wmain`, which closes it after resumi
 failure aborts the run with `-19` rather than leaving a completion bit no thread will ever clear. Both thread
 entry points are therefore `ui32 __stdcall` and end by returning rather than calling `_endthread`.
 
+The mask a thread is pinned to comes from `cfg.sys.coreMap[j][procGroup] & cfg.coreMap[procGroup]` — the
+selected cores of the thread's **own class** — not from the combined map. `threadCount[j]` is the population
+count of exactly that expression, so the walk hands out one distinct core per thread and leaves none of the
+selected cores idle, and a class-0 thread lands on a non-SMT core, which is what makes `packetSizeRAM` and
+`resArray.records[j]` (both chosen by class) describe the core the thread is really on. The walk used the
+combined map and restarted at bit 0 for each class, so the second class was pinned over cores the first
+already held: on a hybrid P/E-core part that left **every E-core untested at every setting**, because
+`coreType` is inferred from a core's sibling count and puts the E-cores in the other class (ISSUES.MD G5).
+The two class maps are disjoint, which is why restarting `mask` at bit 0 per class is still correct.
+
 The enumeration carries four rules of its own. Its return value is checked, and a walk that names no
 processor core is refused as well — both `-23`; an unchecked call left the walk reading an untouched buffer
 as though it held topology records, and an empty core map means no thread is ever created, which `wmain`
@@ -412,14 +422,6 @@ current source before relying on any of these:
 - **Single processor group / 64 virtual cores.** `MAX_THREADS` is 512 and the buffers are sized for it, but
   topology enumeration, the `U` core-map parsing and the affinity mask in `wmain` all assume one 64-bit mask.
   This is the top item on `CPU.cpp`'s To-do list.
-- **The affinity mask restarts at bit 0 for the SMT pass** (ISSUES.MD G5). `mask` is re-initialised to 1 when
-  the spawn loop advances from the non-SMT thread class to the SMT one, so on a topology carrying *both*
-  classes the SMT threads are pinned to virtual cores the non-SMT threads already hold, while other cores
-  idle. Harmless while `threadCount[0] == 0` — a uniform SMT CPU, which is the common case — but on a hybrid
-  P/E-core part both classes are always populated, and since ISSUES.MD D5 the mask does reach the scheduler.
-  It is the last thing standing between a hybrid CPU and every one of its cores being tested: G2's fix now
-  hands `Ue`/`Uo` and the one-thread-per-core presets a core map that includes the E-cores, and this loop
-  then pins the P-core threads back over the first of them. **This is the next entry to take.**
 - **Hybrid P/E-core parts are classified as "non-SMT / SMT"** (ISSUES.MD G9), because `coreType` is inferred
   from a core's sibling count. `Mn`/`Ms` therefore mean "E-core / P-core" on those CPUs, with the two cache
   records to match, and nothing in the code or the help text says so.
