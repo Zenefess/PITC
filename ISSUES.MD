@@ -726,18 +726,18 @@ machine's uptime. Latent for PITC.
 > extra 100 seconds being the fake counter's epoch — on a real machine it would be the uptime, and would grow
 > with every day since boot.
 
-### I7. `malloc` is overloaded in the global namespace — **Low** — *carried forward (old I7)*
+### I7. `malloc` is overloaded in the global namespace — **Low** — *carried forward (old I7)* — *Fixed*
 
 `memory management.h:214`: `inline ptrc malloc(csize_t, csize_t)` adds an overload of a reserved name —
 formally undefined, tolerated by MSVC beside the CRT declaration. Reachable in every PITC run through the
 `malloc64` macro.
 
-### I8. `min` and `max` are lowercase function-like macros in a public header — **Low** — *carried forward (old I8)*
+### I8. `min` and `max` are lowercase function-like macros in a public header — **Low** — *carried forward (old I8)* — *Fixed*
 
 `class_timers.h:16, :20`. Every PITC unit inherits them via `CPU.h`; `CPU.cpp:209` relies on the `min`
 macro. Any later `std::min`/`std::max` use, or an `<algorithm>` include, collides.
 
-### I9. `va_arg` with a const-qualified type — **Low** — *carried forward (old I9)*
+### I9. `va_arg` with a const-qualified type — **Low** — *carried forward (old I9)* — *Fixed*
 
 `memory management.h:370`: `mdealloc_` steps with `va_arg(val, ptrc)` where `ptrc` is `void *const` —
 formally UB, benign on MSVC, and executed on every PITC exit path that frees the arena or the config
@@ -750,7 +750,7 @@ implemented as two `_mm256_testz_si256` calls — so the poll selected because t
 AVX2 `vptest`s. Functionally correct (the two 256-bit tests cover all 64 bytes); the contradiction is with
 the comment above it, `CPU.h:475–478`, and `CLAUDE.md`, all of which describe a genuinely 512-bit read.
 
-### I11. Every `#ifdef __AVX512__` fork is dead code, and the `/arch`-forked inline functions are a live multi-TU ODR hazard — **Medium** — *carried forward (old I11)*
+### I11. Every `#ifdef __AVX512__` fork is dead code, and the `/arch`-forked inline functions are a live multi-TU ODR hazard — **Medium** — *carried forward (old I11)* — *Fixed*
 
 Eleven conditionals in `memory management.h` (:176, :385, :410, :422, :447, :486, :538, :584, :651, :667,
 :705) fork on `__AVX512__`, a macro no compiler defines — MSVC's is `__AVX512F__` — so the 512-bit arms
@@ -760,7 +760,7 @@ AVX-512 unit. New since the program grew five translation units: these `inline` 
 call to the same function from two units is an ODR violation where the linker keeps whichever body it saw
 first.
 
-### I12. Latent defects in the parts of `memory management.h` PITC does not call — **Medium** — *carried forward (old I12)*
+### I12. Latent defects in the parts of `memory management.h` PITC does not call — **Medium** — *carried forward (old I12)* — *Fixed*
 
 Still present, none reachable from PITC's live call set: `Stream()` (:722–727) rounds the byte count *up*
 before delegating, overrunning source and destination by up to 63 bytes; the volatile `Copy64` (:666–679)
@@ -793,7 +793,7 @@ files removed from its cause.
 every expansion is a compile error on every compiler, unlike its `defpa`/`refpa` companions. No PITC file
 uses it.
 
-### I17. The unit-local `_mm_abs_pd` binds a non-const reference to an intrinsic rvalue — **Low** — *carried forward (old I5)*
+### I17. The unit-local `_mm_abs_pd` binds a non-const reference to an intrinsic rvalue — **Low** — *carried forward (old I5)* — *Fixed*
 
 `CPU_jobs_SSE.cpp:31` (and the upstream original, `SIMD management.h:25`): `(fl64x2&)_mm_set1_epi64x(...)`
 reinterpret-casts a prvalue to a non-const lvalue reference — ill-formed in standard C++, accepted only as
