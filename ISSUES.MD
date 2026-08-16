@@ -819,7 +819,7 @@ are AVX1; the AVX2-ness is the compiler's encoding, not the arithmetic under tes
 extending the kernels both change the golden values, so this stays a documentation-versus-substance defect
 until a `cpu.values` version bump is scheduled anyway.
 
-### J2. The scalar FPU kernels call bare `abs()` on doubles — **Low** — *carried forward (old J5)*
+### J2. The scalar FPU kernels call bare `abs()` on doubles — **Low** — *carried forward (old J5)* — *Fixed*
 
 `CPU_jobs_standard.cpp:66–69` and every FP chain in that unit rely on `<cmath>` injecting the floating-point
 `abs` overloads into the global namespace — guaranteed by MSVC, not by the C standard, where global `abs` is
