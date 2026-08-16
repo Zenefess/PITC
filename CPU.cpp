@@ -722,8 +722,8 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    // Count virtual cores to be used
    SetSMTLoading();
    for(j = 0; j < ui32(cfg.sys.groupCount); ++j) {
-      threadCount[0] += (si16)PopulationCount64(cfg.sys.coreMap[0][j] & cfg.coreMap[j]);
-      threadCount[1] += (si16)PopulationCount64(cfg.sys.coreMap[1][j] & cfg.coreMap[j]);
+      threadCount[0] += (si16)SetBitCount64(cfg.sys.coreMap[0][j] & cfg.coreMap[j]);
+      threadCount[1] += (si16)SetBitCount64(cfg.sys.coreMap[1][j] & cfg.coreMap[j]);
    }
    threadCount[2] = threadCount[0] + threadCount[1];
 

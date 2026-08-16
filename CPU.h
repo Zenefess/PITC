@@ -660,6 +660,29 @@ static inline cui64 HighestSetBit64(cui64 mask) {
    return smear - (smear >> 1);
 }
 
+/// Counts the set bits of a bitmap. Intrinsic-free for the same reason the two above are, and load-bearingly
+/// so: on x64 MSVC winnt.h's PopulationCount64 resolves to __popcnt64, and no /arch setting gates that
+/// intrinsic -- it emits POPCNT whatever baseline the translation unit was compiled at. This is called from
+/// EnumerateTopology, which is the first thing wmain does, so on an x64 CPU predating POPCNT (any Core 2
+/// including Penryn, an early Athlon 64 X2) every invocation of the program -- the bare help screen included
+/// -- died with an illegal-instruction exception before printing anything. Those are precisely the CPUs the
+/// scalar job unit and ThreadsRunningScalar exist to serve (ISSUES.MD G1, and D4 before it).
+///
+/// The SWAR fold below carries no such promise in the other direction: a compiler that recognises the idiom
+/// substitutes POPCNT for it only where the ISA it was told to target carries the instruction, which is the
+/// property the intrinsic lacks. None of the three call sites is hot -- one per topology record, and one per
+/// processor group in each of two counting loops
+/// @param mask Bitmap to count
+/// @return The number of set bits in mask, 0 to 64
+static inline cui8 SetBitCount64(cui64 mask) {
+   ui64 count = mask - ((mask >> 1) & 0x05555555555555555ull);                          // Per bit pair
+
+   count = (count & 0x03333333333333333ull) + ((count >> 2) & 0x03333333333333333ull);  // Per nibble
+   count = (count + (count >> 4)) & 0x00F0F0F0F0F0F0F0Full;                             // Per byte
+
+   return ui8((count * 0x00101010101010101ull) >> 56); // The multiply sums all eight bytes into the top one
+}
+
 typedef       SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *const SLPIEXptrc;
 typedef const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *const cSLPIEXptrc;
 
@@ -732,7 +755,7 @@ static void WalkTopology(cptrc buffer, cui32 bytes, cui8 pass, TOPOLOGY_SCANptrc
          cui64 coreMask   = lpi->Processor.GroupMask[0].Mask;
          cui16 group      = lpi->Processor.GroupMask[0].Group;
          cui8  efficiency = lpi->Processor.EfficiencyClass;
-         csi32 coreVCores = si32(PopulationCount64(coreMask));
+         csi32 coreVCores = si32(SetBitCount64(coreMask));
 
          if(!coreMask) break; // A core of no virtual cores
 

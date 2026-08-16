@@ -374,6 +374,19 @@ selected cores, so `threadData`, the four result planes and the completion bitma
 the surplus is reported through `wstrMessage[33]` rather than written past the end of them. `cfg.sys.vCoreCount`
 is therefore the count of cores actually accepted, not `coreCount[1] * SMT + coreCount[0]`.
 
+**The topology code counts and scans bits without an intrinsic, and that is a requirement rather than an
+oversight.** `LowestSetBit64`, `HighestSetBit64` and `SetBitCount64` (`CPU.h`) are shift-and-mask folds
+because `EnumerateTopology` is the first thing `wmain` does — before the banner, before the help screen, and
+before the pre-flight check that names a missing instruction set. `PopulationCount64`, the obvious spelling
+of the third, is winnt.h's route to `__popcnt64`, and no `/arch` setting gates that intrinsic: it emits
+`POPCNT` whatever baseline the unit was compiled at, so every invocation of the program — the bare help
+screen included — died with an illegal instruction on an x64 CPU predating Nehalem, the Core 2 and early
+Athlon 64 X2 parts the scalar job unit and `ThreadsRunningScalar` exist to serve (the POPCNT entry of
+ISSUES.MD's G section, and D4 before it, which is the same failure one call later). A compiler that
+recognises the fold and substitutes `POPCNT` for it does so only where the ISA it was told to target carries
+the instruction, which is the property the intrinsic lacks. **Nothing on the path from `wmain` to the ISA
+gate may execute an instruction outside the x64 baseline**, intrinsic or compiler-generated.
+
 `SetSMTLoading` applies the `Ue`/`Uo` policies by masking with `cfg.sys.coreSibling`, two bitmaps the
 enumeration builds one record at a time: the lowest set bit of each physical core's sibling mask, and the
 highest. That record is the only place the sibling layout is knowable — `cfg.sys.coreMap[0]` and `[1]` are
