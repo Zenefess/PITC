@@ -32,13 +32,31 @@
 // to the user as a CPU fault. The model is therefore pinned by every configuration in CPU.vcxproj, and
 // required here as well, so that a build made outside the project file cannot quietly inherit another one
 
-#if defined(_MSC_VER) && !defined(__clang__) && !defined(_M_FP_STRICT)
+// The exemption this guard used to grant -- '&& !defined(__clang__)' -- excused the one route it exists to
+// police. clang-cl defines _MSC_VER and __clang__ alike, and a build made outside CPU.vcxproj is exactly the
+// case the guard is written for, so the toolchain most likely to reach here unconfigured was the toolchain it
+// let through. clang publishes none of the _M_FP_* macros either, so VALUES_FP_MODEL below was 0 for every
+// clang floating-point mode: two clang-cl builds made under /fp:fast and /fp:precise shared a buildID, would
+// have exchanged "cpu.values" files whose arithmetic rounds differently, and the difference would have
+// reached the user as a CPU fault -- the class of failure the buildID exists to prevent. clang-cl can model
+// /fp:strict, but it defines no macro that says it did, so there is nothing here to test against; the golden
+// values have never been generated or validated under it, and it is refused until they are. A toolchain that
+// is neither MSVC nor clang arrives at the same dead end from the other side, VALUES_FP_MODEL having no way
+// to name the model such a build was made with (ISSUES.MD H1)
+
+#if defined(__clang__)
+   #error "PITC has no validated clang build: its floating-point model cannot be checked. See ISSUES.MD H1."
+#elif !defined(_MSC_VER)
+   #error "PITC builds with MSVC only: no other compiler here states its floating-point model. See ISSUES.MD H1."
+#elif !defined(_M_FP_STRICT)
    #error "PITC must be compiled with /fp:strict. See CPU.vcxproj <FloatingPointModel> and ISSUES.MD H2."
 #endif
 
 // Identifies the model in the "cpu.values" header, so a file written by a build using another one is
 // reported as a stale file rather than as a hardware failure. /fp:except is deliberately not represented:
-// it decides whether an exception is raised, not what a result is
+// it decides whether an exception is raised, not what a result is. The guard above admits only a toolchain
+// that names its model, so the final arm is unreachable and 0 can no longer stand for "some model this
+// build cannot identify" -- which is what made it a value two different builds could share (H1)
 #if defined(_M_FP_STRICT)
    constexpr cui32 VALUES_FP_MODEL = 1;
 #elif defined(_M_FP_PRECISE)

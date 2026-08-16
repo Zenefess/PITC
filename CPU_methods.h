@@ -49,10 +49,25 @@ ui32 __stdcall ComputationPulse(ptrc dataPtr) {
    case 0x020: // Fixed-width pulse
    case 0x040: // Sweeping pulse
       switch(tcfg->procSync & 0x07) {
-      case 1: // Round-robin
-         startTics += cycleTics * si64(coreNum);
-         cycleTics *= tcfg->threadCount;
+      case 1: { // Round-robin
+         // Thread n's window opens n cycles into the run and the cycle is stretched by the thread count, so
+         // exactly one thread computes at a time. The last thread's first window therefore opens
+         // threadCount-1 cycles in, and a run holding fewer cycles than that never reaches the late threads:
+         // each waits out the whole of an offset that ends after the run has, executes the single job cycle
+         // forced below, and wmain waits on every second of it -- 'Ia Sr Tft60[15000]15000 Ua' across 16
+         // virtual cores spent 7.5 minutes delivering a 60-second test, and graded thirteen of its sixteen
+         // rows on one job cycle apiece. The rotation is folded to the most slots the run can hold, exactly
+         // as the staggered arm below folds its ramp: threads share a slot rather than sit the test out, and
+         // no thread's first window opens after the deadline (ISSUES.MD E1, E3)
+         si64 slots = tcfg->threadCount;
+
+         while(slots > 1 && cycleTics * (slots - 1) + tcfg->activeTics > tcfg->endTics - tcfg->startTics)
+            --slots;
+
+         startTics += cycleTics * si64(coreNum % ui32(slots));
+         cycleTics *= slots;
          break;
+      }
       case 4: { // Staggered
          // The ramp doubles across each group of 8 cores, so the last core of a group opens its first window
          // 127 cycles into the run and repeats every 128th. A run holding fewer cycles than that never
@@ -110,8 +125,13 @@ ui32 __stdcall ComputationPulse(ptrc dataPtr) {
    }
 
    // Wait for start time. A Sleep(1) poll overshoots by up to one scheduler tick per thread independently,
-   // which is exactly the coincidence the parallel and time-synchronised shapes exist to produce
-   PulseWaitUntil(pulseTimer, startTics);
+   // which is exactly the coincidence the parallel and time-synchronised shapes exist to produce.
+   // Clamped to the deadline, so that no wait outlives the run it belongs to: the two folds above keep a
+   // round-robin or staggered thread's first window inside the test, but a parallel thread's start carries a
+   // jitter of up to a quarter of its shorter phase, and a run shorter than that -- 'Tft0.05[250]250' -- would
+   // otherwise open the window after the test had already ended. A thread that cannot start in time runs its
+   // one forced job cycle at the deadline instead of long after it (ISSUES.MD E1)
+   PulseWaitUntil(pulseTimer, min(startTics, tcfg->endTics));
 
    // Force minimum of one cycle for the sake of sweeping-pulse width
 //   if(JobCycle[recCount ? 1 : 0][jobProc](coreNum, 0, threadByte)) goto fail;

@@ -52,10 +52,18 @@ baseline by construction, and its one SSE4.1 instruction is gated on `cfg.sys.cp
 `/O` switch either way and the change is one of spelling rather than of code.
 
 The **`_mm_abs_pd` and `_mm256_abs_pd` macros in the SSE and AVX2 units are `#undef`ined before being
-defined**, and must stay that way. Those units now include `CPU.h`, which reaches `SIMD management.h`, and
-that header defines `_mm_abs_pd` itself for any unit compiled below AVX2 — as `_mm_and_epi64`, an AVX-512VL
-instruction (ISSUES.MD I1). It is a bare `#define`, so an `#ifndef` inherits it silently; the SSE kernels
-would then carry an EVEX opcode into every CPU this program dispatches them to.
+defined**, and must stay that way. Those units include `CPU.h`, which reaches `SIMD management.h`, and that
+header defines `_mm_abs_pd` itself for any unit compiled below AVX2. It used to spell it `_mm_and_epi64`, an
+AVX-512VL instruction, so the SSE kernels would have carried an EVEX opcode into every CPU this program
+dispatches them to; the header's definition is now `_mm_and_pd` over `_mm_castsi128_pd`, which is SSE2 and
+computes the same mask, and its `_mm256_abs_pd` is defined only under `__AVX__` (ISSUES.MD I1). The `#undef`s
+are therefore no longer load-bearing against an EVEX opcode — but they stay, because both are bare `#define`s
+that an `#ifndef` would inherit silently, and the definitions the kernels are built from should be the ones
+in the file the kernels are in. **`SIMD management.h` states no fused multiply-add macros at all now**: the
+five `#ifndef`-guarded ones over `_mm_fmadd_ps` and its family could never be false — those are functions, not
+macros — so they replaced the intrinsic with a two-rounding split form wherever a unit compiled below AVX2,
+under the intrinsic's own name. They are `simd::fmadd_ps`/`fmsub_ps`/`fnmadd_ps` overloads on `fl32x4` and
+`fl32x8` instead, beside the `simd::fmadd_ps` that header already carried (I2).
 
 Two settings in `Release|x64` are gone and should not come back: `WholeProgramOptimization` (`/GL` and, from
 the `Label="Configuration"` property group, `/LTCG`), which defers to link time precisely the optimisation
@@ -70,8 +78,17 @@ Two settings are load-bearing for reproducibility and must stay pinned in **ever
 `<FloatingPointModel>Strict</FloatingPointModel>` and `<FloatingPointExceptions>false</FloatingPointExceptions>`.
 `/fp:strict` fixes the rounding and forbids the compiler from contracting `a*b + c` into an FMA — `JobFPU`
 ends each outer iteration with exactly that shape — so it is what makes a `cpu.values` written by one build
-valid under another. `CPU_build.h`, included by all four kernel units and by `CPU.h`, `#error`s under MSVC if
+valid under another. `CPU_build.h`, included by all four kernel units and by `CPU.h`, `#error`s if
 `_M_FP_STRICT` is not defined, and folds the model into the build ID stored in the file's header (H2).
+That guard is **MSVC-only, and clang is refused outright**. It used to read
+`defined(_MSC_VER) && !defined(__clang__) && !defined(_M_FP_STRICT)`, which exempted clang-cl — the one
+toolchain a build made outside `CPU.vcxproj` is likely to be made with, and so the one the guard exists to
+catch. clang defines none of the `_M_FP_*` macros, so `VALUES_FP_MODEL` was 0 for *every* clang FP mode and
+two clang-cl builds under `/fp:fast` and `/fp:precise` shared a `buildID`; and clang publishes no macro
+saying it is in strict mode, so no check can be written to admit it. It is refused until the golden values
+are generated and validated under it, as is any toolchain that is neither MSVC nor clang, for the same
+reason (ISSUES.MD H1). **`VALUES_FP_MODEL` can no longer be 0** — the constant's final arm is unreachable —
+which is what stops it being a value two differently-rounding builds could agree through.
 
 ## Running and verifying a change
 
@@ -485,7 +502,15 @@ wide machine (ISSUES.MD E3, E6).
 - **Parallel** (bit 1): all threads pulse together — and, unless the run is time-synchronised, this is the one
   shape that is *jittered*, so that "together" is not lockstep.
 - **Round-robin** (bit 0): thread *n*'s start is offset by *n* cycles and its cycle stretched by the thread
-  count, so exactly one thread is active at a time.
+  count, so exactly one thread is active at a time — and the rotation is **folded down** to the most slots the
+  run can hold, exactly as the staggered ramp below is, thread *n* then taking slot `n % slots`. Without the
+  fold a run shorter than `threadCount` cycles never reached its late threads at all: each waited out an
+  offset ending after the run had, ran the one job cycle forced before the loop, and `wmain` waited on every
+  second of it — `Ia Sr Tft60[15000]15000 Ua` across 16 virtual cores took 7.5 minutes to deliver a
+  60-second test and graded thirteen of its sixteen rows on one job cycle apiece (ISSUES.MD E1). The fold
+  decrements rather than halving, `threadCount` not being a power of two, so it keeps as much of the
+  one-thread-at-a-time property as the run can pay for; where the run already holds the whole rotation it
+  does not execute and the arithmetic is what it always was.
 - **Staggered** (bit 2): offset by `(1 << (coreNum & 7)) - 1` cycles and its cycle stretched by
   `1 << (coreNum & 7)` — a doubling ramp across each group of 8 cores. The offset is added to `startTics`
   only, `nextTic` taking it from there; adding it to both left the *first* window open one whole stagger
@@ -509,11 +534,15 @@ wide machine (ISSUES.MD E3, E6).
 - **Time-synchronised** (bit 3): suppresses the jitter a parallel run is otherwise given, so `Spt`'s threads
   share one pulse edge where `Sp`'s deliberately do not.
 
-**No idle phase may end after the run does.** Each is a wait until `min(curTics + pulseTics, endTics)`, not a
-relative sleep: a round-robin thread's off-phase is one cycle per thread and a staggered thread's up to 127
-of them, so 64 threads at a 2 s cycle issued a single 126-second sleep and `wmain` waited out every second of
-it past the end of the test (ISSUES.MD E6). The only overshoot left is one job cycle — the one already
-executing when the deadline passes, which must finish for its result to be compared.
+**No wait may end after the run does.** Each idle phase is a wait until `min(curTics + pulseTics, endTics)`,
+not a relative sleep: a round-robin thread's off-phase is one cycle per thread and a staggered thread's up to
+127 of them, so 64 threads at a 2 s cycle issued a single 126-second sleep and `wmain` waited out every second
+of it past the end of the test (ISSUES.MD E6). **The start-up wait is bounded the same way**, by
+`min(startTics, endTics)`: the two fold-downs keep a round-robin or staggered thread's first window inside the
+run, but a parallel thread's start carries a jitter of up to a quarter of its shorter phase and no fold, so a
+run shorter than that window — `Tft0.05[250]250` — could still open a wait outliving the test (E1). The only
+overshoot left is one job cycle — the one already executing when the deadline passes, which must finish for
+its result to be compared.
 
 The jitter is `jitterSpan`, `JitterSeed` and `NextJitter` (`CPU.h`), and four properties of it are
 load-bearing. **It is drawn from a per-thread generator**, seeded from `rand_s`, the performance counter and
@@ -602,7 +631,18 @@ the second class, so testing `blockSize[0]` alone meant it allocated nothing at 
 the memory it had asked for and every thread ran the register-resident kernels; `allocMem[1]`'s old default of
 1 byte was the other half of the same defect, giving a class that was never named a slice of one byte rather
 than of nothing (ISSUES.MD C9). Both `allocMem[]` entries now default to 0, and a class that has threads and
-no memory is refused by the record check above. The arena and `resArray.iter` are freed by
+no memory is refused by the record check above.
+
+**An `M` argument resets nothing; `B` and the presets reset both class sizes.** Every `M` used to open by
+clearing `memConfig` and `allocMem[0]` and leaving `allocMem[1]` alone, so the two per-class sizes composed in
+one order only: `Mn8 Ms8` ended as `{0, 8MB}` and was refused with `-18` and "Only 0 bytes of memory per
+thread", while `Ms8 Mn8` and the single-argument `Mn8s8` both ran — and "where the CPU has cores of both, give
+both" is exactly how the help text spells the two-class case (ISSUES.MD F1). Nothing is lost by dropping the
+reset: each of `M`'s four sub-options assigns `memConfig` together with the size it names, so the last option
+to set a property still wins. `en-GB.h:44` documents only `B` and the presets as resetting the memory
+configuration, and each of those now clears `allocMem[1]` beside the `allocMem[0]` it sets, so **a new
+per-class size added to `M` needs a matching zero in the `B` case, the preset preamble and the defaults
+block** — and none in `M` itself. The arena and `resArray.iter` are freed by
 `~RESULTS_ARRAYS` (`CPU.h`) — `wmain` leaves by more than a dozen returns, so the frees belong to the object
 that owns the pointers, exactly as `GLOBAL_CFG`'s destructor owns its bitmaps (C13, GCS p2). A second `B` on
 one command line frees `resArray.iter` before allocating it again.
@@ -788,7 +828,10 @@ Verify against current source before relying on any of these:
   to the `ClInclude` list, which the six vendored headers are still absent from (H8).
 - **`memory management.h` carries AVX2 and AVX-512 copy and stream helpers**, and `CPU.h` includes it, so a
   future caller of `Copy512`/`Stream512` from `CPU.cpp` would put an EVEX opcode back into the baseline unit.
-  They are `inline` and unused today, so nothing is emitted; the guard belongs upstream (ISSUES.MD I section).
+  They are `inline` and unused today, so nothing is emitted; the guard belongs upstream (ISSUES.MD I12). The
+  same hazard in `SIMD management.h` — `_mm_abs_pd`, `_mm256_abs_pd` and the fused multiply-add macros — has
+  been guarded upstream (I1, I2), so that header is no longer a route by which a baseline unit can be handed
+  an instruction it cannot execute. `memory management.h` still is.
 
 ### Result comparison must stay bit-exact
 
