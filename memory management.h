@@ -356,7 +356,7 @@ inline cui64 mdealloc_(ptr pointer, ...) {
    va_list val;   va_start(val, pointer);
    ui64    retVal = 0, ptrBit = 0x01u;
 
-   for(; (ui64 &)pointer != -1; pointer = va_arg(val, ptrc), ptrBit <<= 1)
+   for(; (ui64 &)pointer != -1; pointer = va_arg(val, ptr), ptrBit <<= 1)
       if(pointer) {
 #ifdef DATA_TRACKING
          if(sysData.mem.maxAllocations && !MemUntrack(pointer)) continue; // Unknown pointer: its bit stays 0
