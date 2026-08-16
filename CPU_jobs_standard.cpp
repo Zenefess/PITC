@@ -1,11 +1,18 @@
-/************************************************************
- * File: CPU_jobs_standard.cpp          Created: 2025/01/21 *
- *                                    Last mod.: 2026/08/15 *
- *                                                          *
- * Desc: Scalar ALU and FPU job kernels.                    *
- *                                                          *
- * MIT license             Copyright (c) David William Bull *
- ************************************************************/
+/*
+ * File: CPU_jobs_standard.cpp
+ * Version: v1.0.2
+ * Owner: David William Bull
+ * Created: 2025-01-21
+ * Last Modified: 2026-08-16
+ * Description: Scalar ALU and FPU job kernels, with their job cycles, family cross-check, arena seeding and bit-exact result comparison.
+ * To Do: 1) Add a build-time test target for ValidateFamilyScalar and the golden ladder, so a kernel edit fails before 'W' is run
+ *        2) Add /// API documentation with @param tags to the eight kernels and six job cycles defined here (GCS d1)
+ * Dependencies: cmath, typedefs.h, CPU_build.h, CPU_job_cycles.h
+ * ISA: Scalar
+ * Thread-safety: MT-safe
+ * Reviewers: David William Bull
+ * License: MIT  Copyright: David William Bull
+ */
 
 #include <cmath>
 #include "typedefs.h"

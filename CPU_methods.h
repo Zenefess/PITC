@@ -1,11 +1,19 @@
-/************************************************************
- * File: CPU_methods.h                  Created: 2025/02/17 *
- *                                    Last mod.: 2025/04/17 *
- *                                                          *
- * Desc:                                                    *
- *                                                          *
- * MIT license             Copyright (c) David William Bull *
- ************************************************************/
+/*
+ * File: CPU_methods.h
+ * Version: v1.0.2
+ * Owner: David William Bull
+ * Created: 2025-02-17
+ * Last Modified: 2026-08-16
+ * Description: The computation thread body: pulse-shape set-up, the dispatch loop, and the record count the benchmark score is taken from.
+ * To Do: 1) Read the L1/L2/L3 cache bits this loop masks away with 0x1F, or see them withdrawn from the option set (ISSUES.MD A3)
+ *        2) Range-check the dispatch index once per thread, so a hand-built 'I' string cannot reach a wild indirect call
+ *        3) Delete the superseded 'goto fail' spelling left commented at the forced first job cycle and at the loop's exit
+ * Dependencies: CPU.h, CPU_job_cycles.h
+ * ISA: Scalar
+ * Thread-safety: MT-safe
+ * Reviewers: David William Bull
+ * License: MIT  Copyright: David William Bull
+ */
 #pragma once
 
 #include "CPU.h"
@@ -134,8 +142,8 @@ ui32 __stdcall ComputationPulse(ptrc dataPtr) {
    PulseWaitUntil(pulseTimer, min(startTics, tcfg->endTics));
 
    // Force minimum of one cycle for the sake of sweeping-pulse width
-//   if(JobCycle[recCount ? 1 : 0][jobProc](coreNum, 0, threadByte)) goto fail;
-   if(!JobCycle[recCount ? 1 : 0][jobProc](coreNum, 0, threadByte))
+//   if(JOB_CYCLE[recCount ? 1 : 0][jobProc](coreNum, 0, threadByte)) goto fail;
+   if(!JOB_CYCLE[recCount ? 1 : 0][jobProc](coreNum, 0, threadByte))
       // Main loop. The condition tested the timestamp the *previous* iteration had read, so the body was
       // regularly entered after the run had ended and a second, fresh test inside it was what kept the sweep
       // ramp and the sleep below inside the window they are defined on. Reading the counter in the condition
@@ -147,7 +155,7 @@ ui32 __stdcall ComputationPulse(ptrc dataPtr) {
          // languages, and works here only because the MSVC CRT implements no orientation (ISSUES.MD F4)
          if(!coreNum && curTics - oldTics > timer.siFrequency) { wprintf(L"."); oldTics = curTics; }
          if(curTics < nextTic) {
-            if(JobCycle[recCount ? 1 : 0][jobProc](coreNum, i, threadByte)) break;
+            if(JOB_CYCLE[recCount ? 1 : 0][jobProc](coreNum, i, threadByte)) break;
             // Counted here rather than in the loop's increment, and in records rather than in iterations:
             // the increment counts the idle iterations as well, and one iteration is four records in
             // memory-backed mode against one in register mode, so the benchmark's two figures were counts

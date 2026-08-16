@@ -1,11 +1,18 @@
-/************************************************************
- * File: CPU_build.h                    Created: 2026/08/15 *
- *                                    Last mod.: 2026/08/15 *
- *                                                          *
- * Desc: Build settings the golden values depend upon.      *
- *                                                          *
- * MIT license             Copyright (c) David William Bull *
- ************************************************************/
+/*
+ * File: CPU_build.h
+ * Version: v1.0.2
+ * Owner: David William Bull
+ * Created: 2026-08-15
+ * Last Modified: 2026-08-16
+ * Description: Build guards and the floating-point identity the golden values depend upon: x64 only, MSVC only, /fp:strict only.
+ * To Do: 1) Generate and validate the golden values under clang-cl, then narrow the refusal below to a mode check (ISSUES.MD H1)
+ *        2) State an explicit toolset floor: on a pre-VS2022 toolset an absent _M_FP_CONTRACT reads as contraction being off
+ * Dependencies: typedefs.h
+ * ISA: Scalar
+ * Thread-safety: N/A
+ * Reviewers: David William Bull
+ * License: MIT  Copyright: David William Bull
+ */
 #pragma once
 
 #include "typedefs.h"

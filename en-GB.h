@@ -1,11 +1,18 @@
-/************************************************************
- * File: en-GB.h                        Created: 2025/02/10 *
- *                                    Last mod.: 2025/04/17 *
- *                                                          *
- * Desc:                                                    *
- *                                                          *
- * MIT license             Copyright (c) David William Bull *
- ************************************************************/
+/*
+ * File: en-GB.h
+ * Version: v1.0.2
+ * Owner: David William Bull
+ * Created: 2025-02-10
+ * Last Modified: 2026-08-16
+ * Description: English (en-GB) interface text: the option reference and return-code table, the message table, and the interface fragments.
+ * To Do: 1) Absorb the literals the 'L' mechanism cannot reach: Failed's value formats, wstrPass, the results-table labels (ISSUES.MD K5)
+ *        2) Take the banner's version from one authoritative site rather than restating it here as prose (ISSUES.MD K3)
+ * Dependencies: None
+ * ISA: Scalar
+ * Thread-safety: N/A
+ * Reviewers: David William Bull
+ * License: MIT  Copyright: David William Bull
+ */
 #pragma once
 
 al64 cwchptrc wstrInstructions_English =

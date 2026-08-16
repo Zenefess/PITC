@@ -1,11 +1,19 @@
-/************************************************************
- * File: CPU_jobs_SSE.cpp               Created: 2025/01/23 *
- *                                    Last mod.: 2026/08/15 *
- *                                                          *
- * Desc: SSE job kernels.                                   *
- *                                                          *
- * MIT license             Copyright (c) David William Bull *
- ************************************************************/
+/*
+ * File: CPU_jobs_SSE.cpp
+ * Version: v1.0.2
+ * Owner: David William Bull
+ * Created: 2025-01-23
+ * Last Modified: 2026-08-16
+ * Description: SSE job kernels, with their job cycles, family and ladder cross-checks, arena seeding, completion poll and comparison.
+ * To Do: 1) Give the kernels real SSE4.1 arithmetic when a "cpu.values" version bump is scheduled; only PTEST needs it today (J1)
+ *        2) Raise with the standard's owners that r17's ISA vocabulary has no SSE4.1 token; this unit's gate is cfg.sys.cpuSSE4_1
+ *        3) Add /// API documentation with @param tags to the four kernels and four job cycles defined here (GCS d1)
+ * Dependencies: typedefs.h, CPU_build.h, CPU_job_cycles.h
+ * ISA: Scalar | SSE4.2
+ * Thread-safety: MT-safe
+ * Reviewers: David William Bull
+ * License: MIT  Copyright: David William Bull
+ */
 
 #include "typedefs.h"
 #include "CPU_build.h"
