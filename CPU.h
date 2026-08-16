@@ -7,10 +7,9 @@
  * Description: Core types, global declarations and scalar helpers: values-file format, completion bitmap, pulse timing, topology, parsing.
  * To Do: 1) Drop GLOBAL_CFG's in-class procUnits and procSync defaults; wmain overwrites both before an argument is read (ISSUES.MD K9)
  *        2) Remove THREAD_CFG's packetSizeRAM, maxTics, inactiveTime and records32, written by the spawn loop and read by nothing (K9)
- *        3) Give procUnits bits 5-7 a reader, or remove them along with the cache records the topology walk files (ISSUES.MD A3)
- *        4) Raise MAX_THREADS past 512, widening every thread-indexed table with it
- *        5) Add vector forms of Evaluate
- *        6) Move wstrPass into the translation tables, with the results-table labels beside it (ISSUES.MD K5)
+ *        3) Raise MAX_THREADS past 512, widening every thread-indexed table with it
+ *        4) Add vector forms of Evaluate
+ *        5) Move wstrPass into the translation tables, with the results-table labels beside it (ISSUES.MD K5)
  * Dependencies: iostream, atomic, stdlib.h, string.h, locale.h, windows.h, process.h, memory management.h, class_timers.h,
  *               CPU_build.h, translations.h
  * ISA: Scalar
@@ -58,7 +57,7 @@ constexpr auto MAX_GROUPS = 64;
 // (ISSUES.MD G9). The rule is now the OS's own EfficiencyClass wherever the machine reports more than one of
 // them, and the sibling count only for the machines that description fits; cfg.sys.hybrid says which applied
 
-al32 struct GLOBAL_CFG { // 112 bytes
+al32 struct GLOBAL_CFG { // 113 bytes
    struct _C_D_ { ui32 L1Code, L1Data, L2; };
    struct {
       struct {
@@ -99,7 +98,14 @@ al32 struct GLOBAL_CFG { // 112 bytes
    ui8  procUnits   = 0x04;     // 0==ALU, 1==FPU, 2==SSE4.1, 3==AVX, 4==AVX512, 5==L1 cache, 6==L2 cache, 7==L3 cache
    ui8  procSync    = 0x02A;    // 0==Round-robin, 1==Parallel 2==Staggered, 3==Synchronised, 4==Constant, 5==Fixed pulse, 6==Sweeping pulse, 7==Benchmark
    ui8  SMTLoad     = 0;        // Only utilise the specified virtual core(s) of each active physical core; 0=Unchanged, 1=First, 2=Last, 3=All
-   ui8  memConfig   = 0;        // 0=Total equally split, 1=Per core, 2=Split per core class
+   ui8  memConfig   = 0;        // 0=Total equally split, 1=Per core, 2=Split per core class, 3=Derived from the requested cache level
+   // Set by every 'M' sub-option, and cleared by the defaults block, by 'B' and by the preset preamble -- the
+   // three things documented as resetting the memory configuration. It is what separates a size this command
+   // line asked for from one a reset left behind: cache-derived sizing writes the block sizes only where no
+   // 'M' has been given since the last reset, and merely checks them against the level's residency window
+   // where one has. Without it 'B Mt1024' and a preset followed by 'I3' could not be told apart from a run
+   // that named no size at all, and the derived size would silently replace a request the user did make
+   ui8  memExplicit = 0;        // An 'M' argument set the memory sizes; cache-derived sizing must not override them
 
    ~GLOBAL_CFG(void) { mfree(coreMap, sys.coreMap, sys.coreSibling); }
 }; typedef GLOBAL_CFG *const GLOBAL_CFGptrc;
@@ -1099,6 +1105,352 @@ static void SetSMTLoading(void) {
    }
 }
 //--- Processor topology ---//
+
+//--- Cache-test block sizing ---//
+// The reader procUnits bits 5~7 never had. 'I1', 'I2' and 'I3' were parsed into those bits and printed by the
+// banner as CL1/CL2/CL3, and nothing else in the program read them: dispatch and the arena layout both mask
+// with 0x01F, and the cache sizes the topology walk files had no consumer at all -- so a saved results file
+// named CL3 as part of the tested configuration of a run that had never been sized to any cache
+// (ISSUES.MD A1). What the bits select now is a sizing pass: each thread's memory block is derived from the
+// level named, so that the blocks of every selected thread sharing one instance of that level fit inside it,
+// and together span twice the level below it.
+//
+// No kernel, no dispatch entry and no seeding pass changes with it. A non-zero record count already puts every
+// thread onto the JobCycleMem* path -- JOB_CYCLE[recCount ? 1 : 0] -- so a block size is the whole of the
+// feature. Two rules constrain everything below. It is all scalar, as everything in this header must be
+// (ISSUES.MD H4), and it counts and scans bits through the SWAR helpers above rather than through an intrinsic
+// no /arch setting gates, for the reason the POPCNT note beside SetBitCount64 gives.
+//
+// Two limitations are inherited rather than introduced, and are recorded where they bite: QueryCacheDomains
+// reads the single Cache.GroupMask exactly as WalkTopology's pass 2 does, so a cache spanning processor groups
+// under-counts its sharers; and an exclusive victim L3 (AMD Zen) holds rather more than its own capacity, so
+// budgeting against that capacity alone errs toward guaranteed residency
+
+// Occupancy policy. The blocks of one cache instance's selected threads are aimed at half its capacity and
+// never allowed past three quarters of it, and the level below is defeated when they span twice it. A block is
+// one contiguous region of one malloc64 allocation, so it maps uniformly across the sets with no
+// self-conflict, and the per-thread overhead beside it is a handful of lines -- the four value[.][k] rows a
+// job cycle re-reads -- which is what makes half of the level, capped at three quarters, conservative without
+// waste. Twice is the smallest multiple that makes "misses the level below" robust against pseudo-LRU
+// retention and against the prefetching a sequential walk engages
+constexpr cui64 CACHE_OCCUPANCY_NUM = 1, CACHE_OCCUPANCY_DEN = 2; // Target: the blocks fill half the level
+constexpr cui64 CACHE_CEILING_NUM   = 3, CACHE_CEILING_DEN   = 4; // Hard cap: never above three quarters
+constexpr cui64 CACHE_DEFEAT_MUL    = 2;                          // The blocks span twice the level below
+
+/// Bytes per record of a unit selection, and the size of a record's vector portion in the 8-byte units
+/// resArray.alu is indexed by; the two always satisfy recSize == (vecUnits + 1) * 8 whenever the ALU bit is
+/// set, which is what makes the two sub-arrays tile the arena exactly. 'default' catches a unit selection with
+/// no processing bit set: wmain rejects that before either caller runs, so the arm is unreachable, but without
+/// it recSize would be read uninitialised (ISSUES.MD A10). Change the unit set or a record's layout and this
+/// switch must change with it.
+///
+/// It was the arena block's own switch, and is a function because the sizing pass below needs the same number
+/// before the arena block is reached: a cache-derived block size is a record count scaled by the record size,
+/// so the two would otherwise be stated twice and could disagree
+/// @param unitBits Processing-unit selection, already masked to bits 0~4
+/// @param recSize Receives the bytes one record of the selection occupies
+/// @param vecUnits Receives the record's vector portion, in 8-byte units; 0 where no ALU offset is needed
+static void RecordGeometry(cui8 unitBits, ui64 &recSize, ui64 &vecUnits) {
+   switch(unitBits) {
+   default: case 1: case 2:                                                 recSize =  8; vecUnits = 0; break;
+   case 3:                                                                  recSize = 16; vecUnits = 1; break;
+   case 4: case 6:                                                          recSize = 16; vecUnits = 0; break;
+   case 5: case 7:                                                          recSize = 24; vecUnits = 2; break;
+   case 8: case 10: case 12: case 14:                                       recSize = 32; vecUnits = 0; break;
+   case 9: case 11: case 13: case 15:                                       recSize = 40; vecUnits = 4; break;
+   case 16: case 18: case 20: case 22: case 24: case 26: case 28: case 30:  recSize = 64; vecUnits = 0; break;
+   case 17: case 19: case 21: case 23: case 25: case 27: case 29: case 31:  recSize = 72; vecUnits = 8;
+   }
+}
+
+/// The cache level a unit selection targets: the highest of bits 5~7, mirroring the widest-unit-wins rule
+/// JOB_CYCLE applies to bits 1~4. The three are not mutually exclusive in the parser -- 'I123a' names all
+/// three -- and taking the highest is what makes that spelling mean something rather than be refused
+/// @param units Processing-unit selection, all 8 bits
+/// @return Requested cache level, 1~3; 0 when none of bits 5~7 is set
+static cui8 HighestCacheLevel(cui8 units) { return units & 0x080 ? 3 : units & 0x040 ? 2 : units & 0x020 ? 1 : 0; }
+
+/// Smallest and largest number of selected virtual cores sharing one physical core of a class. The pair bounds
+/// the per-thread share of the caches private to a physical core: a level's ceiling divides by the largest
+/// count, so the worst-cased thread still fits, and the defeat bound of the level below it by the smallest, so
+/// the best-cached thread is still defeated. A core of the class hosting no selected virtual core hosts no
+/// thread and is skipped; a class hosting none at all returns 1 and 1, so that no caller can inherit a zero
+/// divisor. The two sibling bitmaps are paired exactly as SetSMTLoading pairs them, one physical core at a
+/// time, and nothing here reasons about a stride (ISSUES.MD G1, G2, G7)
+/// @param threadClass Core class to scan; 0=Non-SMT or efficiency, 1=SMT or performance
+/// @param minShare Receives the smallest selected-sibling count of any hosting core of the class, 1~64
+/// @param maxShare Receives the largest selected-sibling count of any hosting core of the class, 1~64
+static void MinMaxSelectedSiblings(cui8 threadClass, ui32 &minShare, ui32 &maxShare) {
+   minShare = maxShare = 0;
+
+   for(ui8 g = 0; g < cfg.sys.groupCount; ++g) {
+      ui64 firsts = cfg.sys.coreSibling[0][g] & cfg.sys.coreMap[threadClass][g];
+
+      while(firsts) {
+         cui64 first = LowestSetBit64(firsts);
+         cui64 last  = LowestSetBit64(cfg.sys.coreSibling[1][g] & ~(first - 1ull));
+         // 'last - first' is every bit between the two, so 'last | (last - first)' is the whole physical core.
+         // A first bit the enumeration could not pair leaves 'last' at 0, where the span is the one virtual
+         // core it did report rather than the 2^64 - first the subtraction would otherwise wrap to
+         cui64 span  = last ? last | (last - first) : first;
+         cui32 share = SetBitCount64(span & cfg.coreMap[g]);
+
+         if(share) {
+            if(!minShare || minShare > share) minShare = share;
+            if(maxShare < share)              maxShare = share;
+         }
+         firsts ^= first;
+      }
+   }
+   if(!minShare) minShare = maxShare = 1;
+}
+
+// One instance per selected physical core is the worst case a level can present, and no more virtual cores
+// than MAX_THREADS are ever selected, so the table cannot be filled by any topology this build accepts
+constexpr cui32 MAX_CACHE_DOMAINS = MAX_THREADS;
+
+al8 struct CACHE_DOMAIN { // 8 bytes
+   ui32 size;      // CacheSize of the instance, in bytes
+   ui16 n[2];      // Selected virtual cores of each core class the instance serves
+   ui8  coreClass; // Class the instance files under, by the same rule WalkTopology's cache pass applies
+   ///--- 1 byte unused
+};
+
+/// Enumerates every data-path cache instance of one level that serves at least one selected virtual core, with
+/// the selected-thread count of each core class it serves. The OS is asked afresh rather than the enumeration's
+/// buffer kept alive, because the 'U' maps and the SMT policy are both applied after EnumerateTopology has
+/// returned: a sharer count taken before them describes a selection that is not the one about to run.
+///
+/// Instruction and trace caches are skipped -- the arena is data, and sizing a data working set against L1I
+/// would size it against the wrong array, which is why the topology walk files L1Code and L1Data separately.
+/// An instance reporting no size is skipped as well: it cannot bound anything, and leaving it in would let a
+/// capacity of zero pass for a level the system reports. Records are stepped by the Size each one carries,
+/// exactly as WalkTopology steps them, so the walk stops on anything it cannot step over.
+///
+/// Like WalkTopology's cache pass, this reads the single Cache.GroupMask. Where one cache spans processor
+/// groups -- more than 64 logical processors under one L3 -- its sharers are under-counted and the per-thread
+/// share over-estimated; Cache.GroupCount/Cache.GroupMasks are the fields a fix would read, in both walks
+/// @param level Cache level to enumerate, 1~3
+/// @param dom Receives one entry per qualifying instance
+/// @return Number of entries filled; 0 if the system reports no such instance, or the query failed
+static cui32 QueryCacheDomains(cui8 level, CACHE_DOMAIN (&dom)[MAX_CACHE_DOMAINS]) {
+   DWORD bytes = 0;
+   ui32  count = 0;
+
+   // A first call with no buffer is documented to fail with ERROR_INSUFFICIENT_BUFFER, having written the size
+   // it wants; an unchecked call would leave the walk below reading an untouched buffer as though it held
+   // topology records, which is the failure EnumerateTopology's own two calls are checked against
+   SetLastError(ERROR_SUCCESS);
+   GetLogicalProcessorInformationEx(RelationCache, 0, &bytes);
+   if(GetLastError() != ERROR_INSUFFICIENT_BUFFER || !bytes) return 0;
+
+   ptrc buffer = zalloc64(bytes);
+
+   // Every path from here frees the buffer, the two failures included: GCS p2 requires a matching free for
+   // every aligned allocation, and this one's lifetime ends inside this function whichever way it leaves
+   if(!buffer) return 0;
+   if(!GetLogicalProcessorInformationEx(RelationCache, (SLPIEXptrc)buffer, &bytes)) { mfree1(buffer); return 0; }
+
+   for(ui32 os = 0; os + ui32(sizeof(LOGICAL_PROCESSOR_RELATIONSHIP) + sizeof(DWORD)) <= bytes; ) {
+      cSLPIEXptrc lpi = (cSLPIEXptrc)&((cchptr)buffer)[os];
+
+      if(!lpi->Size || os + lpi->Size > bytes) break;
+      os += lpi->Size;
+
+      if(lpi->Relationship != RelationCache || lpi->Cache.Level != level) continue;
+      if(lpi->Cache.Type == CacheInstruction || lpi->Cache.Type == CacheTrace || !lpi->Cache.CacheSize) continue;
+
+      cui64 mask  = lpi->Cache.GroupMask.Mask;
+      cui16 group = lpi->Cache.GroupMask.Group;
+
+      if(!mask || group >= MAX_GROUPS) continue; // A group the maps cannot address
+
+      cui64 sel0 = mask & cfg.coreMap[group] & cfg.sys.coreMap[0][group];
+      cui64 sel1 = mask & cfg.coreMap[group] & cfg.sys.coreMap[1][group];
+
+      if(!(sel0 | sel1)) continue; // Serves no selected core, so no block of this run is resident in it
+
+      if(count >= MAX_CACHE_DOMAINS) { count = 0; break; } // A table overrun reads as a failed query
+
+      dom[count].size      = lpi->Cache.CacheSize;
+      dom[count].n[0]      = SetBitCount64(sel0);
+      dom[count].n[1]      = SetBitCount64(sel1);
+      // Filed by the class of the cores it serves, which is the rule WalkTopology's cache pass applies to the
+      // per-class cache records: a cache reaching any core of the wider class belongs to that class
+      dom[count].coreClass = (mask & cfg.sys.coreMap[1][group]) ? 1 : 0;
+      ++count;
+   }
+   mfree1(buffer);
+
+   return count;
+}
+
+/// Derives one memory-block size per core class such that the selected threads' blocks together occupy the
+/// requested cache level and together exceed the level below it. Both bounds are budgets over selected
+/// sharers, taken from the final core map rather than from a core count: a ceiling divides an instance's
+/// capacity by the most selected threads it serves, and a defeat bound doubles the widest per-thread share any
+/// instance of the level below grants -- four efficiency cores sharing a 4MB cluster L2 need 2MB each to
+/// defeat it, where a lone thread on a 2MB private L2 needs 4MB. Sizes are rounded down, last, to the 8-record
+/// multiple every slice of the arena must be (ISSUES.MD C12).
+///
+/// A level the system does not report is refused rather than given a fallback size, because the label on the
+/// test would then be unverifiable; a level whose window is empty is run at its defeat bound and reported, the
+/// residency claim being withdrawn by the warning rather than by refusing a run that is still a valid stress
+/// @param level Requested cache level, 1~3
+/// @param recSize Bytes per record of the selected unit set, from RecordGeometry
+/// @param threadCount Selected virtual cores per class, and their total, as wmain counts them
+/// @param blockSize Receives each class's per-thread block size in bytes; 0 for a class with no threads
+/// @param lower Receives each class's smallest level-resident size, for the explicit-'M' window warning
+/// @param ceiling Receives each class's largest level-resident size, for the explicit-'M' window warning
+/// @param feasibleK Receives, where the window was empty, the most threads one instance could hold resident
+/// @return 0 on success; 1 if the window was empty and the defeat bound was used; -1 if a needed level is unreported
+static csi8 CalcCacheBlockSizes(cui8 level, cui64 recSize, csi16 (&threadCount)[3], ui64 (&blockSize)[2],
+                                ui64 (&lower)[2], ui64 (&ceiling)[2], ui32 &feasibleK) {
+   CACHE_DOMAIN dom[MAX_CACHE_DOMAINS];
+   cui64 floor8    = recSize << 3; // The 8-record granule of C12; no block may be smaller than one
+   ui64  target[2] = { 0, 0 };
+   ui32  domains   = 0, d = 0;
+   si8   clamped   = 0;
+   ui8   c;
+
+   feasibleK    = 0;
+   blockSize[0] = blockSize[1] = 0;
+   lower[0]     = lower[1]     = floor8;
+   ceiling[0]   = ceiling[1]   = 0;
+
+   switch(level) {
+   case 1:
+      // Private to a physical core, so the only sharers are that core's own selected siblings, and the
+      // level below it is the register file: there is no defeat bound beyond the structural floor
+      for(c = 0; c < 2; ++c) {
+         ui32 sibMin, sibMax;
+
+         if(!threadCount[c]) continue;
+         if(!cfg.sys.cache[c].L1Data) return -1;
+
+         MinMaxSelectedSiblings(c, sibMin, sibMax);
+
+         target[c]  = (cui64(cfg.sys.cache[c].L1Data) * CACHE_OCCUPANCY_NUM) / (CACHE_OCCUPANCY_DEN * sibMax);
+         ceiling[c] = (cui64(cfg.sys.cache[c].L1Data) * CACHE_CEILING_NUM)   / (CACHE_CEILING_DEN   * sibMax);
+      }
+      break;
+   case 2:
+      if(!(domains = QueryCacheDomains(2, dom))) return -1;
+
+      for(c = 0; c < 2; ++c) {
+         ui32 sibMin, sibMax;
+         ui64 ceilShare = 0;
+
+         if(!threadCount[c]) continue;
+         if(!cfg.sys.cache[c].L1Data) return -1; // The L1 the blocks must overflow to be tested at level 2
+
+         MinMaxSelectedSiblings(c, sibMin, sibMax);
+
+         // The smallest per-thread share any instance of the class grants: the ceiling has to hold on every
+         // instance, so it is the worst-served thread that fixes it
+         for(d = 0; d < domains; ++d) {
+            if(dom[d].coreClass != c) continue;
+
+            cui64 share = cui64(dom[d].size) / cui64(dom[d].n[0] + dom[d].n[1]);
+
+            if(!ceilShare || ceilShare > share) ceilShare = share;
+         }
+         if(!ceilShare) return -1; // The class has threads and no level-2 instance serving them
+
+         cui64 defeat = (cui64(cfg.sys.cache[c].L1Data) * CACHE_DEFEAT_MUL) / sibMin;
+
+         if(lower[c] < defeat) lower[c] = defeat;
+
+         target[c]  = (ceilShare * CACHE_OCCUPANCY_NUM) / CACHE_OCCUPANCY_DEN;
+         ceiling[c] = (ceilShare * CACHE_CEILING_NUM)   / CACHE_CEILING_DEN;
+      }
+      break;
+   case 3: {
+      ui64 l3Min = 0;
+      ui32 n3Max = 0;
+
+      // Defeat bound: twice the widest per-thread level-2 share any selected thread of the class enjoys
+      if(!(domains = QueryCacheDomains(2, dom))) return -1;
+
+      for(c = 0; c < 2; ++c) {
+         ui64 defeatShare = 0;
+
+         if(!threadCount[c]) continue;
+
+         for(d = 0; d < domains; ++d) {
+            if(dom[d].coreClass != c) continue;
+
+            cui64 share = cui64(dom[d].size) / cui64(dom[d].n[0] + dom[d].n[1]);
+
+            if(defeatShare < share) defeatShare = share;
+         }
+         if(!defeatShare) return -1;
+
+         if(lower[c] < defeatShare * CACHE_DEFEAT_MUL) lower[c] = defeatShare * CACHE_DEFEAT_MUL;
+      }
+
+      // Residency budget: one level-3 instance serves cores of both classes, so the two sizes are chosen
+      // jointly rather than one class at a time. The uniform share below is what the classes start from
+      if(!(domains = QueryCacheDomains(3, dom))) return -1;
+
+      for(d = 0; d < domains; ++d) {
+         cui32 n = ui32(dom[d].n[0]) + ui32(dom[d].n[1]);
+
+         if(!l3Min || l3Min > dom[d].size) l3Min = dom[d].size;
+         if(n3Max < n)                     n3Max = n;
+      }
+
+      ceiling[0] = ceiling[1] = (l3Min * CACHE_CEILING_NUM) / (CACHE_CEILING_DEN * n3Max);
+
+      for(c = 0; c < 2; ++c)
+         if(threadCount[c]) target[c] = max((l3Min * CACHE_OCCUPANCY_NUM) / (CACHE_OCCUPANCY_DEN * n3Max), lower[c]);
+
+      // The uniform share cannot breach any instance -- every instance sees at most n3Max threads of it, which
+      // is half of the smallest capacity -- so only the raise to the defeat bound above can, and the fallback
+      // is therefore exactly "run at the defeat bound and say the residency claim has been withdrawn"
+      for(d = 0; d < domains; ++d) {
+         cui64 budget = (cui64(dom[d].size) * CACHE_CEILING_NUM) / CACHE_CEILING_DEN;
+         cui64 load   = cui64(dom[d].n[0]) * target[0] + cui64(dom[d].n[1]) * target[1];
+
+         if(load <= budget) continue;
+
+         // The largest defeat bound this instance has to carry, and so the most threads of it that could have
+         // been held resident at once: the figure the warning reports for the user to select cores against
+         cui64 maxLower = max(dom[d].n[0] ? lower[0] : 0ull, dom[d].n[1] ? lower[1] : 0ull);
+         cui32 k        = ui32(budget / maxLower);
+
+         if(!clamped || feasibleK > k) feasibleK = k;
+         clamped = 1;
+      }
+      if(clamped) for(c = 0; c < 2; ++c) target[c] = threadCount[c] ? lower[c] : 0;
+   }
+   }
+
+   for(c = 0; c < 2; ++c) {
+      ui64 s = target[c];
+
+      if(!threadCount[c]) continue;
+
+      // Level 3 has verified its joint budget above, where a breach is a property of an instance serving both
+      // classes rather than of either class's own window; the scalar clamp is levels 1 and 2
+      if(level != 3) {
+         if(lower[c] > ceiling[c]) { s = lower[c]; feasibleK = 1; clamped = 1; }
+         else                        s = min(max(s, lower[c]), ceiling[c]);
+      }
+
+      // Rounded down to the 8-record granule last of all, so that the block is one the arena block will accept
+      // unchanged: it undershoots the lower bound by at most 8 records, which is noise against the x2 and
+      // three-quarter margins the bounds carry
+      ui64 records = (s / recSize) & ~0x07ull;
+
+      if(records < 8) records = 8;
+
+      blockSize[c] = records * recSize;
+   }
+
+   return clamped;
+}
+//--- Cache-test block sizing ---//
 
 //--- Command-line parsing ---//
 // Every numeric option was read by a bare wcstol whose stopChar was never examined, so an option carrying no

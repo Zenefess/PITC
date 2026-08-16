@@ -44,8 +44,9 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n-23 : Unable to enumerate the processor topology of the system"
  "\n-24 : Missing, malformed or out-of-range value for a command-line option"
  "\n-25 : Unrecognised command-line option"
- "\n-26 : The selected core map contains no cores to test\n"
- "\nCommand-line options   ---   Example: pitc.exe I3x Mc8 Spt Tcd8.0t3600 Ua"
+ "\n-26 : The selected core map contains no cores to test"
+ "\n-27 : Requested cache level not reported by the system\n"
+ "\nCommand-line options   ---   Example: pitc.exe I3x Spt Tcd8.0t3600 Ua"
  "\n--------------------"
  "\n      Options are applied in the order given: where two of them set the same property, the last one wins."
  "\n      'B' and the presets reset the processing units and the memory configuration, so give either of them"
@@ -54,17 +55,22 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      Defaults, where no option and no preset sets otherwise: the ALU & FPU of every virtual core, parallel constant"
  "\n      execution, no memory (the register-resident kernels), a 2000ms start-up delay and a 15 minute duration. The"
  "\n      100ms on-time and 900ms off-time are what a pulsed mode selected without '[' or ']' inherits."
- "\n B  : Run the benchmark. Options after 'B' override defaults; eg. pitc.exe B Iaf mt1024 !!! CACHE USE NOT YET IMPLEMENTED !!!"
- "\n      Utilises the ALU and largest vector unit of all (virtual) cores in the system, level 3 cache, and 8MB memory per thread for 60 seconds."
- "\n Ix : Set instruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av !!! CACHE USE NOT YET IMPLEMENTED !!!"
- "\n      Caches: 1==Level 1, 2==Level 2, 3==Level 3                                                |  At least one processing unit is required"
+ "\n B  : Run the benchmark. Options after 'B' override defaults; eg. pitc.exe B Iaf mt1024"
+ "\n      Utilises the ALU and largest vector unit of all (virtual) cores in the system, and 8MB memory per thread for 60 seconds."
+ "\n Ix : Set instruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av"
+ "\n      Caches: 1==Level 1, 2==Level 2, 3==Level 3                                                |  The highest cache level given is used"
  "\n      Processing: A==ALU, F==FPU, S==SSE4.1, V==AVX2, X==AVX512                                 |  F, S, V and X are mutually exclusive"
+ "\n         At least one processing unit is required; a cache level names no unit of its own and is optional"
+ "\n         A cache level sizes the memory per thread to it: the blocks of every selected thread sharing one instance of that level"
+ "\n         fill it, and together overflow the level below. An 'M' option overrides the derived sizes, and a level this system does"
+ "\n         not report is refused with -27 rather than tested at some other size"
  "\n Lx : Set interface language."
  "\n      Recognises ISO 639-1 language codes; eg. Len-GB"
  "\n Mx : Set amount of memory to utilise during test. Values are in MebiBytes; eg. Mt128"
  "\n      C==Per virtual core, N==Per first-class core, S==Per second-class virtual core, T==Total split amongst all virtual cores"
  "\n         The two core classes are the CPU's non-SMT and SMT cores; on a hybrid CPU they are its efficiency and performance cores"
  "\n         'N' and 'S' each cover one class only: where the CPU has cores of both, give both, or the class left without memory is refused"
+ "\n         An 'M' overrides the sizes an 'I1', 'I2' or 'I3' would derive; a size outside that level's residency window is warned about"
  "\n Ox : Results file output options. A filename can be stacked with any of the remaining options; eg. O[results.txt]16"
  "\n      []=Filename, A=Non-UTF ASCII, 8=UTF-8, 16=UTF-16"
  "\n Sx : Set core synchronisation options. One of the first three options (P,R,S) can be stacked with the last (T); eg. Spt"
@@ -106,7 +112,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      9==Synchronised staggered fixed-width pulsed stress on all virtual cores. 4 hour duration"
  "\n      0==Synchronised fixed-width pulsed stress on all virtual cores, using ALU & SSE code-paths with 2MB memory per core. 1 hour duration\n\n";
 
-cwchptrc wstrMessage_English[43] = {
+cwchptrc wstrMessage_English[46] = {
    L"\nSuccessfully wrote results to \"%s\" file.\n\n",
    L"\n\nNew \"cpu.values\" file generated.\n\n",
    L"\n\n\"cpu.values\" file not found. Generate via 'W' command-line option.\n\n",
@@ -152,7 +158,13 @@ cwchptrc wstrMessage_English[43] = {
    L"\nThe 'U' core map selected no cores; there is nothing to test.\n\n",
    L"\n\nThe %s kernel does not compute JobFPU element-wise, so a \"cpu.values\" written here would not be\n"
     "  readable on a CPU of a different vector width. \"cpu.values\" not written.\n\n",
-   L"\n\nUnable to replace the \"%s\" file; any previous one has been left exactly as it was.\n\n"
+   L"\n\nUnable to replace the \"%s\" file; any previous one has been left exactly as it was.\n\n",
+   L"\nThe system does not report a level %u cache, so a test cannot be sized to one here.\n\n",
+   L"\nWARNING: Level %u working sets cannot be made resident at this thread count; running at the smallest\n"
+    "  size that defeats the level below. At most %u thread(s) per level %u cache instance could have been\n"
+    "  held resident, so select fewer cores to test the level itself.\n",
+   L"\nWARNING: The requested memory per thread is outside the level %u residency window of %llu ~ %llu KiB\n"
+    "  for the class-%u cores, so this run is not confined to that cache level.\n"
 };
 
 cwchptrc wstrInterface_English[13] = {

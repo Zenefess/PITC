@@ -5,9 +5,8 @@
  * Created: 2025-01-21
  * Last Modified: 2026-08-16
  * Description: PITC entry point: option parsing, arena allocation, thread spawn and reporting; defines every namespace-scope object.
- * To Do: 1) Give the L1/L2/L3 cache bits a reader, or withdraw them from the parser and the banner (ISSUES.MD A3)
- *        2) Move Failed's per-unit value formats and the results-table labels into the translation tables (ISSUES.MD K5)
- *        3) Add a VERSIONINFO resource, so the build states its version rather than the prose around it (ISSUES.MD K3)
+ * To Do: 1) Move Failed's per-unit value formats and the results-table labels into the translation tables (ISSUES.MD K5)
+ *        2) Add a VERSIONINFO resource, so the build states its version rather than the prose around it (ISSUES.MD K3)
  * Dependencies: CPU_methods.h
  * ISA: Scalar
  * Thread-safety: MT-safe
@@ -182,6 +181,9 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    // (ISSUES.MD F1)
    cfg.allocMem[0] = 0;
    cfg.allocMem[1] = 0;
+   // No 'M' has been given yet, so a cache-targeted run derives its own sizes rather than checking one the
+   // command line stated. Every 'M' sub-option sets this, and 'B' and the preset preamble clear it again
+   cfg.memExplicit = 0;
    /// Defaults ///
 
    if(argc > 1) {
@@ -213,6 +215,11 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             // an earlier 'Ms' had left behind (ISSUES.MD F1)
             cfg.allocMem[0] = 8388608;
             cfg.allocMem[1] = 0;
+            // 8MB per thread is the benchmark's own figure rather than one this command line asked for, so an
+            // 'I1', 'I2' or 'I3' given after 'B' derives its sizes from that cache level instead of merely
+            // being checked against it -- 'B' resets the memory configuration, and that is what the reset
+            // means here. An 'M' after 'B' sets the flag again and keeps its size (ISSUES.MD A1)
+            cfg.memExplicit = 0;
             cfg.procSync    = 0x092;
             cfg.procUnits   = (cfg.sys.cpuAVX512 ? 0x011 : cfg.sys.cpuAVX2 ? 0x09 : 0x05);
             break;
@@ -299,7 +306,13 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                   if(!ParseWholeNumber(argv[i], j, 0, OPT_MEM_MB_MAX, megabytes)) {
                      wprintf(wstrMessage[35], argv[i][j], argv[i], si64(0), OPT_MEM_MB_MAX); return -24;
                   }
+                  // Every sub-option records that a size was asked for by name, so that a cache-targeted run
+                  // checks this size against the level's residency window rather than replacing it with one
+                  // of its own. The flag is cleared only by the three things documented as resetting the
+                  // memory configuration -- the defaults, 'B' and a preset -- so 'Mc8 -1' derives and
+                  // '-1 Mc8' does not, exactly as the last-option-wins contract already reads (ISSUES.MD A1)
                   cfg.memConfig   = 1;
+                  cfg.memExplicit = 1;
                   cfg.allocMem[0] = megabytes << 20;
                   break;
                // The two classes are the CPU's non-SMT and SMT cores, or its efficiency and performance
@@ -310,6 +323,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                      wprintf(wstrMessage[35], argv[i][j], argv[i], si64(0), OPT_MEM_MB_MAX); return -24;
                   }
                   cfg.memConfig   = 2;
+                  cfg.memExplicit = 1;
                   cfg.allocMem[0] = megabytes << 20;
                   break;
                case L's': // For each virtual core of the second class
@@ -318,6 +332,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                      wprintf(wstrMessage[35], argv[i][j], argv[i], si64(0), OPT_MEM_MB_MAX); return -24;
                   }
                   cfg.memConfig   = 2;
+                  cfg.memExplicit = 1;
                   cfg.allocMem[1] = megabytes << 20;
                   break;
                case L't': // Equally split amongst all utilised virtual cores
@@ -326,6 +341,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                      wprintf(wstrMessage[35], argv[i][j], argv[i], si64(0), OPT_MEM_MB_MAX); return -24;
                   }
                   cfg.memConfig   = 0;
+                  cfg.memExplicit = 1;
                   cfg.allocMem[0] = megabytes << 20;
                   break;
                default:
@@ -654,6 +670,9 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             // (ISSUES.MD F1)
             cfg.allocMem[0] = 8388608;
             cfg.allocMem[1] = 0;
+            // A preset's 8MB is a default rather than a request, exactly as 'B's is, so '-1 I3a' derives its
+            // block sizes from the level-3 window and '-1 Mc8' keeps the 8MB it was given (ISSUES.MD A1)
+            cfg.memExplicit = 0;
             cfg.procUnits   = (cfg.sys.cpuAVX512 ? 0x011 : cfg.sys.cpuAVX2 ? 0x09 : 0x05);
             switch(argv[i][1]) {
             case L'1': // Constant stress; one thread per physical core. 10 minute duration
@@ -872,6 +891,49 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       if(!fileExisted) DeleteFileW(wstrOut);
    }
 
+   // Cache-targeted block sizing. 'I1', 'I2' and 'I3' set procUnits bits 5~7, and until now nothing read them:
+   // the banner named a cache level the run had never been sized to, in the saved results file as much as on
+   // the console (ISSUES.MD A1). Deriving a block size is the whole of the feature -- a non-zero record count
+   // already puts every thread onto the JobCycleMem* path -- so no kernel, dispatch entry or seeding pass
+   // changes with it.
+   //
+   // The pass belongs exactly here. It needs the selection that will actually run, so it must follow
+   // SetSMTLoading and the 'U' maps, and the -26 check that guarantees there is a thread to size for; it reads
+   // the unit selection through RecordGeometry, so it must follow the -15/-16 checks that make that selection
+   // valid; and the arena below is sized from what it writes, so it must precede the memConfig switch. It
+   // performs no file handling, which is what keeps the probe above the last thing to touch the results file
+   // before the run (ISSUES.MD C1)
+   cui8 cacheLevel   = HighestCacheLevel(cfg.procUnits);
+   ui64 recSize      = 0, vecUnits = 0; // Record geometry, hoisted out of the arena block below
+   ui64 cacheSize[2] = { 0, 0 };        // Derived per-thread block size, per core class
+   ui64 cacheLow[2]  = { 0, 0 };        // Smallest level-resident block size, per core class
+   ui64 cacheHigh[2] = { 0, 0 };        // Largest level-resident block size, per core class
+   ui32 feasibleK    = 0;               // Threads one instance of the level could hold resident, where none can
+
+   RecordGeometry(ui8(cfg.procUnits & 0x01F), recSize, vecUnits);
+
+   if(cacheLevel) {
+      csi8 sized = CalcCacheBlockSizes(cacheLevel, recSize, threadCount, cacheSize, cacheLow, cacheHigh, feasibleK);
+
+      // A level the system does not report cannot label a test, whether the sizes would have been derived from
+      // it or merely checked against it, so the refusal stands ahead of the explicit-'M' branch rather than
+      // inside it. The alternative is a fallback size, which puts a cache level's name on a run that nothing
+      // sized to it -- the defect this whole pass exists to end
+      if(sized < 0) { wprintf(wstrMessage[43], ui32(cacheLevel)); return -27; }
+
+      // An 'M' given since the last reset states the size itself; its window is checked below the switch
+      if(!cfg.memExplicit) {
+         if(sized > 0) wprintf(wstrMessage[44], ui32(cacheLevel), feasibleK, ui32(cacheLevel));
+
+         resArray.blockSize[0] = cacheSize[0];
+         resArray.blockSize[1] = cacheSize[1];
+         // The true total, so that the -17 pre-flight, malloc64 and the banner's MB figure each describe the
+         // allocation this run is about to make rather than a request nobody typed
+         cfg.allocMem[0] = si64(cacheSize[0]) * si64(threadCount[0]) + si64(cacheSize[1]) * si64(threadCount[1]);
+         cfg.memConfig   = 3;
+      }
+   }
+
    // Memory allocation and pointer configuration
    switch(cfg.memConfig) {
    case 0: // Total memory
@@ -885,7 +947,18 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       resArray.blockSize[0] = cfg.allocMem[0];
       resArray.blockSize[1] = cfg.allocMem[1];
       cfg.allocMem[0] = resArray.blockSize[0] * threadCount[0] + (resArray.blockSize[1] * threadCount[1]);
+      break;
+   case 3: // Derived from the requested cache level: the sizing block above wrote both sizes and the total
+      break;
    }
+
+   // An explicit 'M' keeps its size, but a size outside the level's residency window makes the CL1/CL2/CL3 the
+   // banner prints a claim that is not true of the run, so it is reported rather than silently accepted. The
+   // check sits below the switch because that is what turns an 'Mt' total into the per-thread size it compares
+   if(cacheLevel && cfg.memExplicit)
+      for(ui8 cc = 0; cc < 2; ++cc)
+         if(threadCount[cc] && (resArray.blockSize[cc] < cacheLow[cc] || resArray.blockSize[cc] > cacheHigh[cc]))
+            wprintf(wstrMessage[45], ui32(cacheLevel), cacheLow[cc] >> 10, cacheHigh[cc] >> 10, ui32(cc));
 
    // Either class having been given a size is a memory-backed run. Testing the first alone meant 'Ms8', which
    // names the second class, allocated nothing at all: the banner reported the memory it had asked for while
@@ -894,28 +967,15 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    if(resArray.blockSize[0] || resArray.blockSize[1]) {
       MEMORYSTATUSEX memStatus = { ui32(sizeof(MEMORYSTATUSEX)) };
       cbool memStatusValid     = GlobalMemoryStatusEx(&memStatus) ? true : false;
-      ui64  bos, recSize, vecUnits;
+      ui64  bos;
       // l walks a thread class, whose population is an si16: as a ui8 it wrapped at 256 and the loop below
       // could not terminate, which the 64-virtual-core ceiling was all that kept out of reach (ISSUES.MD C11)
       si16  l;
       ui8   m;
 
-      // Bytes per record for the selected unit set, and the size of a record's vector portion in the 8-byte
-      // units resArray.alu is indexed by; the two always satisfy recSize == (vecUnits + 1) * 8 whenever the
-      // ALU bit is set, which is what makes the two sub-arrays tile the arena exactly. 'default' catches a
-      // unit selection with no processing bit set: wmain rejects that before reaching here, so the arm is
-      // unreachable, but without it recSize would be read uninitialised. Change the unit set or a record's
-      // layout and this switch must change with it
-      switch(cfg.procUnits & 0x01F) {
-      default: case 1: case 2:                                                 recSize =  8; vecUnits = 0; break;
-      case 3:                                                                  recSize = 16; vecUnits = 1; break;
-      case 4: case 6:                                                          recSize = 16; vecUnits = 0; break;
-      case 5: case 7:                                                          recSize = 24; vecUnits = 2; break;
-      case 8: case 10: case 12: case 14:                                       recSize = 32; vecUnits = 0; break;
-      case 9: case 11: case 13: case 15:                                       recSize = 40; vecUnits = 4; break;
-      case 16: case 18: case 20: case 22: case 24: case 26: case 28: case 30:  recSize = 64; vecUnits = 0; break;
-      case 17: case 19: case 21: case 23: case 25: case 27: case 29: case 31:  recSize = 72; vecUnits = 8;
-      }
+      // recSize and vecUnits are the record geometry RecordGeometry (CPU.h) computed above, once, for this
+      // block and for the cache sizing pass alike: a derived block size is a record count scaled by the record
+      // size, so a second copy of the switch here is a second thing to keep in step with the unit set
 
       // Every JobCycleMem* call processes 4 records and the cursor in ComputationPulse advances in steps of
       // 4, so a count that is not a multiple of 4 is walked up to 3 records past the end of the slice.

@@ -26,14 +26,23 @@ the line it was derived from — re-confirm against the current source before ac
 
 ## A. Verdict integrity — the tool's core claim
 
-### A1. Cache-targeting options `I1`/`I2`/`I3` are parsed and displayed but implemented by nothing — **Medium** — *carried forward (old A13)*
+### A1. Cache-targeting options `I1`/`I2`/`I3` are parsed and displayed but implemented by nothing — **Medium** — *carried forward (old A13)* — **RESOLVED**
 
-`CPU.cpp:167–175` parses the three cache letters into `procUnits` bits 5–7 and the banner (`CPU.cpp:899`)
-prints `CL1`/`CL2`/`CL3` for them, but no code reads those bits: dispatch masks with `0x1F`
+`CPU.cpp:167–175` parsed the three cache letters into `procUnits` bits 5–7 and the banner (`CPU.cpp:899`)
+printed `CL1`/`CL2`/`CL3` for them, but no code read those bits: dispatch masks with `0x1F`
 (`CPU_methods.h:29`), the arena switch masks with `0x01F` (`CPU.cpp:791`), and the cache sizes the topology
-walk files (`CPU.h:797–809`) have no consumer. The help text discloses "NOT YET IMPLEMENTED", but a saved
-results file still carries a banner naming `CL3` as part of the tested configuration. Unchanged from the
-previous audit.
+walk files (`CPU.h:797–809`) had no consumer. The help text disclosed "NOT YET IMPLEMENTED", but a saved
+results file still carried a banner naming `CL3` as part of the tested configuration.
+
+**Resolved** by the `//--- Cache-test block sizing ---//` group in `CPU.h`, per `DESIGN_cache_block_sizing.md`.
+The bits now select a per-class memory-block size — the blocks of every selected thread sharing one instance
+of the named level fill it, and together span twice the level below — leaving dispatch, the kernels, the
+arena layout and `cpu.values` untouched. A level the system does not report is refused with the new exit code
+`-27` rather than given a fallback size; a thread count that makes residency impossible is warned about and
+run at the defeat bound; and an explicit `M` still wins, with a warning where it falls outside the level's
+window. `B` was deliberately left as it stands at HEAD — no cache bit, 8MB per thread — so its KUPS score is
+unchanged and comparable across this change; the design's decision 2 for `B` was superseded by
+`9847c69`/`c1af2dc`.
 
 ## B. Vendored headers
 
