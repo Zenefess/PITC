@@ -51,8 +51,8 @@ audited and survived adversarial review with **no new findings** — section D o
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **0** | **1** | **18** | **38** | **57** |
 
-**G1 is fixed** — see the `Fixed` note on that entry. The counts in the table above are as first audited and
-have not been decremented.
+**A1, A2, B1, C1 and G1 are fixed** — see the `Fixed` note on each entry. The counts in the table above are
+as first audited and have not been decremented.
 
 No Critical finding remains: the false-pass and false-fail families of the previous audit are gone, and the
 one High entry was a start-up crash on a narrow class of old hardware rather than a wrong verdict. The Medium
@@ -63,7 +63,7 @@ handful of reachable configuration defects; the Low tail is documentation and hy
 
 ## A. Verdict integrity — the tool's core claim
 
-### A1. `Evaluate()` reads and increments its lane index in one unsequenced expression — **Medium**
+### A1. `Evaluate()` reads and increments its lane index in one unsequenced expression — **Medium** — *Fixed*
 
 `CPU.h:1160`: `if(value[2][thread].raw[index] != value[3][thread].raw[index++])`. The right operand modifies
 `index` while the left operand's subscript reads it, and the operands of `!=` are unsequenced (C++17 gave
@@ -75,7 +75,15 @@ paths, plus a one-past-the-window read. Today's MSVC evaluates left-first and th
 nothing in the source guarantees it, and clang's `-Wunsequenced` flags exactly this pattern.
 **Fix:** move the increment out of the expression (`... != value[3][thread].raw[index]) return 1; ++index;`).
 
-### A2. The FPU job cycles compare doubles with a floating-point `!=`, not the bit compare the doctrine claims — **Low**
+> **Fixed** as the entry prescribes. The `while` is now a `for(; index < end; ++index)` and both operands
+> subscript with a plain `index`, so the increment is a statement of the loop rather than a side effect of one
+> operand: no evaluation order can misalign the lanes or read past the window, and clang's `-Wunsequenced` has
+> nothing left to flag. The comment above it names the old expression and what a right-first compilation did
+> with it, so the increment is not folded back into the comparison as a tidy-up. The dead
+> `//return index >= end ? 0 : 1;` below the loop went with it. Verdicts are unchanged on MSVC, which already
+> evaluated left-first — this removes the dependency on that, not a wrong answer.
+
+### A2. The FPU job cycles compare doubles with a floating-point `!=`, not the bit compare the doctrine claims — **Low** — *Fixed*
 
 `JobCycleFPU` (`CPU_jobs_standard.cpp:283`), `JobCycleMemFPU` (:301–316), `JobCycleALU_FPU` (:333) and
 `JobCycleMemALU_FPU` (:351–366) compare `fl64` results with `!=`, and `CPU_job_cycles.h:46–48` (echoed by
@@ -85,6 +93,25 @@ kernels can produce neither a zero nor a NaN as a *golden* value, so the predica
 future edit to the FP chain that lets one in silently reintroduces the A11 defect class in the FPU unit
 alone. **Fix:** compare through a `ui64` alias (`(ui64&)value[1][k].fpu != (ui64&)value[2][k].fpu`), which is
 what the doctrine says is happening.
+
+> **Fixed**, though not by the spelling the entry proposes. `CPU_jobs_standard.cpp` now carries a fourth
+> `ResultsMatch` overload — `cbool ResultsMatch(cfl64 &result, cfl64 &expected)` — beside the three vector
+> ones, and all ten `fl64` comparisons in `JobCycleFPU`, `JobCycleMemFPU`, `JobCycleALU_FPU` and
+> `JobCycleMemALU_FPU` go through it. The `si64` comparisons in those same cycles are left as `!=`, which
+> already examines every bit of both operands.
+>
+> The overload is `!memcmp(&result, &expected, sizeof(fl64))`, **not** the `(ui64&)` alias: reading a `fl64`
+> object through a `ui64` lvalue is exactly the aliasing a compiler is entitled to assume cannot happen, and
+> the fix would then be removed by the optimiser rather than performed. That is not theoretical — the
+> proposed spelling was transcribed into a harness alongside the `memcmp` one and built at `-O2`, where it
+> answers "identical" for `+0.0` against `-0.0` and for `1.0` against `1.0 + 1 ULP`: the A11 defect class,
+> reintroduced by the line meant to remove it. The `memcmp` form answers all four probe cases correctly
+> (`+0.0` and `-0.0` distinct, two bit-identical NaNs equal, `1.0` equal to itself, `1.0` distinct from
+> `1.0 + 1 ULP`), is what `ValidateFamilyScalar` in the same file already uses on the same operands, and is
+> expanded in place rather than called: both configurations set `IntrinsicFunctions` and the size is a
+> constant. `CPU_job_cycles.h`'s bit-exactness note and `CLAUDE.md` were corrected with it — both recorded
+> that the FPU cycles compare "raw scalars with `!=`" as though it were the doctrine rather than the one
+> exception to it.
 
 ### A3. Cache-targeting options `I1`/`I2`/`I3` are parsed and displayed but implemented by nothing — **Medium** — *carried forward (old A13)*
 
@@ -97,7 +124,7 @@ previous audit.
 
 ## B. Golden values and `cpu.values`
 
-### B1. The cross-unit ladder equivalence is verified by no code, though `CLAUDE.md` says `W` proves it — **Medium** — *supersedes old J6*
+### B1. The cross-unit ladder equivalence is verified by no code, though `CLAUDE.md` says `W` proves it — **Medium** — *supersedes old J6* — *Fixed*
 
 Everything `cpu.values` promises about portability rests on `JobSSE`, `JobAVX2` and `JobAVX512` computing
 `JobFPU` element-wise, bit for bit (`RunGoldenLadder`, `CPU.h:351–370`). `ValidateKernelFamilies`
@@ -113,6 +140,34 @@ run the probe seed's lanes through `JobFPU` per-lane and `memcmp` against `JobSS
 carries them, `JobAVX2`/`JobAVX512`) over the same lanes — the ladder equivalence tested directly, on the
 seed already in hand.
 
+> **Fixed** as the entry prescribes. `ValidateKernelFamilies` (`CPU.h`) now ends with a second half: the
+> first `LADDER_PROBE_LANES` (8) lanes of the seed already in hand are run through `JobFPU` one lane at a
+> time, and that scalar reference is handed to `ValidateLadderSSE`, `ValidateLadderAVX2` and
+> `ValidateLadderAVX512`. Each loads the same eight lanes into vectors of its own width — four `fl64x2`, two
+> `fl64x4`, one `fl64x8` — runs its own register-resident kernel over them and `memcmp`s all eight lanes back
+> against the scalar result. SSE is checked on every CPU and the other two exactly where `RunGoldenLadder`
+> would reach for them, so a machine of any width proves every ladder it could itself walk. The three live in
+> their own translation units for the same reason every `ValidateFamily*` does (H4); the reference is derived
+> once by the caller rather than three times, because it is scalar, identical for all three, and by
+> definition the *other* unit's arithmetic — the one thing a per-unit check cannot supply itself.
+>
+> A disagreement is reported as `-22`, alongside the family checks, but not with their message: `JobSSE`,
+> `JobAVX2` and `JobAVX512` were added to `wstrKernelName` as entries 14–16 and `KERNEL_NAME_LADDER` marks
+> the boundary, so `wmain` prints `wstrMessage[30]` below it and the new `wstrMessage[41]` at or above it.
+> The three functions spell their return from that constant rather than as literals, so a family entry
+> inserted later moves the ladder's indices with it.
+> The two failures are different diagnoses — one kernel has drifted from its own unit's reference, or one
+> unit has drifted from the scalar kernel every unit stands in for — and the second is the one that used to
+> reach the next machine disguised as a stale file. `en-GB.h`'s `-22` line was broadened to cover both, its
+> `W` description now states the two checks, and `wstrMessage_English` grew to 42 entries.
+>
+> Verified off-target, the arithmetic being platform-independent: the four register-resident kernels and the
+> three new functions were transcribed into a harness and built with `-ffp-contract=off` (the `/fp:strict`
+> guarantee `CPU_build.h` enforces). Over the `KernelFingerprint` seed and 20,000 rounds of `W`-style random
+> seeds — 160,000 lane comparisons — `JobSSE`, `JobAVX2` and `JobAVX512` agreed with `JobFPU` bit for bit
+> with no mismatches, so the check does not reject the tree it was written against. Injecting a
+> single-kernel drift then produced 14, 15 and 16 respectively, so it does not pass one either.
+
 ### B2. `cpu.values` is written in place, shared for write, with no atomic replace — **Low**
 
 The `W` path opens `cpu.values` with `CreateFileW(..., GENERIC_WRITE, FILE_SHARE_WRITE, 0, CREATE_ALWAYS,
@@ -124,7 +179,7 @@ name and `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)`, and drop the share-write
 
 ## C. Memory and resource handling
 
-### C1. The `O` results file is truncated at open, then left empty and its handle leaked on six error exits — **Medium**
+### C1. The `O` results file is truncated at open, then left empty and its handle leaked on six error exits — **Medium** — *Fixed*
 
 `O[name]` opens the results file with `CREATE_ALWAYS` at `CPU.cpp:740` — destroying any previous file of
 that name — before the arena is sized, the memory pre-flight runs, or a thread is spawned. The error exits
@@ -135,6 +190,24 @@ the same effect. Example: `PITC.exe -1 Mc999999 O[results.txt]` fails the memory
 silently replaces an existing `results.txt` with an empty file. **Fix:** open the file after the pre-flight
 checks, immediately before results are written — or close and delete it on every error return between :740
 and the write at :1087.
+
+> **Fixed** by the first of the two, with the early check kept in a form that destroys nothing. The
+> `CREATE_ALWAYS` open and the byte-order-mark write moved down into the results block, immediately above the
+> report write, so no handle is held across the run and no error return between the pre-flight and the write
+> has a file to leave behind: the six exits the entry lists now touch nothing, and neither does a Ctrl-C,
+> which is the case no amount of close-and-delete on the error paths would have covered.
+>
+> What stands where the open used to is a probe rather than a creation. `O` takes its path from the command
+> line, so a typo in it should be reported before a run of hours rather than after one; the probe opens the
+> path `OPEN_ALWAYS`, which neither truncates an existing file nor destroys one, closes it at once, and
+> `DeleteFileW`s it if `GetLastError` reported that the probe was what created it. `-9` is therefore still
+> raised before the test on an unwritable path, and a run that never reaches its results leaves the
+> filesystem as it found it. The `ERROR_ALREADY_EXISTS` code is read on the statement after the call, before
+> anything else can overwrite it — `OPEN_ALWAYS` reports it through `GetLastError` on *success*.
+>
+> The residual difference: a path that becomes unwritable *during* the run is now reported at the end rather
+> than at the start. The report has already gone to the console by then, and the exit code is the same `-9`.
+> `CLAUDE.md`'s parsing section records the arrangement and why the creation should not be moved back up.
 
 ### C2. `resArray.iter` is the one run-length allocation never checked for failure — **Low**
 
@@ -583,5 +656,5 @@ layer — no check of the *cross-unit* ladder equivalence — is recorded as B1.
 | `Mn8 Ms8` | any hybrid or two-class machine | Refused `-18` "Only 0 bytes of memory per thread"; `Ms8 Mn8` runs (F1) |
 | `Ia Tct5.0 Ue` (the documented smoke test) | Windows set to a comma-decimal locale | Refused `-25` "Unrecognised '.' option" (F2) |
 | `Ia Sr Tft60[15000]15000 Ua` | 16+ virtual cores | "60-second" run takes ~7.5 minutes; threads 3+ graded on one job cycle (E1) |
-| `-1 Mc999999 O[results.txt]` | any, with an existing `results.txt` | Exits `-17` having silently truncated the previous results file (C1) |
+| ~~`-1 Mc999999 O[results.txt]`~~ | ~~any, with an existing `results.txt`~~ | ~~Exits `-17` having silently truncated the previous results file~~ — **fixed** (C1) |
 | `-8` | any | Runs the *unsynchronised* staggered preset the help text calls synchronised (K1) |

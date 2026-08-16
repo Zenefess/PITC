@@ -49,6 +49,9 @@ Command-line options
  
       File will only be created if the integrity of the results pass 65,536 iterations.
       All 512 entries are verified, not one per thread, so expect the check to run for minutes rather than seconds.
+      The job kernels are cross-checked first: each memory and combined kernel against the register-resident kernel of its
+      own unit, and each vector kernel against the FPU kernel lane for lane, which is what makes the file readable on a CPU
+      of a different vector width.
  -x : Configuration presets.
  
       1==Constant stress; one thread per physical core. 10 minute duration

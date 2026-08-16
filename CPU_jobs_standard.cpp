@@ -235,6 +235,32 @@ void SeedRecordsFPU(fl64ptrc records, cui64 count, cfl64 seed) {
 }
 //--- Arena seeding ---//
 
+//--- Bit-exact result comparison ---//
+// The scalar counterpart of the three units' ResultsMatch overloads, and it exists for the same reason they
+// do: a golden value is a bit pattern, and the question every unit has to answer is whether two of them are
+// identical. The FPU cycles below compared fl64 with '!=', which is a *numeric* predicate and errs in both
+// directions -- -0.0 != +0.0 is false, so a sign-bit flip in a zero lane passes, and two NaNs of identical
+// encoding compare unequal, so a fault that produced one in both planes would be reported where the bits
+// agree. That is the A11 defect class, which the AVX-512 cycles carried until this codebase settled on the
+// integer domain for every width; the FPU unit was the one place left still asking the numeric question
+// (ISSUES.MD A2). No kernel can produce a zero or a NaN as a golden value today, so nothing misfires yet --
+// this is what keeps that true of the next edit to the FP chain.
+// The comparison is a byte compare, not the '(ui64&)fpu != (ui64&)fpu' alias the entry proposes: reading a
+// fl64 object through a ui64 lvalue is exactly the aliasing a compiler is entitled to assume cannot happen,
+// and one that does assume it folds the comparison rather than performing it. Transcribed into a harness and
+// built at -O2, the alias spelling reports +0.0 and -0.0 as identical -- the defect this fix exists to
+// remove, reintroduced by the spelling meant to remove it. memcmp of a constant size states the same
+// question in the one form no compiler may reinterpret, and both configurations set IntrinsicFunctions, so
+// MSVC expands it in place rather than calling it. It is also what ValidateFamilyScalar above already uses
+// for the same operands. The ALU cycles need no equivalent: si64 '!=' already examines every bit of both
+/// @param result Value produced by the job kernel
+/// @param expected Reference value loaded from "cpu.values"
+/// @return true if every bit of both operands is identical
+static inline cbool ResultsMatch(cfl64 &result, cfl64 &expected) {
+   return !memcmp(&result, &expected, sizeof(fl64));
+}
+//--- Bit-exact result comparison ---//
+
 //--- Job cycles ---//
 
 cui8 JobCycleALU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
@@ -280,7 +306,7 @@ cui8 JobCycleMemALU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
 cui8 JobCycleFPU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    value[1][coreNum].fpu = value[0][coreNum].fpu;
    JobFPU(value[1][coreNum].fpu);
-   if(value[1][coreNum].fpu != value[2][coreNum].fpu) {
+   if(!ResultsMatch(value[1][coreNum].fpu, value[2][coreNum].fpu)) {
       value[3][coreNum].fpu = value[1][coreNum].fpu;
       Failed(coreNum, threadByte, 3);
       return 1;
@@ -298,22 +324,22 @@ cui8 JobCycleMemFPU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    // value[3] member was just written -- 3 (FPU) here, as in JobCycleFPU and JobCycleMemALU_FPU. These four
    // passed 4 (ALU), so Failed's case 4 printed value[2].alu and value[3].alu with "%lld": two integers from
    // lanes this function never touches, in place of the two doubles that disagreed (ISSUES.MD A12)
-   if(value[1][coreNum].p3[offset] != value[2][coreNum].fpu) {
+   if(!ResultsMatch(value[1][coreNum].p3[offset], value[2][coreNum].fpu)) {
       value[3][coreNum].fpu = value[1][coreNum].p3[offset];
       Failed(coreNum, threadByte, 3);
       return 1;
    }
-   if(value[1][coreNum].p3[offset + 1] != value[2][coreNum].fpu) {
+   if(!ResultsMatch(value[1][coreNum].p3[offset + 1], value[2][coreNum].fpu)) {
       value[3][coreNum].fpu = value[1][coreNum].p3[offset + 1];
       Failed(coreNum, threadByte, 3);
       return 1;
    }
-   if(value[1][coreNum].p3[offset + 2] != value[2][coreNum].fpu) {
+   if(!ResultsMatch(value[1][coreNum].p3[offset + 2], value[2][coreNum].fpu)) {
       value[3][coreNum].fpu = value[1][coreNum].p3[offset + 2];
       Failed(coreNum, threadByte, 3);
       return 1;
    }
-   if(value[1][coreNum].p3[offset + 3] != value[2][coreNum].fpu) {
+   if(!ResultsMatch(value[1][coreNum].p3[offset + 3], value[2][coreNum].fpu)) {
       value[3][coreNum].fpu = value[1][coreNum].p3[offset + 3];
       Failed(coreNum, threadByte, 3);
       return 1;
@@ -330,7 +356,7 @@ cui8 JobCycleALU_FPU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
       Failed(coreNum, threadByte, 4);
       return 1;
    }
-   if(value[1][coreNum].fpu != value[2][coreNum].fpu) {
+   if(!ResultsMatch(value[1][coreNum].fpu, value[2][coreNum].fpu)) {
       value[3][coreNum].fpu = value[1][coreNum].fpu;
       Failed(coreNum, threadByte, 3);
       return 1;
@@ -348,22 +374,22 @@ cui8 JobCycleMemALU_FPU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    value[1][coreNum].p4[offset + 2] = value[0][coreNum].alu;
    value[1][coreNum].p4[offset + 3] = value[0][coreNum].alu;
    JobMemALU_FPU(&value[1][coreNum].p3[offset], &value[1][coreNum].p4[offset]);
-   if(value[1][coreNum].p3[offset] != value[2][coreNum].fpu) {
+   if(!ResultsMatch(value[1][coreNum].p3[offset], value[2][coreNum].fpu)) {
       value[3][coreNum].fpu = value[1][coreNum].p3[offset];
       Failed(coreNum, threadByte, 3);
       return 1;
    }
-   if(value[1][coreNum].p3[offset + 1] != value[2][coreNum].fpu) {
+   if(!ResultsMatch(value[1][coreNum].p3[offset + 1], value[2][coreNum].fpu)) {
       value[3][coreNum].fpu = value[1][coreNum].p3[offset + 1];
       Failed(coreNum, threadByte, 3);
       return 1;
    }
-   if(value[1][coreNum].p3[offset + 2] != value[2][coreNum].fpu) {
+   if(!ResultsMatch(value[1][coreNum].p3[offset + 2], value[2][coreNum].fpu)) {
       value[3][coreNum].fpu = value[1][coreNum].p3[offset + 2];
       Failed(coreNum, threadByte, 3);
       return 1;
    }
-   if(value[1][coreNum].p3[offset + 3] != value[2][coreNum].fpu) {
+   if(!ResultsMatch(value[1][coreNum].p3[offset + 3], value[2][coreNum].fpu)) {
       value[3][coreNum].fpu = value[1][coreNum].p3[offset + 3];
       Failed(coreNum, threadByte, 3);
       return 1;

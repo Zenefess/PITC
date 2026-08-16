@@ -33,7 +33,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n-19 : Unable to create a computation thread"
  "\n-20 : Unable to write the \"cpu.values\" header"
  "\n-21 : Contents of \"cpu.values\" are not valid for this build"
- "\n-22 : A job kernel disagrees with the register-resident kernel for its unit"
+ "\n-22 : A job kernel disagrees with the kernel it is required to reproduce"
  "\n-23 : Unable to enumerate the processor topology of the system"
  "\n-24 : Missing, malformed or out-of-range value for a command-line option"
  "\n-25 : Unrecognised command-line option"
@@ -75,6 +75,9 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n W  : Write new \"cpu.values\" file."
  "\n      File will only be created if the integrity of the results pass 65,536 iterations."
  "\n      All 512 entries are verified, not one per thread, so expect the check to run for minutes rather than seconds."
+ "\n      The job kernels are cross-checked first: each memory and combined kernel against the register-resident kernel of its"
+ "\n      own unit, and each vector kernel against the FPU kernel lane for lane, which is what makes the file readable on a CPU"
+ "\n      of a different vector width."
  "\n -x : Configuration presets. By default will use the ALU & the largest vector unit, and 8MB memory per core."
  "\n      1==Constant stress; one thread per physical core. 10 minute duration"
  "\n      2==Constant stress on all virtual cores. 30 minute duration"
@@ -87,7 +90,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      9==Staggered fixed-width pulsed stress on all virtual cores. 4 hour duration"
  "\n      0==Synchronised fixed-width pulsed stress on all virtual cores, using ALU & SSE code-paths with 2MB memory per core. 1 hour duration\n\n";
 
-cwchptrc wstrMessage_English[41] = {
+cwchptrc wstrMessage_English[42] = {
    L"\nSuccessfully wrote results to \"%s\" file.\n\n",
    L"\n\nNew \"cpu.values\" file generated.\n\n",
    L"\n\n\"cpu.values\" file not found. Generate via 'W' command-line option.\n\n",
@@ -130,7 +133,9 @@ cwchptrc wstrMessage_English[41] = {
    L"\nUnrecognised command-line argument \"%s\". Run with no arguments for the option reference.\n\n",
    L"\nUnrecognised '%c' option in the argument \"%s\". Run with no arguments for the option reference.\n\n",
    L"\nWARNING: The language \"%s\" is not available in this build; the interface remains in en-GB.\n",
-   L"\nThe 'U' core map selected no cores; there is nothing to test.\n\n"
+   L"\nThe 'U' core map selected no cores; there is nothing to test.\n\n",
+   L"\n\nThe %s kernel does not compute JobFPU element-wise, so a \"cpu.values\" written here would not be\n"
+    "  readable on a CPU of a different vector width. \"cpu.values\" not written.\n\n"
 };
 
 cwchptrc wstrInterface_English[13] = {
