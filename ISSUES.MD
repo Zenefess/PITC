@@ -485,9 +485,20 @@ the existing guard.
 > `cfg.sys.cpuAVX512`, the widest set this program tests for. `/arch:AVX10.1`, which later v143 toolsets
 > carry, defines `__AVX512F__` as well and is therefore refused by the AVX2 unit's new guard.
 >
-> The same upper-bound argument does apply to `CPU_jobs_SSE.cpp`, which states neither bound: raised to
-> `/arch:AVX2` it would carry VEX encodings into kernels `wmain` dispatches on `cfg.sys.cpuSSE4_1`. That is
-> outside this entry, which names the AVX2 unit and its fix; it is recorded here so it is not lost.
+> The same upper-bound argument applies to `CPU_jobs_SSE.cpp`, which stated neither bound: raised to
+> `/arch:AVX`, `/arch:AVX2` or `/arch:AVX512` it would carry VEX or EVEX encodings into kernels `wmain`
+> dispatches on `cfg.sys.cpuSSE4_1` — every CPU reporting SSE4.1, including the Penryn, Nehalem and Westmere
+> parts that have no AVX at all. That unit is outside the entry as written, which names the AVX2 unit, but it
+> is the same defect one instruction set down, so it carries the same `#error` now: `__AVX__`, `__AVX2__` or
+> `__AVX512F__`, which is the scalar unit's H1 guard spelt for the set above it. It states no lower bound,
+> there being no `/arch` for SSE4.1 and so no macro a correct build would set. Its unit-local `_mm_abs_pd`
+> depends on the same bound from the other side — `SIMD management.h` states its own only for a unit
+> compiling below AVX2 (I1) — so the guard makes an assumption that comment already rested on unfalsifiable.
+>
+> **All four kernel units now bound the instruction set they are compiled at.** The scalar and SSE units
+> refuse anything above the baseline they are written for and state no lower bound — the baseline is the
+> floor, and no `/arch` names SSE4.1, so in both cases the upper test admits exactly one configuration. The
+> AVX2 unit states both ends. The AVX-512 unit states the lower one, for the reason above.
 
 ### H4. `WholeProgramOptimization` is still present (set `false`) in two places `CLAUDE.md` says it is gone from — **Low**
 

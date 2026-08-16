@@ -55,8 +55,19 @@ rather than the absence of a higher `/arch`: what H3 names is a unit compiled *a
 gate tests before dispatching it, and the AVX-512 kernels are gated on `cfg.sys.cpuAVX512`, the widest set
 this program tests for. A later toolset's `/arch:AVX10.1` defines `__AVX512F__` as well, so the AVX2 unit's
 new guard refuses that setting too.
-`CPU_jobs_SSE.cpp` has no such guard because MSVC has no `/arch` for SSE4.1: that unit compiles at the
-baseline by construction, and its one SSE4.1 instruction is gated on `cfg.sys.cpuSSE4_1` at run time instead.
+**`CPU_jobs_SSE.cpp` states the upper bound and no lower one**, and that asymmetry is the point: MSVC has no
+`/arch` for SSE4.1, so no macro exists that a correct build of it would set — its one SSE4.1 instruction is
+gated on `cfg.sys.cpuSSE4_1` at run time instead of at build time. What *can* be done to it is the same thing
+H3 names for the AVX2 unit: a per-file `/arch:AVX`, `/arch:AVX2` or `/arch:AVX512` leaves every intrinsic
+compiling and every answer right while the code around them takes VEX or EVEX encoding, and `wmain`
+dispatches these kernels to every CPU reporting SSE4.1 — the Penryn, Nehalem and Westmere parts that carry
+SSE4.1 and no AVX are the hardware this unit exists to serve. So it `#error`s if `__AVX__`, `__AVX2__` or
+`__AVX512F__` is defined — the scalar unit's H1 guard, the same three macros, one instruction set up; for
+both units the upper test admits exactly one configuration, which is why neither states a lower one. The
+unit-local
+`_mm_abs_pd` rests on the same bound from the other side: `SIMD management.h` defines its own only below
+AVX2, and this guard is what makes "this unit always compiles below AVX2" a statement the build cannot
+falsify.
 `Optimization=Custom` is likewise unconditional; `Debug|x64` sets no `Optimization` of its own, so it emits no
 `/O` switch either way and the change is one of spelling rather than of code.
 
