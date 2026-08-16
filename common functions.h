@@ -3,11 +3,10 @@
  * Version: v1.1.0
  * Owner: David William Bull
  * Created: 2023-02-02
- * Last Modified: 2026-08-12
+ * Last Modified: 2026-08-16
  * Description: Inline scalar and SIMD utility functions: constants, swaps, min/max, 2D rotation, sincos, vector tests, and power-of-2 rounding.
  * To Do: 1) Add /// API documentation with @param/@return tags to all public functions (d1)
- *        2) Rename PascalCase macros (RoundUpToNearest, UNLOOPx2/4/8/16) to UPPER_SNAKE per r12
- *        3) Add unit tests for RoundUpToNearest*, AllTrue, AllFalse, Min/Max, and sincos in tests/
+ *        2) Add unit tests for RoundUpToNearest*, AllTrue, AllFalse, Min/Max, and sincos in tests/
  * Dependencies: typedefs.h, vector structures.h, corecrt_math.h, SIMD management.h
  * ISA: Scalar | SSE4.2 | AVX2
  * Thread-safety: Reentrant
@@ -187,7 +186,27 @@ inline cbool AllFalse(cui512 &source, cui512 &compare) {
            _mm256_testz_si256(((cui256ptr)&source)[1], ((cui256ptr)&compare)[1]));
 }
 
-#define RoundUpToNearest(x, A) (((x) + ((A) - 1)) & ~((A) - 1))
+inline csi32 RoundDownToNearest4(csi32 input)  { return input & 0x0FFFFFFFC; }
+inline cui32 RoundDownToNearest4(cui32 input)  { return input & 0x0FFFFFFFCu; }
+inline csi64 RoundDownToNearest4(csi64 input)  { return input & 0x0FFFFFFFFFFFFFFFCll; }
+inline cui64 RoundDownToNearest4(cui64 input)  { return input & 0x0FFFFFFFFFFFFFFFCull; }
+inline csi32 RoundDownToNearest8(csi32 input)  { return input & 0x0FFFFFFF8; }
+inline cui32 RoundDownToNearest8(cui32 input)  { return input & 0x0FFFFFFF8u; }
+inline csi64 RoundDownToNearest8(csi64 input)  { return input & 0x0FFFFFFFFFFFFFFF8ll; }
+inline cui64 RoundDownToNearest8(cui64 input)  { return input & 0x0FFFFFFFFFFFFFFF8ull; }
+inline csi32 RoundDownToNearest16(csi32 input) { return input & 0x0FFFFFFF0; }
+inline cui32 RoundDownToNearest16(cui32 input) { return input & 0x0FFFFFFF0u; }
+inline csi64 RoundDownToNearest16(csi64 input) { return input & 0x0FFFFFFFFFFFFFFF0ll; }
+inline cui64 RoundDownToNearest16(cui64 input) { return input & 0x0FFFFFFFFFFFFFFF0ull; }
+inline csi32 RoundDownToNearest32(csi32 input) { return input & 0x0FFFFFFE0; }
+inline cui32 RoundDownToNearest32(cui32 input) { return input & 0x0FFFFFFE0u; }
+inline csi64 RoundDownToNearest32(csi64 input) { return input & 0x0FFFFFFFFFFFFFFE0ll; }
+inline cui64 RoundDownToNearest32(cui64 input) { return input & 0x0FFFFFFFFFFFFFFE0ull; }
+inline csi32 RoundDownToNearest64(csi32 input) { return input & 0x0FFFFFFC0; }
+inline cui32 RoundDownToNearest64(cui32 input) { return input & 0x0FFFFFFC0u; }
+inline csi64 RoundDownToNearest64(csi64 input) { return input & 0x0FFFFFFFFFFFFFFC0ll; }
+inline cui64 RoundDownToNearest64(cui64 input) { return input & 0x0FFFFFFFFFFFFFFC0ull; }
+
 inline csi32 RoundUpToNearest4(csi32 input)  { return (input + 3)     & 0x0FFFFFFFC; }
 inline cui32 RoundUpToNearest4(cui32 input)  { return (input + 3u)    & 0x0FFFFFFFCu; }
 inline csi64 RoundUpToNearest4(csi64 input)  { return (input + 3ll)   & 0x0FFFFFFFFFFFFFFFCll; }
