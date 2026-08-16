@@ -947,8 +947,8 @@ layer — no check of the *cross-unit* ladder equivalence — is recorded as B1.
 | Command line | Machine | Behaviour |
 |---|---|---|
 | ~~any, including none~~ | ~~x64 CPU without POPCNT (Core 2, early Athlon 64 X2)~~ | ~~Illegal-instruction crash before any output~~ — **fixed** (G1) |
-| `Mn8 Ms8` | any hybrid or two-class machine | Refused `-18` "Only 0 bytes of memory per thread"; `Ms8 Mn8` runs (F1) |
+| ~~`Mn8 Ms8`~~ | ~~any hybrid or two-class machine~~ | ~~Refused `-18` "Only 0 bytes of memory per thread"; `Ms8 Mn8` runs~~ — **fixed** (F1) |
 | ~~`Ia Tct5.0 Ue` (the documented smoke test)~~ | ~~Windows set to a comma-decimal locale~~ | ~~Refused `-25` "Unrecognised '.' option"~~ — **fixed** (F2) |
-| `Ia Sr Tft60[15000]15000 Ua` | 16+ virtual cores | "60-second" run takes ~7.5 minutes; threads 3+ graded on one job cycle (E1) |
+| ~~`Ia Sr Tft60[15000]15000 Ua`~~ | ~~16+ virtual cores~~ | ~~"60-second" run takes ~7.5 minutes; threads 3+ graded on one job cycle~~ — **fixed** (E1) |
 | ~~`-1 Mc999999 O[results.txt]`~~ | ~~any, with an existing `results.txt`~~ | ~~Exits `-17` having silently truncated the previous results file~~ — **fixed** (C1) |
 | `-8` | any | Runs the *unsynchronised* staggered preset the help text calls synchronised (K1) |
