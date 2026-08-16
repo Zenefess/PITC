@@ -562,4 +562,4 @@ al4 static const int CHI_SIZE = sizeof(_CHAR_INFO);
 
 #define refpa(dataType, dimension) (dataType (*)[dimension])
 #define refpa2(dataType, dimension1, dimension2) (dataType (*)[dimension1][dimension2])
-#define refp1a1(dataType, dimension1, dimension2) (dataType (*[dimension1])[dimension2])
+//#define refp1a1(dataType, dimension1, dimension2) (dataType (*[dimension1])[dimension2])
