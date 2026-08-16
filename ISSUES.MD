@@ -1,0 +1,557 @@
+# PITC — Known Issues and Defects
+
+**Audit of:** Pulsed Integrity Tests for CPUs v1.0.2, at the tree following the fix series of PRs #1–#19
+**Date:** 2026-08-15
+**Scope:** every file in the repository — `CPU.cpp`, `CPU.h`, `CPU_methods.h`, `CPU_job_cycles.h`, `CPU_build.h`,
+the four `CPU_jobs_*.cpp` kernel units, the six vendored shared headers, `CPU.vcxproj`, and all documentation.
+**Method:** static review only, performed as twelve subsystem passes (parsing, output/evaluation, topology,
+golden values, timing, the four kernel units, cross-unit bit-exactness, dispatch/concurrency, vendored
+headers, build configuration, documentation) followed by an adversarial verification pass: every new finding
+was independently re-derived from the source and an attempt made to refute it before inclusion. Two candidate
+findings that failed that verification are recorded in Appendix A so they are not rediscovered. The target
+platform (Windows x64 / MSVC v143) was not available to the audit, so nothing here was reproduced by
+execution; entries whose claim rests on Windows SDK declarations or MSVC codegen say so. Every entry cites
+the line it was derived from — re-confirm against the current source before acting.
+
+**Relationship to the previous audit:** the prior `ISSUES.MD` (deleted in commit `c8a1497`) recorded 129
+defects, of which roughly 95 were fixed across PRs #1–#19. This is a fresh audit of the tree those fixes
+produced. Entries carried forward from the previous audit are marked with their old IDs; four previously-open
+entries were verified **fixed** in the current tree and do not appear below: old **J4** (the `_mm_abs_pd`
+`#undef` guards now precede both unit-local definitions), old **K3** (the `O` option's UTF-16 write now
+multiplies by `sizeof(wchar)` and the 8-bit path converts through `WideCharToMultiByte` into a separate
+buffer), old **K4** (the `Ux`/`Tx` option descriptions now match the parser), and old **K5** (`wmain` zeroes
+`offTime` for every sweep, so presets `-6`/`-7` run the cycles they name). The concurrency machinery
+(`threadBits`, the four polls, the join/abort paths, the jitter generator) and the arena-layout switch were
+audited and survived adversarial review with **no new findings** — section D of the old audit stays closed.
+
+## Severity legend
+
+| Level | Meaning |
+|-------|---------|
+| **Critical** | The tool reports a *wrong verdict about CPU health* — a false `.Pass.`, a guaranteed false `!Fail!`, or corruption of its own reference data. For an integrity tester this is the worst class of defect. |
+| **High** | Crash, hang, memory corruption, a documented mode that does not work at all, or a build blocker. |
+| **Medium** | Wrong behaviour in a reachable configuration, or a latent defect that becomes live as soon as a stated limit is lifted. |
+| **Low** | Cosmetic, documentation, or repository-hygiene problems. |
+
+## Summary
+
+| Area | Critical | High | Medium | Low | Total |
+|------|---------:|-----:|-------:|----:|------:|
+| A — Verdict integrity | 0 | 0 | 2 | 1 | 3 |
+| B — Golden values and `cpu.values` | 0 | 0 | 1 | 1 | 2 |
+| C — Memory and resource handling | 0 | 0 | 1 | 2 | 3 |
+| D — Concurrency | 0 | 0 | 0 | 0 | 0 |
+| E — Scheduling and timing | 0 | 0 | 1 | 0 | 1 |
+| F — Command-line parsing and output | 0 | 0 | 2 | 2 | 4 |
+| G — Topology and scaling | 0 | 1 | 0 | 0 | 1 |
+| H — Build configuration | 0 | 0 | 1 | 5 | 6 |
+| I — Vendored headers | 0 | 0 | 8 | 10 | 18 |
+| J — Job kernels | 0 | 0 | 1 | 1 | 2 |
+| K — Documentation and localisation | 0 | 0 | 1 | 11 | 12 |
+| L — Project process | 0 | 0 | 0 | 5 | 5 |
+| **Total** | **0** | **1** | **18** | **38** | **57** |
+
+No Critical finding remains: the false-pass and false-fail families of the previous audit are gone, and the
+one High entry is a start-up crash on a narrow class of old hardware rather than a wrong verdict. The Medium
+weight sits in the vendored headers (latent for PITC, live for any other client of those files) and in a
+handful of reachable configuration defects; the Low tail is documentation and hygiene.
+
+---
+
+## A. Verdict integrity — the tool's core claim
+
+### A1. `Evaluate()` reads and increments its lane index in one unsequenced expression — **Medium**
+
+`CPU.h:1160`: `if(value[2][thread].raw[index] != value[3][thread].raw[index++])`. The right operand modifies
+`index` while the left operand's subscript reads it, and the operands of `!=` are unsequenced (C++17 gave
+this expression no ordering), so the behaviour is formally undefined. `Evaluate` is the single verdict
+function: it grades every row of the results table (`CPU.cpp:1038–1051`) and gates `W`'s 65,536-iteration
+self-check (`CPU.h:1204`). A legal compilation that evaluates the right operand first compares expected lane
+*i+1* against observed lane *i* on every iteration — misaligned verdicts in both the test and the generation
+paths, plus a one-past-the-window read. Today's MSVC evaluates left-first and the verdicts are right, but
+nothing in the source guarantees it, and clang's `-Wunsequenced` flags exactly this pattern.
+**Fix:** move the increment out of the expression (`... != value[3][thread].raw[index]) return 1; ++index;`).
+
+### A2. The FPU job cycles compare doubles with a floating-point `!=`, not the bit compare the doctrine claims — **Low**
+
+`JobCycleFPU` (`CPU_jobs_standard.cpp:283`), `JobCycleMemFPU` (:301–316), `JobCycleALU_FPU` (:333) and
+`JobCycleMemALU_FPU` (:351–366) compare `fl64` results with `!=`, and `CPU_job_cycles.h:46–48` (echoed by
+`CLAUDE.md`) asserts all five units "answer the same question: are these two bit patterns identical". IEEE
+`!=` is a numeric predicate: `-0.0 != +0.0` is false, and two bit-identical NaNs compare unequal. Today the
+kernels can produce neither a zero nor a NaN as a *golden* value, so the predicate cannot misfire — but any
+future edit to the FP chain that lets one in silently reintroduces the A11 defect class in the FPU unit
+alone. **Fix:** compare through a `ui64` alias (`(ui64&)value[1][k].fpu != (ui64&)value[2][k].fpu`), which is
+what the doctrine says is happening.
+
+### A3. Cache-targeting options `I1`/`I2`/`I3` are parsed and displayed but implemented by nothing — **Medium** — *carried forward (old A13)*
+
+`CPU.cpp:167–175` parses the three cache letters into `procUnits` bits 5–7 and the banner (`CPU.cpp:899`)
+prints `CL1`/`CL2`/`CL3` for them, but no code reads those bits: dispatch masks with `0x1F`
+(`CPU_methods.h:29`), the arena switch masks with `0x01F` (`CPU.cpp:791`), and the cache sizes the topology
+walk files (`CPU.h:797–809`) have no consumer. The help text discloses "NOT YET IMPLEMENTED", but a saved
+results file still carries a banner naming `CL3` as part of the tested configuration. Unchanged from the
+previous audit.
+
+## B. Golden values and `cpu.values`
+
+### B1. The cross-unit ladder equivalence is verified by no code, though `CLAUDE.md` says `W` proves it — **Medium** — *supersedes old J6*
+
+Everything `cpu.values` promises about portability rests on `JobSSE`, `JobAVX2` and `JobAVX512` computing
+`JobFPU` element-wise, bit for bit (`RunGoldenLadder`, `CPU.h:351–370`). `ValidateKernelFamilies`
+(`CPU.h:278–296`) does not check that property: each `ValidateFamily*` derives its reference from *its own
+unit's* register kernel (`CPU_jobs_AVX512.cpp:286`, `CPU_jobs_SSE.cpp` and `CPU_jobs_AVX.cpp` likewise), so
+the eighteen kernels are held to their own width and never across widths — while `CLAUDE.md` states "`W`'s
+`ValidateKernelFamilies` is what proves the eighteen kernels still agree afterwards". Consequence: edit the
+FP arithmetic in one vector unit consistently across that unit's family and `W` passes and writes the file;
+every machine of a *different* vector width then computes a different `KernelFingerprint` and rejects the
+file with `-21` "generated by a different build" — the cross-width portability silently ceases to exist, no
+check names the drifted kernel, and the diagnostic blames the file. **Fix:** after `ValidateFamilyScalar`,
+run the probe seed's lanes through `JobFPU` per-lane and `memcmp` against `JobSSE` (and, where the CPU
+carries them, `JobAVX2`/`JobAVX512`) over the same lanes — the ladder equivalence tested directly, on the
+seed already in hand.
+
+### B2. `cpu.values` is written in place, shared for write, with no atomic replace — **Low**
+
+The `W` path opens `cpu.values` with `CreateFileW(..., GENERIC_WRITE, FILE_SHARE_WRITE, 0, CREATE_ALWAYS,
+...)` (`CPU.cpp:502`) and writes header and blocks directly. `FILE_SHARE_WRITE` admits a second concurrent
+writer (two `W` runs interleave), and a crash or Ctrl-C mid-write leaves a truncated file in place of any
+previous good one. The damage is bounded — the header hashes make the next read reject the remnant with
+`-21` rather than grade against it — but the previous good file is still lost. **Fix:** write to a temporary
+name and `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)`, and drop the share-write bit.
+
+## C. Memory and resource handling
+
+### C1. The `O` results file is truncated at open, then left empty and its handle leaked on six error exits — **Medium**
+
+`O[name]` opens the results file with `CREATE_ALWAYS` at `CPU.cpp:740` — destroying any previous file of
+that name — before the arena is sized, the memory pre-flight runs, or a thread is spawned. The error exits
+after it return without closing the handle or noting the file: `-18` at :821, `-17` at :828, :835 and :883,
+`-19` at :990 and :1006. Each leaves a zero-length (or BOM-only) file where the user's previous results
+stood, with no message saying the file was touched; a Ctrl-C during the run (no console handler exists) has
+the same effect. Example: `PITC.exe -1 Mc999999 O[results.txt]` fails the memory pre-flight with `-17` and
+silently replaces an existing `results.txt` with an empty file. **Fix:** open the file after the pre-flight
+checks, immediately before results are written — or close and delete it on every error return between :740
+and the write at :1087.
+
+### C2. `resArray.iter` is the one run-length allocation never checked for failure — **Low**
+
+`CPU.cpp:154`: `resArray.iter = zalloc1d64(si64, cfg.sys.vCoreCount);` — the arena (`CPU.cpp:833`) and the
+report buffer (`CPU.cpp:881`) both return `-17` on null, but a failed `iter` allocation proceeds to spawn
+threads, and every benchmark thread then writes through the null pointer (`CPU_methods.h:160`). The
+allocation is a few KiB, so the trigger is remote; the asymmetry against the codebase's own rule is the
+defect.
+
+### C3. `wstrOutput` is allocated with `zalloc64` and never freed — **Low**
+
+The report buffer (`CPU.cpp:879`, up to ~1 MiB at 512 threads) has no matching `mfree` on any path — not at
+the normal `return 0` nor on the later error returns. GCS rule p2 mandates a matching free for every aligned
+allocation, and the old C13 entry moved the arena and `iter` frees into `~RESULTS_ARRAYS` for exactly this
+reason. Reclaimed by process exit, so hygiene rather than a runtime defect.
+
+## D. Concurrency
+
+No findings. The completion bitmap and its four polls, the interlocked byte-wide accesses from both sides,
+the suspended-create → `SetThreadGroupAffinity` → resume ordering, the join and abort paths, `generateError`
+ordering, and the per-thread jitter generator were each re-reviewed and survived adversarial verification.
+
+## E. Scheduling and timing
+
+### E1. The round-robin start offset is neither folded down nor clamped, so late threads idle past `endTics` and are graded on a single forced job cycle — **Medium**
+
+`CPU_methods.h:53–54` offsets thread *n*'s `startTics` by *n* whole cycles with no fold-down — unlike the
+staggered arm directly below it, whose ramp is folded until the first window fits the run (the E3 fix) — and
+the initial `PulseWaitUntil(pulseTimer, startTics)` at :114 is not clamped to `endTics`. Whenever
+`threadCount × cycleTics` exceeds the test duration, late threads wait out their entire offset *after* the
+run has ended, execute exactly the one forced job cycle, and `wmain` waits for all of it. Example:
+`Ia Sr Tft60[15000]15000 Ua` on 16 virtual cores — cycle 30 s, so thread 15's first window opens at 450 s
+while the run ends at ~62 s: the "60-second" run takes ~7.5 minutes and rows for threads 3–15 grade silicon
+exercised by one job cycle. This contradicts the documented invariants "no idle phase may end after the run
+does" and "the only overshoot left is one job cycle". **Fix:** fold the offset the way the staggered arm
+folds its ramp (threads share slots when the run is too short), or at minimum clamp the initial wait to
+`min(startTics, endTics)` so a late thread runs its forced cycle at the deadline instead of long after it.
+
+## F. Command-line parsing and output
+
+### F1. The `M` option's per-argument reset clears `allocMem[0]` but never `allocMem[1]`, so `Mn8 Ms8` is refused while `Ms8 Mn8` runs — **Medium**
+
+Every `M` argument begins with `cfg.memConfig = 0; cfg.allocMem[0] = 0;` (`CPU.cpp:225–226`) and nothing —
+not this reset, not `B` (:157–158), not the preset preamble (:545–546) — ever clears `allocMem[1]`. Giving
+the two per-class sizes as two arguments therefore composes in one order only: `Mn8 Ms8` ends with
+`{0, 8MB}` and the per-class record check (:819) refuses the run with `-18` and the misleading message
+"Only 0 bytes of memory per thread", while `Ms8 Mn8` and the single-argument `Mn8s8` both run. The help text
+is violated twice over: "where two of them set the same property, the last one wins" (`en-GB.h:43` — these
+set *different* properties, yet one erases the other), and "'N' and 'S' each cover one class only: where the
+CPU has cores of both, give both" (`en-GB.h:56` — the natural spelling of "give both" is the one refused).
+**Fix:** reset both entries, or reset neither — `en-GB.h:44` documents only `B` and the presets as resetting
+the memory configuration, so dropping the reset is the spelling that matches the documentation.
+
+### F2. `ParseDecimal` is locale-dependent: every documented decimal spelling is rejected on comma-decimal locales — **Medium** — *needs confirmation on a real Windows system*
+
+`wmain` installs the user's regional locale (`setlocale(LC_ALL, "")`, `CPU.cpp:115`) before parsing, and
+`ParseDecimal` reads its value with a bare `wcstod` (`CPU.h:1050`), whose decimal-point character follows
+`LC_NUMERIC`. On any system using a decimal comma (most of Europe and Latin America), `wcstod` stops at the
+`.` in every documented spelling — `Tct5.0`, `Tfd1.0t12.5[100]2400`, `d10.0` — the parse succeeds with the
+truncated integer part, the option loop's `++j` lands on the `.`, and the `T` option's `default` arm rejects
+the whole command line with `-25` ("Unrecognised '.' option"). The failure is loud, but the documented option
+grammar does not work at all on those machines, and `Tt12,5` parses there while failing on `en-US` — the same
+command line means different things per machine. `ParseWholeNumber` (`wcstoll`) is unaffected.
+**Fix:** parse with an invariant locale — `_create_locale(LC_NUMERIC, "C")` + `_wcstod_l`.
+
+### F3. Numeric output is locale-formatted, so results files are written with locale decimal separators — **Low**
+
+The complement of F2: the same `setlocale` call governs every `%f` conversion the program performs — the
+banner's duration (`wstrInterface[5]`), and the observed/expected doubles `Failed()` prints
+(`CPU.cpp:72–88`). On a comma-decimal system a saved results file and every failure report print `1,234567`
+where the documentation and any parsing consumer expect `1.234567`. **Fix:** format through the same
+invariant locale as F2, or confine `setlocale` to the console code page it was installed for.
+
+### F4. Byte and wide output are mixed on one stream — **Low** — *benign under the MSVC CRT*
+
+`GenerateValues` prints its progress dots with `printf(".")` (`CPU.h:1218`), `ComputationPulse` likewise
+(`CPU_methods.h:125`), and `CPU.cpp` mixes `printf("\n")` (:886, :933, :1019) between `wprintf` calls on the
+same `stdout`. C and C++ forbid byte I/O on a wide-oriented stream (and vice versa); the code works because
+the MSVC CRT deliberately does not implement stream orientation. Formally nonportable, and the first thing to
+break under any other runtime.
+
+## G. Topology and scaling
+
+### G1. `POPCNT` executes unconditionally in the SSE2-baseline path, crashing pre-Nehalem x64 CPUs at startup — **High** — *rests on winnt.h's macro definition; confirm against a real build*
+
+`WalkTopology` counts a core's virtual cores with `PopulationCount64` (`CPU.h:735`), and the thread-count
+loop does the same (`CPU.cpp:725–726`). On x64 MSVC `PopulationCount64` is winnt.h's macro for `__popcnt64`,
+which always emits the `POPCNT` instruction — there is no `/arch` gate on it. `EnumerateTopology` is the
+first thing `wmain` calls, so on an x64 CPU predating POPCNT (any Core 2 including Penryn, early
+Athlon 64 X2) every invocation — including the bare help screen — dies with an illegal-instruction exception
+before printing anything. These are exactly the CPUs the codebase pledges to support: the scalar unit "has to
+run on any x64 CPU", `ThreadsRunningScalar` exists as the sub-SSE4.1 baseline, and the old D4 fix was
+specifically about not executing an unsupported instruction on "a Core 2 or an early Athlon 64 X2 before any
+test began". This reintroduces the same failure class one call earlier. **Fix:** a branchless software
+popcount (the 0x5555/0x3333/0x0F0F fold) beside `LowestSetBit64`/`HighestSetBit64`, which are already
+deliberately intrinsic-free; three call sites, none hot.
+
+## H. Build configuration
+
+### H1. `CPU_build.h`'s `/fp:strict` guard exempts clang-cl, the build route it exists to police — **Medium**
+
+The guard is `#if defined(_MSC_VER) && !defined(__clang__) && !defined(_M_FP_STRICT)` (`CPU_build.h:35`).
+clang-cl defines both `_MSC_VER` and `__clang__`, so it is exempt from the `#error` — yet a build made
+outside `CPU.vcxproj` is precisely what the guard says it exists to catch. clang also defines none of the
+`_M_FP_*` macros, so `VALUES_FP_MODEL` is 0 (:48–49) for *every* clang FP mode: two clang-cl builds under
+`/fp:fast` and `/fp:precise` share a `buildID` and will exchange `cpu.values` files whose arithmetic rounds
+differently — the false-`!Fail!` class the H2 fix exists to prevent, reachable through one unguarded
+toolchain. **Fix:** either drop the `__clang__` exemption (clang-cl models `/fp:strict` and could satisfy a
+suitable check) or `#error` outright on `__clang__` until the golden values are validated under it.
+
+### H2. Machine-specific `D:\Programming\include` in both `IncludePath`s; six vendored headers invisible to the project — **Low** — *carried forward (old H8)*
+
+`CPU.vcxproj:49` and `:53` still append the author's local include path, and the six vendored headers remain
+absent from the `ClInclude` list (:126–133) and from `CPU.vcxproj.filters`. A clean clone builds only
+because `cl` silently ignores the nonexistent directory and quoted includes resolve to the repo copies
+first; any future angle-bracket include would resolve against a path that exists on one machine.
+
+### H3. The AVX2 unit's `#error` guard enforces only a lower ISA bound — **Low**
+
+`CPU_jobs_AVX.cpp:19–21` rejects a build *below* AVX2 but not above it: `/arch:AVX512` also defines
+`__AVX2__`, so raising this one file's per-file setting passes the guard while the unit's compiler-generated
+code becomes EVEX-encoded — and `wmain` dispatches these kernels to any CPU reporting plain AVX2. The scalar
+unit's H1 guard is two-sided for exactly this reason. **Fix:** add `#if defined(__AVX512F__) #error` beside
+the existing guard.
+
+### H4. `WholeProgramOptimization` is still present (set `false`) in two places `CLAUDE.md` says it is gone from — **Low**
+
+`CLAUDE.md` states the setting "is gone and should not come back"; it is present as an explicit
+`<WholeProgramOptimization>false</WholeProgramOptimization>` at `CPU.vcxproj:33` (Configuration group) and
+`:96` (ClCompile). Functionally equivalent to absent — `false` emits neither `/GL` nor `/LTCG` — but the
+document and the XML disagree, and an editor seeing an explicit `false` may take it for a toggled choice
+rather than a removal.
+
+### H5. The global `EnableEnhancedInstructionSet=StreamingSIMDExtensions2` is inert on x64 — **Low** — *unverified: needs a real MSVC build*
+
+On x64, MSVC accepts only `/arch:AVX*`; the SSE2 setting (`CPU.vcxproj:65`, `:86`) maps to no switch, so
+what actually keeps AVX-512 out of the baseline units is the *absence* of a higher per-file `/arch`, not
+this setting's presence — `CLAUDE.md`'s build section attributes the isolation to it. Harmless either way;
+worth confirming against the build log and rewording the documentation.
+
+### H6. `OmitFramePointers=true` maps to `/Oy`, an x86-only switch — **Low** — *unverified: needs a real MSVC build*
+
+`CPU.vcxproj:90`. The x64 compiler rejects `/Oy` with warning D9002 ("ignoring unknown option") on current
+toolsets. Cosmetic if so — the switch is ignored — but the project file should not carry a setting the
+target platform cannot express.
+
+## I. Vendored headers
+
+These six files are copies of the author's general-purpose library. Defects here are latent for PITC unless
+noted — but they are live for any other client, and `CPU.h` includes two of them into every translation unit.
+
+### I1. The pre-AVX2 `_mm_abs_pd` fallback expands to an AVX-512VL instruction — **Medium** — *carried forward (old I1)*
+
+`SIMD management.h:25`, inside `#if !defined(__FMA__) && !defined(__AVX2__)` — active precisely in units
+compiled *below* AVX2 — defines `_mm_abs_pd` as `(fl64x2&)_mm_and_epi64(...)`, and `_mm_and_epi64` is
+AVX-512VL+F; the companion `_mm256_abs_pd` (:27) likewise puts VEX opcodes behind an SSE2-era guard. All
+five PITC units preprocess this header. The two kernel units that use the macros protect themselves with
+`#undef` (`CPU_jobs_SSE.cpp:30`, `CPU_jobs_AVX.cpp:37`), but a future caller in `CPU.cpp` or
+`CPU_jobs_standard.cpp` would embed an EVEX `vpandq` in baseline code. The guard belongs upstream.
+
+### I2. `#ifndef` guards cannot detect intrinsic functions, so the FMA fallback macros always win — **Medium** — *carried forward (old I2)*
+
+`SIMD management.h:29–47`: `_mm_fmadd_ps` and friends are *functions* declared by `<immintrin.h>`, never
+macros, so every `#ifndef` is true and the fallbacks are defined wherever the enclosing below-AVX2 block is
+active. Code in a baseline unit calling `_mm_fmadd_ps` expecting the single-rounded contract silently gets
+the two-rounding split form. PITC calls none of them today.
+
+### I3. `CLASS_TIMER::dGrandTotal` accumulates the running total, not the elapsed increment — **Medium** — *carried forward (old I3)*
+
+`class_timers.h:60`: `Update()` executes `dGrandTotal += (dTotal += dElapsed)`, so `dGrandTotal` grows
+quadratically with update count (1+2+…+n seconds after n one-second updates). `CLASS_TIMERS` repeats the
+pattern (:170, :186). Latent for PITC — `wmain` calls `timer.Update()` once and reads only `siFrequency` and
+`siCurrentTics`.
+
+### I4. `CLASS_TIMERS::Update` double-counts elapsed time; `UpdateAll` never advances `siPrevTics` — **Medium** — *carried forward (old I4)*
+
+`class_timers.h:169–170` runs the identical `dElapsed` computation twice back to back, so scaled totals
+advance at twice real time; `UpdateAll` (:175–190) has the same doubled pair, assigns `siCurrentTics` twice,
+and never writes `siPrevTics`, so its `siElapsedTics` measures from zero — roughly the machine's QPC epoch —
+on every call. PITC never instantiates `CLASS_TIMERS`.
+
+### I5. `CLASS_TIMER::Reinitialise` leaves six members uninitialised, and the `dScale` clamp discards the acceleration — **Medium** — *carried forward (old I6)*
+
+`class_timers.h:46–53` never assigns `dGrandTotal`, `dScaleAccel`, `_dScaleAccelTemp`, `siPrevTics`,
+`siElapsedTics` or `siPauseTics`, so a non-static `CLASS_TIMER` reads indeterminate values in its first
+`Update` (`dScale += dScaleAccel` on garbage). Sharper than previously recorded: :59 reads
+`(dScale += dScaleAccel) = clamp(...)` — under C++17 sequencing the assignment overwrites the compound
+result, so the acceleration is added and then unconditionally discarded. PITC's one instance is a
+zero-initialised global that never uses scaling.
+
+### I6. `GetTotalTimeUnscaled` reports QPC-epoch uptime: `siTotalTics` is seeded with `siOriginTics` instead of 0 — **Medium** — *new; same family as I3/I4*
+
+`class_timers.h:51`: `Reinitialise` seeds `siTotalTics` with the raw counter reading while its
+floating-point twin `dTotal` is seeded 0.0, so `siTotalTics` permanently equals `siCurrentTics` and
+`GetTotalTimeUnscaled` (:105) returns time since boot epoch, disagreeing with `GetTotalTimeScaled` by the
+machine's uptime. Latent for PITC.
+
+### I7. `malloc` is overloaded in the global namespace — **Low** — *carried forward (old I7)*
+
+`memory management.h:214`: `inline ptrc malloc(csize_t, csize_t)` adds an overload of a reserved name —
+formally undefined, tolerated by MSVC beside the CRT declaration. Reachable in every PITC run through the
+`malloc64` macro.
+
+### I8. `min` and `max` are lowercase function-like macros in a public header — **Low** — *carried forward (old I8)*
+
+`class_timers.h:16, :20`. Every PITC unit inherits them via `CPU.h`; `CPU.cpp:209` relies on the `min`
+macro. Any later `std::min`/`std::max` use, or an `<algorithm>` include, collides.
+
+### I9. `va_arg` with a const-qualified type — **Low** — *carried forward (old I9)*
+
+`memory management.h:370`: `mdealloc_` steps with `va_arg(val, ptrc)` where `ptrc` is `void *const` —
+formally UB, benign on MSVC, and executed on every PITC exit path that frees the arena or the config
+bitmaps.
+
+### I10. `ThreadsRunningAVX512` executes AVX2 instructions, contradicting its own comment and the design it justifies — **Low** — *carried forward (old I10)*
+
+`CPU_jobs_AVX512.cpp:269–273` delegates to `AllFalse(cui512&, cui512&)` (`common functions.h:185–188`),
+implemented as two `_mm256_testz_si256` calls — so the poll selected because the CPU has AVX-512 issues only
+AVX2 `vptest`s. Functionally correct (the two 256-bit tests cover all 64 bytes); the contradiction is with
+the comment above it, `CPU.h:475–478`, and `CLAUDE.md`, all of which describe a genuinely 512-bit read.
+
+### I11. Every `#ifdef __AVX512__` fork is dead code, and the `/arch`-forked inline functions are a live multi-TU ODR hazard — **Medium** — *carried forward (old I11)*
+
+Eleven conditionals in `memory management.h` (:176, :385, :410, :422, :447, :486, :538, :584, :651, :667,
+:705) fork on `__AVX512__`, a macro no compiler defines — MSVC's is `__AVX512F__` — so the 512-bit arms
+(`Copy`, both `Copy64`s, `Stream64`, `mzero`, `mset`, `zalloc64`'s wide path) are unreachable even in the
+AVX-512 unit. New since the program grew five translation units: these `inline` functions now compile to
+*different bodies* per unit (the below-AVX2 units get the SSE arm, the AVX units the AVX arm), so a future
+call to the same function from two units is an ODR violation where the linker keeps whichever body it saw
+first.
+
+### I12. Latent defects in the parts of `memory management.h` PITC does not call — **Medium** — *carried forward (old I12)*
+
+Still present, none reachable from PITC's live call set: `Stream()` (:722–727) rounds the byte count *up*
+before delegating, overrunning source and destination by up to 63 bytes; the volatile `Copy64` (:666–679)
+ceils likewise while the const overload floors; `salloc` performs stores wider than the alignment it was
+asked for; the `DATA_TRACKING` accounting block does not compile if enabled; `mfree`'s arity/terminator
+convention is fragile. Flagged so an upstream sync does not import a caller.
+
+### I13. Assorted defects in `typedefs.h` and `vector structures.h` — **Low** — *carried forward (old I13)*
+
+All bullets remain at current lines: `al1` is `__declspec(align(2))` (`typedefs.h:36`), the lowercase object
+macro `vol` (:44) leaks into every unit, eleven derived `fl80` aliases reference a base alias that does not
+exist, and several unions in `vector structures.h` declare member arrays narrower than their siblings
+(`AVX8Ds64.ymm[1]`, `AVX64Ds8.vector[9]` read past the declared member).
+
+### I14. Inline changelog blocks remain in two headers — **Low** — *carried forward (old I14)*
+
+`typedefs.h:20–29` (self-annotated "&lt;- Move to CHANGELOG.md") and `vector structures.h:5–7`; GCS c1
+forbids history in prologs and the CHANGELOG.md it should migrate to still does not exist (L1).
+
+### I15. `SIMD management.h` is not self-contained — **Low**
+
+Its only include is `<immintrin.h>` (:11), yet its function signature uses `fl32x4` (:14) and its macros use
+`fl64x2`/`fl64x4`/`si128` (:25–27) — aliases from `typedefs.h`. It compiles in PITC only because
+`common functions.h` happens to include `typedefs.h` first; included in isolation it is a build blocker two
+files removed from its cause.
+
+### I16. `refp1a1` expands to a cast to an array type, ill-formed on any use — **Low**
+
+`typedefs.h:577`: the macro produces a C-style cast whose type-id is an array type, which C++ forbids —
+every expansion is a compile error on every compiler, unlike its `defpa`/`refpa` companions. No PITC file
+uses it.
+
+### I17. The unit-local `_mm_abs_pd` binds a non-const reference to an intrinsic rvalue — **Low** — *carried forward (old I5)*
+
+`CPU_jobs_SSE.cpp:31` (and the upstream original, `SIMD management.h:25`): `(fl64x2&)_mm_set1_epi64x(...)`
+reinterpret-casts a prvalue to a non-const lvalue reference — ill-formed in standard C++, accepted only as
+an MSVC extension (C4238) despite both configurations setting `ConformanceMode`. clang-cl rejects it
+outright, at every kernel line.
+
+### I18. `CLASS_TIMERS` never frees its `salloc`'d timer table — **Low**
+
+`class_timers.h:121`: the 2 KB `TIMER_VARIABLES[MAX_TIMERS]` block is allocated by an in-class initialiser
+and the struct has no destructor — contrary to GCS p2 and the repo's own destructor-owned-pointer pattern
+(`GLOBAL_CFG`, `RESULTS_ARRAYS`). PITC never instantiates `CLASS_TIMERS`.
+
+## J. Job kernels
+
+### J1. The "SSE4.1" unit exercises no SSE4.1 arithmetic, and the "AVX2" unit no AVX2 arithmetic — **Medium** — *carried forward (old J3)*
+
+`JobSSE`/`JobALU_SSE`/`JobMemSSE`/`JobMemALU_SSE` (`CPU_jobs_SSE.cpp:48–247`) use only
+`_mm_set1_pd/div/sqrt/add/sub/mul/and/set1_epi64x` — all SSE2. The unit's sole SSE4.1 instruction is `PTEST`
+in `ResultsMatch` (:261) and the completion poll — the comparison, not the computation — yet an SSE4.1-less
+CPU is refused the whole unit with `-11`. Likewise the AVX2 unit's kernels use only `_mm256_*_pd` forms that
+are AVX1; the AVX2-ness is the compiler's encoding, not the arithmetic under test. A user running `Is` or
+`Iv` to exercise the instruction class named on the tin is testing less than the name says. Renaming or
+extending the kernels both change the golden values, so this stays a documentation-versus-substance defect
+until a `cpu.values` version bump is scheduled anyway.
+
+### J2. The scalar FPU kernels call bare `abs()` on doubles — **Low** — *carried forward (old J5)*
+
+`CPU_jobs_standard.cpp:66–69` and every FP chain in that unit rely on `<cmath>` injecting the floating-point
+`abs` overloads into the global namespace — guaranteed by MSVC, not by the C standard, where global `abs` is
+`int abs(int)`. An include reshuffle that dropped the overload would truncate every FPU intermediate to an
+integer and silently change every golden value. One `std::` qualification (or `fabs`) per site removes the
+dependency; note the change is spelling-only under MSVC today, so `cpu.values` is unaffected.
+
+## K. Documentation and localisation
+
+### K1. Preset 8/9 "Synchronised" labels are swapped in the help text and README — **Medium** — *carried forward (old K2)*
+
+`en-GB.h:86–87` and `README.md:61–62` call preset 8 "Synchronised staggered" and preset 9 plain "Staggered",
+but the code sets preset 8 to `0x024` — staggered fixed pulse, *no* time-sync bit — and preset 9 to `0x02C`,
+which carries it (`CPU.cpp:593, :600`; the inline comments there agree with the code). A user choosing `-8`
+for the synchronised test gets the unsynchronised one and vice versa.
+
+### K2. README omits the mandatory `W` first step, the exit codes, and any build instructions — **Low** — *carried forward (old K6)*
+
+`README.md` never states that `PITC.exe W` must run before any test (without `cpu.values` every test returns
+`-1`), carries no return-value table, and gives no build line, toolchain version or x64-only note for a repo
+with no `.sln` and no CI.
+
+### K3. Version 1.0.2 exists only in prose, and the README fronts a benchmark screenshot from before the score rescale — **Low** — *carried forward (old K7)*
+
+Three hand-maintained prose sites (`README.md:1`, `en-GB.h:12`, `CLAUDE.md`), no `VERSIONINFO` resource, and
+the number has not moved across ~95 behavioural fixes — including the E12 rewrite that multiplied the KUPS
+scale by ~4.5×, which makes the 5950X screenshot at `README.md:69–70` misleading for anyone comparing a
+current run against it.
+
+### K4. Typographical errors persist in the user-facing text — **Low** — *carried forward (old K8)*
+
+"Successul completion" (`en-GB.h:15`), "intruction" (`en-GB.h:48` and `README.md:14`), and the preset-7
+comment "30 minute duration. 10 minute duration" (`CPU.cpp:586`), of which the code implements the first.
+
+### K5. Failure-report and results-table strings remain outside the translation tables — **Low** — *carried forward (old K9)*
+
+Beyond the disclosed `wstrUnitsCPU`/`wstrSyncCPU`/`wstrPass`, the per-unit value formats inside `Failed()`
+(`CPU.cpp:72–91`) and the results-table row labels and separators (`CPU.cpp:1029–1051`) are literals the `L`
+mechanism cannot reach — the one output a failing CPU produces is only partly translatable.
+
+### K6. `translations.h` cannot express a second language without code edits, and the console path would garble one — **Low** — *carried forward (old K10)*
+
+Adding a language still means writing `<code>.h`, editing `translations.h` and extending the `L` case — and
+the help text's "Recognises ISO 639-1 language codes" oversells a hard-coded en-GB/en-US comparison whose
+example is a BCP-47 tag. Additionally, no `_setmode(_O_U16TEXT)`/`SetConsoleOutputCP` call exists anywhere,
+so `wprintf` output converts through the ANSI code page: pure-ASCII English survives, but any future
+translation with characters outside the console code page will print mojibake through the very mechanism
+built to carry it.
+
+### K7. The no-option defaults are documented nowhere — **Low** — *carried forward (old K12)*
+
+15-minute duration, ALU+FPU, parallel constant execution, 2000 ms start-up delay, and the 100 ms/900 ms
+pulse a later mode change inherits (`CPU.cpp:139–142`, `CPU.h:83–85`) appear in no document; only the preset
+defaults are stated.
+
+### K8. GCS v1.1.4 MUST-rules the repository reviews against are violated in the tree — **Low** — *carried forward (old K13)*
+
+Five lines exceed the 180-column hard cap (`CPU.cpp:74, :1038, :1046, :1049, :1051`); every PITC-proper file
+keeps the boxed prolog instead of the r17 template; the `JobCycle` dispatch table is lowercase against r12's
+UPPER_SNAKE for global tables.
+
+### K9. Dead configuration declarations misdescribe the program — **Low** — *carried forward (old K14)*
+
+`GLOBAL_CFG`'s in-class defaults `procUnits = 0x04` / `procSync = 0x02A` (`CPU.h:86–87`) are overwritten
+unconditionally by `CPU.cpp:140–141` before any argument is read, so the struct lies about the defaults; and
+four `THREAD_CFG` fields (`packetSizeRAM`, `maxTics`, `inactiveTime`, `records32`) are written in the spawn
+loop and read by nothing.
+
+### K10. `CLAUDE.md` says exit code `-21` is shared by five messages; the code has four — **Low**
+
+Exactly four `return -21` sites exist, printing `wstrMessage[26]`–`[29]` (`CPU.cpp:682, :690, :700, :717`).
+A maintainer auditing the table against the document hunts for a fifth rejection path that does not exist.
+
+### K11. The help claims every efficiency core of a hybrid CPU carries a single virtual core — **Low**
+
+`en-GB.h:74` / `README.md:47`: "A physical core carrying a single virtual core is kept by both; on a hybrid
+CPU that is every efficiency core." True of Intel hybrids only; the G9 rework explicitly supports parts
+whose efficiency class carries SMT (`CPU.h:951–953` names Zen 4 + Zen 4c). On such a part `Ue` keeps one
+thread per physical efficiency core — half that class's virtual cores — against the documented expectation.
+
+### K12. `Ut`'s 64-characters-per-group numbering is documented nowhere users look — **Low**
+
+`Ut` character *n* is deliberately bit `n & 63` of group `n >> 6` (`CPU.h:1128–1134`; the design is
+documented in the source and `CLAUDE.md`). But `en-GB.h:69` and `README.md:42` present `Ut` as a plain
+binary sequence, and the banner prints each group's row only to its highest core — so on a machine whose
+groups hold fewer than 64 virtual cores (Windows commonly splits large machines evenly), nothing tells the
+user that characters for a group's unpopulated high bits are dead padding they must write anyway to reach
+the next group.
+
+## L. Project process
+
+Everything here is mandated by `CONTRIBUTING.md` → `GDC_GCS_v1_1_4.md` and remains absent, unchanged from
+the previous audit.
+
+| # | Missing | Required by | Severity |
+|---|---------|-------------|----------|
+| **L1** | `CHANGELOG.md` at the repository root — ~95 behavioural fixes, a golden-file format change and a 4.5× benchmark rescale are recorded nowhere a user will look | GCS c2 | Low |
+| **L2** | `.clang-format` and `.editorconfig` (GCS `tc1`, `tc2`) — which is how the five over-180-column lines of K8 entered | GCS | Low |
+| **L3** | Pre-commit hooks and CI gates — a codespell hook alone would have caught the K4 typos; a clean-clone build job would prove the vendored headers sufficient (H2) | GCS en1/en2 | Low |
+| **L4** | Any automated test — no `tests/` directory, no test target, for a program whose correctness story is 18 hand-duplicated kernels and a golden-file format | GCS; `common functions.h:10` to-do | Low |
+| **L5** | `.gitignore` — `x64/`, `*.obj`, `*.pdb`, `*.map` and `cpu.values` are all offered for commit, and a committed `cpu.values` is machine- and revision-specific | — | Low |
+
+---
+
+## Appendix A — candidate findings rejected under verification
+
+Recorded so they are not rediscovered. Both were submitted as defects and refuted against the source and its
+design documentation; each leaves only the small documentation residue noted.
+
+**`Ut` "assumes 64 cores per processor group".** The mechanical observation is accurate — character *n* maps
+to bit `n & 63` of group `n >> 6`, so on groups smaller than 64 some characters are dead — but this is the
+explicitly documented, deliberate design (`CPU.h:1086–1094`, `CLAUDE.md`'s parsing rules), chosen over
+ordinal packing in the same function that implements ordinal walking for `Uc`. The surviving residue is the
+user-documentation gap recorded as K12.
+
+**"`KernelFingerprint` covers only 5 of the 18 kernels, so a `JobMem*` edit does not invalidate an existing
+`cpu.values`".** Factually accurate but not a missing check: the file's contents depend only on the five
+register-resident kernels, so after a `JobMem*`/`JobALU_*` edit the existing file is *not* stale — the
+drifted kernel is in the binary, which no file-side fingerprint can detect, and `W`'s `-22` family check is
+the layer that owns it (`CPU.cpp:449–452` states the division of labour verbatim). The genuine gap in that
+layer — no check of the *cross-unit* ladder equivalence — is recorded as B1.
+
+## Appendix B — command lines that misbehave today
+
+| Command line | Machine | Behaviour |
+|---|---|---|
+| any, including none | x64 CPU without POPCNT (Core 2, early Athlon 64 X2) | Illegal-instruction crash before any output (G1) |
+| `Mn8 Ms8` | any hybrid or two-class machine | Refused `-18` "Only 0 bytes of memory per thread"; `Ms8 Mn8` runs (F1) |
+| `Ia Tct5.0 Ue` (the documented smoke test) | Windows set to a comma-decimal locale | Refused `-25` "Unrecognised '.' option" (F2) |
+| `Ia Sr Tft60[15000]15000 Ua` | 16+ virtual cores | "60-second" run takes ~7.5 minutes; threads 3+ graded on one job cycle (E1) |
+| `-1 Mc999999 O[results.txt]` | any, with an existing `results.txt` | Exits `-17` having silently truncated the previous results file (C1) |
+| `-8` | any | Runs the *unsynchronised* staggered preset the help text calls synchronised (K1) |
