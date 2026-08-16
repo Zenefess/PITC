@@ -1,10 +1,6 @@
 /************************************************************
  * File: vector structures.h            Created: 2022/12/05 *
- *                                Last modified: 2025/09/27 *
- *                                                          *
- * Notes: 2023/04/27: Added constant vector typedefs.       *
- *        2024/04/04: Added support for 24-bit integers.    *
- *        2024/05/18: Added AVX512 support.                 *
+ *                                Last modified: 2026/08/16 *
  *                                                          *
  * MIT license.            Copyright (c) David William Bull *
  ************************************************************/
@@ -778,8 +774,8 @@ union AVX8Du64 {
 
 union AVX8Ds64 {
    __m512i  zmm;
-   __m256i  ymm;
-   __m128i  xmm[2];
+   __m256i  ymm[2];
+   __m128i  xmm[4];
    VEC8Ds64 vector;
    si64     _si64[8];
    struct {
@@ -861,7 +857,7 @@ union AVX64Du8 {
    __m512i zmm;
    __m256i ymm[2];
    __m128i xmm[4];
-   VEC4Du8 vector[8];
+   VEC4Du8 vector[16];
    ui8     _ui8[64];
 };
 
@@ -869,7 +865,7 @@ union AVX64Ds8 {
    __m512i zmm;
    __m256i ymm[2];
    __m128i xmm[4];
-   VEC4Ds8 vector[8];
+   VEC4Ds8 vector[16];
    si8     _si8[64];
 };
 

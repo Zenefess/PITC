@@ -16,24 +16,13 @@
  * Reviewers: David William Bull
  * License: MIT  Copyright: David William Bull
  */
-
-/******************************************************CHANGELOG***  <- Move to CHANGELOG.md
- * 2023-05-23: Added SSE & AVX data types                         *
- * 2023-06-05: Added ui24 data type                               *
- * 2024-05-02: Added csize_t data type                            *
- * 2024-05-11: Added all (~2) void pointer combinations           *
- * 2024-05-13: Moved ui24 data type to separate file              *
- * 2024-05-18: Added AVX512 vector types                          *
- * 2025-02-10: Added threadfunc type                              *
- * 2025-02-19: Added ptr to const ptr to const types              *
- ******************************************************************/
 #pragma once
 
 #include <immintrin.h>
 
 #define _COMMON_TYPES_
 
-#define al1  __declspec(align(2))
+#define al1  __declspec(align(1))
 #define al2  __declspec(align(2))
 #define al4  __declspec(align(4))
 #define al8  __declspec(align(8))
@@ -73,6 +62,7 @@ typedef          __m512i si512;
 typedef       __bfloat16 fl16;
 typedef          float   fl32;
 typedef          double  fl64;
+typedef     long double  fl80;
 typedef          __m128  fl32x4;
 typedef          __m256  fl32x8;
 typedef          __m128d fl64x2;
