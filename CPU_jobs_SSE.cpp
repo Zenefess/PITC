@@ -43,7 +43,7 @@
 // The definition below is the one this unit has always used, and the #undef is what keeps it that way:
 // _mm_abs_pd is a bare #define there, so an #ifndef alone would silently inherit the AVX-512 form
 #undef  _mm_abs_pd
-#define _mm_abs_pd(input) _mm_and_pd((fl64x2&)_mm_set1_epi64x(0x07FFFFFFFFFFFFFFF), (input))
+#define _mm_abs_pd(input) _mm_and_pd(_mm_castsi128_pd(_mm_set1_epi64x(0x07FFFFFFFFFFFFFFF)), (input))
 
 // ISSUES.MD J1/J2: the shift alternates direction across the loop -- the predicate was 'i < 32' against a
 // counter that never exceeds 15, so the right-shift arm was unreachable and an entire instruction class
