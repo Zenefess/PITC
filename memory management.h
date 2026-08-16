@@ -1,29 +1,18 @@
 /*
  * File: memory management.h
- *
  * Version: v1.2
- *
  * Owner: David William Bull
- *
  * Created: 2008-12-08
- *
- * Last Modified: 2026-08-12
- *
+ * Last Modified: 2026-08-16
  * Description: Aligned allocators, pattern fill, zeroing, temporal and non-temporal copies, and interlocked transfers; optional allocation tracking.
- *
  * To Do: 1) Replace the retained #ifdef __AVX512__ forks with run-time CPUID dispatch per GCS a8; retire the pre-AVX fallback arms per a2.
  *        2) Unit-test the salloc, mset, and mzero tail paths and the Copy and Stream families.
  *        3) Benchmark the non-temporal Stream16/32/64 against temporal copies per bd1/bd2 before asserting a performance win.
  *        4) Unify the truncation semantics of the two Copy64 overloads (const floors, volatile ceils; divergence is documented but unresolved).
- *
  * Dependencies: windows.h, corecrt_malloc.h, typedefs.h, common functions.h, data tracking.h (DATA_TRACKING builds only)
- *
  * ISA: Scalar | SSE4.2 | AVX2 | AVX-512
- *
  * Thread-safety: Reentrant
- *
  * Reviewers: David William Bull
- *
  * License: MIT  Copyright: David William Bull
  */
 #pragma once
@@ -37,37 +26,37 @@
 
 #define _MEMORY_MANAGER_
 
-#define malloc1(byteCount)  malloc(byteCount, 1u)
-#define malloc2(byteCount)  malloc(byteCount, 2u)
-#define malloc4(byteCount)  malloc(byteCount, 4u)
-#define malloc8(byteCount)  malloc(byteCount, 8u)
-#define malloc16(byteCount) malloc(byteCount, 16u)
-#define malloc32(byteCount) malloc(byteCount, 32u)
-#define malloc64(byteCount) malloc(byteCount, 64u)
+#define malloc1(byteCount)  amalloc(byteCount, 1u)
+#define malloc2(byteCount)  amalloc(byteCount, 2u)
+#define malloc4(byteCount)  amalloc(byteCount, 4u)
+#define malloc8(byteCount)  amalloc(byteCount, 8u)
+#define malloc16(byteCount) amalloc(byteCount, 16u)
+#define malloc32(byteCount) amalloc(byteCount, 32u)
+#define malloc64(byteCount) amalloc(byteCount, 64u)
 
 // Declare 1-dimensional array at 16-byte boundary
 #define declare1d16(dataType, variableName, dim) \
-   dataType *const variableName = (dataType *)malloc(RoundUpToNearest16(sizeof(dataType) * (dim)), 16u)
+   dataType *const variableName = (dataType *)amalloc(RoundUpToNearest16(sizeof(dataType) * (dim)), 16u)
 
 // Declare 1-dimensional array at 32-byte boundary
 #define declare1d32(dataType, variableName, dim) \
-   dataType *const variableName = (dataType *)malloc(RoundUpToNearest32(sizeof(dataType) * (dim)), 32u)
+   dataType *const variableName = (dataType *)amalloc(RoundUpToNearest32(sizeof(dataType) * (dim)), 32u)
 
 // Declare 1-dimensional array at 64-byte boundary
 #define declare1d64(dataType, variableName, dim) \
-   dataType *const variableName = (dataType *)malloc(RoundUpToNearest64(sizeof(dataType) * (dim)), 64u)
+   dataType *const variableName = (dataType *)amalloc(RoundUpToNearest64(sizeof(dataType) * (dim)), 64u)
 
 // Declare 2-dimensional array at 16-byte boundary
 #define declare2d16(dataType, variableName, dim1, dim2) \
-   dataType (*const variableName)[dim2] = (dataType (*)[dim2])malloc(RoundUpToNearest16(sizeof(dataType) * ((dim1) * (dim2))), 16u)
+   dataType (*const variableName)[dim2] = (dataType (*)[dim2])amalloc(RoundUpToNearest16(sizeof(dataType) * ((dim1) * (dim2))), 16u)
 
 // Declare 2-dimensional array at 32-byte boundary
 #define declare2d32(dataType, variableName, dim1, dim2) \
-   dataType (*const variableName)[dim2] = (dataType (*)[dim2])malloc(RoundUpToNearest32(sizeof(dataType) * ((dim1) * (dim2))), 32u)
+   dataType (*const variableName)[dim2] = (dataType (*)[dim2])amalloc(RoundUpToNearest32(sizeof(dataType) * ((dim1) * (dim2))), 32u)
 
 // Declare 2-dimensional array at 64-byte boundary
 #define declare2d64(dataType, variableName, dim1, dim2) \
-   dataType (*const variableName)[dim2] = (dataType (*)[dim2])malloc(RoundUpToNearest64(sizeof(dataType) * ((dim1) * (dim2))), 64u)
+   dataType (*const variableName)[dim2] = (dataType (*)[dim2])amalloc(RoundUpToNearest64(sizeof(dataType) * ((dim1) * (dim2))), 64u)
 
 // Declare 1-dimensional array at 16-byte boundary, then zero contents
 #define declare1d16z(dataType, variableName, dim) \
@@ -211,7 +200,7 @@
 #endif
 
 // Allocate RAM at aligned boundary
-inline ptrc malloc(csize_t numBytes, csize_t alignment) {
+inline ptrc amalloc(csize_t numBytes, csize_t alignment) {
    ptrc pointer = _aligned_malloc(numBytes, alignment);
 #ifdef DATA_TRACKING
    if(pointer) MemTrack(pointer, numBytes);
