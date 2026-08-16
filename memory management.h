@@ -706,13 +706,13 @@ inline void Stream64(cptrc source, ptrc dest, cui64 byteCount) {
    _mm_sfence();
 }
 
-// (Non-temporally) Copy byteCount (rounded-up to the nearest 16/32/64) bytes of 128/256/512-bit-aligned data via SIMD instruction.
+// (Non-temporally) Copy byteCount (rounded-down to the nearest 16/32/64) bytes of 128/256/512-bit-aligned data via SIMD instruction.
 // If either source or dest is unaligned, standard copy is used.
 inline void Stream(cptrc source, ptrc dest, cui64 byteCount) {
         if(((ui64 &)source & 0x0Fu)  || ((ui64 &)dest & 0x0Fu))  Copy(source, dest, byteCount);
-   else if(((ui64 &)source & 0x010u) || ((ui64 &)dest & 0x010u)) Stream16(source, dest, RoundUpToNearest16(byteCount));
-   else if(((ui64 &)source & 0x020u) || ((ui64 &)dest & 0x020u)) Stream32(source, dest, RoundUpToNearest32(byteCount));
-   else                                                          Stream64(source, dest, RoundUpToNearest64(byteCount));
+   else if(((ui64 &)source & 0x010u) || ((ui64 &)dest & 0x010u)) Stream16(source, dest, RoundDownToNearest16(byteCount));
+   else if(((ui64 &)source & 0x020u) || ((ui64 &)dest & 0x020u)) Stream32(source, dest, RoundDownToNearest32(byteCount));
+   else                                                          Stream64(source, dest, RoundDownToNearest64(byteCount));
 }
 
 // Interlock copy byteCount (rounded-up to the nearest 8) bytes of data
