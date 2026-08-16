@@ -304,6 +304,19 @@ cui8 ValidateFamilyAVX2(cRESULTS &seed) {
 
    return 0;
 }
+
+// The AVX2 half of the golden ladder's cross-width equivalence: JobAVX2 against JobFPU, lane for lane. The
+// loads are unaligned because the probe is a scalar array of the caller's, and the comparison is one memcmp
+// over the whole set because a fl64x4 array is its lanes in memory order (ISSUES.MD B1)
+cui8 ValidateLadderAVX2(cfl64ptrc probe, cfl64ptrc reference) {
+   fl64x4 lane[LADDER_PROBE_LANES / 4];
+   ui8    k;
+
+   for(k = 0; k < LADDER_PROBE_LANES / 4; ++k) lane[k] = _mm256_loadu_pd(&probe[k * 4]);
+   for(k = 0; k < LADDER_PROBE_LANES / 4; ++k) JobAVX2(lane[k]);
+
+   return memcmp(lane, reference, sizeof(fl64) * LADDER_PROBE_LANES) ? ui8(KERNEL_NAME_LADDER + 1) : 0; // JobAVX2
+}
 //--- Job kernel cross-check ---//
 
 //--- Arena seeding ---//

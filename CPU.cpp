@@ -449,9 +449,17 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             // The values written below describe the five register-resident kernels only, so nothing in the
             // file would ever contradict a JobMem* or JobALU_* kernel that had drifted away from its
             // counterpart -- every memory-backed run would simply report the difference as a CPU fault.
-            // Prove the whole family agrees before generating anything (ISSUES.MD B5)
+            // Prove the whole family agrees before generating anything (ISSUES.MD B5).
+            // The same call now also holds each vector kernel to JobFPU lane for lane, because the file's
+            // readability on a CPU of another vector width rests on nothing else, and a drift there was
+            // reported to the next machine as a stale file rather than as the kernel that caused it (B1).
+            // The two disagreements are different diagnoses, so the table's ladder boundary selects between
+            // the two messages
             cui8 badKernel = ValidateKernelFamilies();
-            if(badKernel) { wprintf(wstrMessage[30], wstrKernelName[badKernel]); return -22; }
+            if(badKernel) {
+               wprintf(wstrMessage[badKernel < KERNEL_NAME_LADDER ? 30 : 41], wstrKernelName[badKernel]);
+               return -22;
+            }
 
             // Both loops below indexed the argument list with i and the seed lanes with j, the two indices
             // the enclosing option loop is walking argv with. The case returns before either is read again,
@@ -735,23 +743,31 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    // began to work (F2): the map could not previously be cleared
    if(!threadCount[2]) { wprintf(wstrMessage[40]); return -26; }
 
-   // Prepare results output file
+   // Check that the results file can be written, without writing it. The file itself is created after the
+   // run, immediately before the report goes into it: it used to be created here with CREATE_ALWAYS -- before
+   // the arena was sized, before the memory pre-flight, before a thread was spawned -- so every error return
+   // between this point and the write ('-18', three '-17's and two '-19's) left a zero-length file where the
+   // user's previous results had been, said nothing about having touched it, and leaked the handle on the way
+   // out. 'PITC.exe -1 Mc999999 O[results.txt]' destroyed an existing results.txt and then failed the memory
+   // check. A Ctrl-C during the run did the same, there being no console handler (ISSUES.MD C1).
+   //
+   // The path is still validated here rather than at the end, because 'O' takes it from the command line and
+   // a run of hours should not discover a typo in it after the test has finished. OPEN_ALWAYS neither
+   // truncates an existing file nor destroys one, and a file this check had to create is removed again, so a
+   // run that never reaches its results leaves the filesystem as it found it
    if(wstrOut[0]) {
-      outFile = CreateFileW(wstrOut, GENERIC_WRITE, FILE_SHARE_WRITE, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+      outFile = CreateFileW(wstrOut, GENERIC_WRITE, FILE_SHARE_WRITE, 0, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+
+      // OPEN_ALWAYS reports ERROR_ALREADY_EXISTS on a file it opened rather than created, and does so through
+      // GetLastError on *success*, so the code has to be taken before any other call can overwrite it
+      cbool fileExisted = (GetLastError() == ERROR_ALREADY_EXISTS);
+
       if(outFile == INVALID_HANDLE_VALUE) {
          wprintf(wstrMessage[10], wstrOut);
          return -9;
       }
-      // Both byte-order marks go through WriteBlock for the reason every other write in the program does:
-      // WriteFile reports a partial write as success, and a half-written mark makes the file's encoding
-      // unreadable to anything that opens it
-      switch(outUTF) {
-      case 1: // UTF-8
-         if(!WriteBlock(outFile, outUTF8header, 3)) { wprintf(wstrMessage[11], wstrOut); CloseHandle(outFile); return -10; }
-         break;
-      case 2: // UTF-16
-         if(!WriteBlock(outFile, &outUTF16header, 2)) { wprintf(wstrMessage[11], wstrOut); CloseHandle(outFile); return -10; }
-      }
+      CloseHandle(outFile);
+      if(!fileExisted) DeleteFileW(wstrOut);
    }
 
    // Memory allocation and pointer configuration
@@ -1080,6 +1096,27 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    // Write outputs to console and/or file
    wprintf(L"%s", &wstrOutput[d]); // A run-time buffer is never a format string (ISSUES.MD F11)
    if(wstrOut[0]) {
+      // Created here, with results in hand, rather than before the run: CREATE_ALWAYS truncates whatever it
+      // opens, and until there is a report to write there is nothing to destroy the user's previous file for
+      // (ISSUES.MD C1). The path was probed for writability before the test began, so the failure this
+      // reports is one that arose during the run -- a removed drive, a file made read-only under us -- and
+      // the report has already gone to the console above either way
+      outFile = CreateFileW(wstrOut, GENERIC_WRITE, FILE_SHARE_WRITE, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+      if(outFile == INVALID_HANDLE_VALUE) {
+         wprintf(wstrMessage[10], wstrOut);
+         return -9;
+      }
+      // Both byte-order marks go through WriteBlock for the reason every other write in the program does:
+      // WriteFile reports a partial write as success, and a half-written mark makes the file's encoding
+      // unreadable to anything that opens it
+      switch(outUTF) {
+      case 1: // UTF-8
+         if(!WriteBlock(outFile, outUTF8header, 3)) { wprintf(wstrMessage[11], wstrOut); CloseHandle(outFile); return -10; }
+         break;
+      case 2: // UTF-16
+         if(!WriteBlock(outFile, &outUTF16header, 2)) { wprintf(wstrMessage[11], wstrOut); CloseHandle(outFile); return -10; }
+      }
+
       if(outUTF == 2) { // UTF-16 encoding
          // WriteFile's third argument is a byte count and c is a count of wide characters, so a UTF-16
          // results file held exactly the first half of the report and ended mid-character. The 8-bit path

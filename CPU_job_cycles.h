@@ -42,10 +42,13 @@
 // predicate, so it answers a question about numeric values where every other unit asks about bit patterns.
 // +0.0 and -0.0 satisfy it as equal, hiding a sign-bit flip in a zero lane, and two NaNs of identical
 // encoding satisfy it as unequal, so a fault that produced one in both planes would be reported where a bit
-// compare would find nothing to report. All five units now agree on what "identical" means: the three
-// ResultsMatch overloads -- one per vector width, each defined beside the job cycles that call it -- XOR the
-// operands and test the difference against zero, over the integer domain, and the ALU and FPU cycles compare
-// raw scalars with != (ISSUES.MD A11)
+// compare would find nothing to report. All five units now agree on what "identical" means: the three vector
+// ResultsMatch overloads -- one per width, each defined beside the job cycles that call it -- XOR the
+// operands and test the difference against zero, the scalar overload in CPU_jobs_standard.cpp byte-compares
+// the two fl64, and the ALU cycles compare si64 with !=, which already examines every bit.
+// Every one of the five asks its question in the integer domain. The FPU cycles were the last to be brought
+// to it: they compared fl64 with !=, the same numeric predicate, in the same two directions (ISSUES.MD A11,
+// A2)
 
 extern cui8 JobCycleALU          (cui64 coreNum, csi64 offset, vchptrc threadByte);
 extern cui8 JobCycleFPU          (cui64 coreNum, csi64 offset, vchptrc threadByte);

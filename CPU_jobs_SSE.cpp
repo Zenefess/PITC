@@ -296,6 +296,19 @@ cui8 ValidateFamilySSE(cRESULTS &seed) {
 
    return 0;
 }
+
+// The SSE half of the golden ladder's cross-width equivalence: JobSSE against JobFPU, lane for lane. The
+// loads are unaligned because the probe is a scalar array of the caller's, and the comparison is one memcmp
+// over the whole set because a fl64x2 array is its lanes in memory order (ISSUES.MD B1)
+cui8 ValidateLadderSSE(cfl64ptrc probe, cfl64ptrc reference) {
+   fl64x2 lane[LADDER_PROBE_LANES / 2];
+   ui8    k;
+
+   for(k = 0; k < LADDER_PROBE_LANES / 2; ++k) lane[k] = _mm_loadu_pd(&probe[k * 2]);
+   for(k = 0; k < LADDER_PROBE_LANES / 2; ++k) JobSSE(lane[k]);
+
+   return memcmp(lane, reference, sizeof(fl64) * LADDER_PROBE_LANES) ? KERNEL_NAME_LADDER : 0; // JobSSE
+}
 //--- Job kernel cross-check ---//
 
 //--- Arena seeding ---//

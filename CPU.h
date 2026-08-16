@@ -243,17 +243,33 @@ extern void SeedRecordsAVX512(fl64x8ptrc records, cui64 count, cfl64x8 &seed);
 // was never compared against anything: it was graded against a reference for arithmetic it does not
 // perform, and every memory-backed run -- which is to say every preset, every 'B' and every 'M' -- reported
 // the difference as silicon at fault (ISSUES.MD B5). 'W' now proves the whole family agrees before it
-// writes a file, which is where the invariant is established and the only place it can still be corrected
+// writes a file, which is where the invariant is established and the only place it can still be corrected.
+//
+// Two invariants are proved here, not one. Within a unit, every JobMem* and Job*ALU_* kernel must reproduce
+// its register-resident counterpart -- that is the ValidateFamily* half. Across units, every vector kernel
+// the golden ladder can walk must reproduce JobFPU element-wise, or a "cpu.values" stops being readable on a
+// CPU of another vector width -- that is the ValidateLadder* half (ISSUES.MD B1)
 
 // Names of the kernels the check walks, in the order it walks them; index 0 is "nothing disagreed".
 // These are identifiers rather than prose, so the table is not part of the translated strings
-inline cwchar wstrKernelName[14][20] = {
+inline cwchar wstrKernelName[17][20] = {
    L"",
    L"JobALU_FPU",    L"JobMemALU",    L"JobMemFPU",    L"JobMemALU_FPU",
    L"JobALU_SSE",    L"JobMemSSE",    L"JobMemALU_SSE",
    L"JobALU_AVX2",   L"JobMemAVX2",   L"JobMemALU_AVX2",
-   L"JobALU_AVX512", L"JobMemAVX512", L"JobMemALU_AVX512"
+   L"JobALU_AVX512", L"JobMemAVX512", L"JobMemALU_AVX512",
+   L"JobSSE",        L"JobAVX2",      L"JobAVX512"
 };
+
+// Where the table divides. Entries 1~13 name a memory-array or combined kernel, and the reference each of
+// them failed to reproduce is the register-resident kernel of its own unit; entries from here on name a
+// register-resident *vector* kernel, whose reference is JobFPU one lane at a time. The two failures mean
+// different things to whoever reads the message, so wmain selects the message from this boundary
+constexpr cui8 KERNEL_NAME_LADDER = 14;
+
+// Lanes the cross-width ladder check runs through every vector kernel the CPU carries: one AVX-512 vector,
+// two AVX2 vectors, four SSE vectors, and eight separate JobFPU calls, all over the same eight seeds
+constexpr cui8 LADDER_PROBE_LANES = 8;
 
 /// Runs one seed through every job kernel of one processing unit, and requires each memory-array and combined
 /// variant to reproduce its register-resident counterpart exactly. Each JobMem* kernel is handed four records
@@ -273,10 +289,29 @@ extern cui8 ValidateFamilySSE   (cRESULTS &seed); // JobALU_SSE, JobMemSSE, JobM
 extern cui8 ValidateFamilyAVX2  (cRESULTS &seed); // JobALU_AVX2, JobMemAVX2, JobMemALU_AVX2
 extern cui8 ValidateFamilyAVX512(cRESULTS &seed); // JobALU_AVX512, JobMemAVX512, JobMemALU_AVX512
 
-/// Runs one seed through every job kernel the CPU can execute, one family at a time
+/// Runs LADDER_PROBE_LANES seeds through one register-resident vector kernel, in vectors of that kernel's
+/// own width, and requires every lane to reproduce what JobFPU produced from the same seed. That property --
+/// each vector kernel computing JobFPU element-wise, bit for bit -- is the whole of what makes a "cpu.values"
+/// generated on one vector width verifiable on another, and it is the one thing the ValidateFamily* checks
+/// above cannot see: each of them derives its reference from its own unit's register kernel, so the eighteen
+/// kernels were held to their own width and never across widths (ISSUES.MD B1).
+///
+/// Each lives in the translation unit of the kernel it checks, for the reason every ValidateFamily* does: the
+/// loads and the comparison are of that unit's width (ISSUES.MD H4). The reference is derived once, by the
+/// caller, because it is scalar and identical for all three
+/// @param probe The lanes to transform, one seed per lane
+/// @param reference The same lanes after JobFPU, one call per lane
+/// @return 0 if every lane agreed; otherwise the wstrKernelName index of the vector kernel that did not
+extern cui8 ValidateLadderSSE   (cfl64ptrc probe, cfl64ptrc reference); // JobSSE
+extern cui8 ValidateLadderAVX2  (cfl64ptrc probe, cfl64ptrc reference); // JobAVX2
+extern cui8 ValidateLadderAVX512(cfl64ptrc probe, cfl64ptrc reference); // JobAVX512
+
+/// Runs one seed through every job kernel the CPU can execute, one family at a time, and then holds the
+/// vector kernels of every width the CPU carries to the scalar kernel they must reproduce lane for lane
 /// @return 0 if every kernel agreed; otherwise the wstrKernelName index of the first that did not
 static cui8 ValidateKernelFamilies(void) {
    RESULTS seed = {}; // Zeroed first, so every lane stays defined if the seeding below is ever narrowed
+   fl64    probe[LADDER_PROBE_LANES], reference[LADDER_PROBE_LANES];
    ui8     badKernel;
 
    // The seed KernelFingerprint probes with: a magnitude the FP chains settle from within two steps, and a
@@ -291,6 +326,26 @@ static cui8 ValidateKernelFamilies(void) {
    //--- AVX2 and AVX-512: gated exactly as RunGoldenLadder gates them ---//
    if(cfg.sys.cpuAVX2   && (badKernel = ValidateFamilyAVX2(seed))   != 0) return badKernel;
    if(cfg.sys.cpuAVX512 && (badKernel = ValidateFamilyAVX512(seed)) != 0) return badKernel;
+
+   //--- The ladder itself: every vector width against the scalar kernel it stands in for ---//
+   // RunGoldenLadder transforms the same 16 lanes with whichever vector kernel the CPU provides, so a file
+   // written on an AVX-512 machine is only readable on an SSE one while all three compute JobFPU element-wise.
+   // Nothing checked that. An edit made consistently across one unit's family passed the checks above, 'W'
+   // wrote the file, and every machine of a different width then computed a different KernelFingerprint and
+   // rejected it with -21 "generated by a different build": the portability had ceased to exist, no check
+   // named the kernel that ended it, and the diagnostic blamed the file (ISSUES.MD B1).
+   // The scalar reference is derived here, one JobFPU call per lane, and handed to all three: the reference
+   // is the *other* unit's arithmetic by definition, which is the one thing a family check cannot supply
+   // itself, and JobFPU is a baseline scalar call from a header every unit already compiles
+   for(ui8 k = 0; k < LADDER_PROBE_LANES; ++k) {
+      probe[k] = reference[k] = seed._fl64[k];
+      JobFPU(reference[k]);
+   }
+
+   if((badKernel = ValidateLadderSSE(probe, reference)) != 0) return badKernel;
+
+   if(cfg.sys.cpuAVX2   && (badKernel = ValidateLadderAVX2(probe, reference))   != 0) return badKernel;
+   if(cfg.sys.cpuAVX512 && (badKernel = ValidateLadderAVX512(probe, reference)) != 0) return badKernel;
 
    return 0;
 }
@@ -345,8 +400,10 @@ static cui64 HashBytes(cptrc data, csi64 bytes, cui64 seed) {
 /// Transforms all 16 lanes of one result set exactly once, using the widest vector unit the CPU provides.
 /// JobSSE, JobAVX2 and JobAVX512 compute the same function element-wise, so each ladder below produces the
 /// same 16 lanes from the same input -- which is what lets a "cpu.values" generated on one CPU be verified
-/// on another of a different vector width. The generating half of GenerateValues, its self-checking half
-/// and the fingerprint stored in the file's header must all walk the same ladder, so there is only one
+/// on another of a different vector width; the ValidateLadder* checks above are what hold the three kernels
+/// to that, and 'W' runs them before it generates anything. The generating half of GenerateValues, its
+/// self-checking half and the fingerprint stored in the file's header must all walk the same ladder, so
+/// there is only one
 /// @param result The 16 lanes to transform, in place
 static void RunGoldenLadder(RESULTS &result) {
    if(cfg.sys.cpuAVX512) {
@@ -1179,11 +1236,18 @@ static inline cui8 Evaluate(csi16 thread, csi8 unit) {
    ui8  index = unit == -1 ? 0  : 16 - (1 << (4 - unit));
    cui8 end   = unit == -1 ? 16 : (1 << max(0, 3 - unit)) + index;
 
-   while(index < end)
-      if(value[2][thread].raw[index] != value[3][thread].raw[index++])
+   // The increment advances the loop, not the subscript of one operand. It used to sit inside the comparison
+   // -- 'value[2][thread].raw[index] != value[3][thread].raw[index++]' -- where it modifies the very index
+   // the left operand is subscripting with, and the operands of '!=' are unsequenced: a compilation that
+   // evaluates the right operand first compares expected lane i+1 against observed lane i for every lane of
+   // the window, and reads one lane past the end of it. This is the single verdict function in the program --
+   // it grades every row of the results table, and gates the 65,536-iteration self-check 'W' will not write a
+   // file without -- so the evaluation order the right answer depends on may not be the compiler's to choose
+   // (ISSUES.MD A1)
+   for(; index < end; ++index)
+      if(value[2][thread].raw[index] != value[3][thread].raw[index])
          return 1;
 
-   //return index >= end ? 0 : 1;
    return 0;
 }
 
