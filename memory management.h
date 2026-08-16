@@ -651,17 +651,17 @@ inline void Copy64(cptrc source, ptrc dest, cui64 byteCount) {
 #endif
 }
 
-// Copy byteCount (rounded-up to the nearest 64) bytes of 512-bit-aligned data via SIMD instruction
+// Copy byteCount (rounded-down to the nearest 64) bytes of 512-bit-aligned data via SIMD instruction
 inline void Copy64(vptrc source, vptrc dest, cui64 byteCount) {
 #ifdef __AVX512__
-   cui64 j = ui64((byteCount + 63) >> 6);
+   cui64 j = byteCount >> 6;
    for(ui64 i = 0; i < j; i++) ((ui512ptr)dest)[i] = _mm512_load_epi32(&((ui512ptr)source)[i]);
 #else
 #ifdef __AVX__
-   cui64 j = ui64((byteCount + 31) >> 5);
+   cui64 j = byteCount >> 5;
    for(ui64 i = 0; i < j; i++) ((ui256ptr)dest)[i] = _mm256_load_si256(&((ui256ptr)source)[i]);
 #else
-   cui64 j = ui64((byteCount + 15) >> 4);
+   cui64 j = byteCount >> 4;
    for(ui64 i = 0; i < j; i++) ((ui128ptr)dest)[i] = _mm_load_si128(&((ui128ptr)source)[i]);
 #endif
 #endif
@@ -688,18 +688,18 @@ inline void Stream32(cptrc source, ptrc dest, cui64 byteCount) {
    _mm_sfence();
 }
 
-// Non-temporally copy byteCount (rounded-up to the nearest 64) bytes of 512-bit-aligned data via SIMD instruction.
+// Non-temporally copy byteCount (rounded-down to the nearest 64) bytes of 512-bit-aligned data via SIMD instruction.
 // NT stores are weakly ordered; the trailing _mm_sfence makes the writes globally visible before return.
 inline void Stream64(cptrc source, ptrc dest, cui64 byteCount) {
 #ifdef __AVX512__
-   cui64 j = ui64((byteCount + 63) >> 6);
+   cui64 j = byteCount >> 6;
    for(ui64 i = 0; i < j; i++) _mm512_stream_si512(&((ui512ptr)dest)[i], _mm512_load_si512(&((ui512ptr)source)[i]));
 #else
 #ifdef __AVX__
-   cui64 j = ui64((byteCount + 31) >> 5);
+   cui64 j = byteCount >> 5;
    for(ui64 i = 0; i < j; i++) _mm256_stream_si256(&((ui256ptr)dest)[i], _mm256_load_si256(&((ui256ptr)source)[i]));
 #else
-   cui64 j = ui64((byteCount + 15) >> 4);
+   cui64 j = byteCount >> 4;
    for(ui64 i = 0; i < j; i++) _mm_stream_si128(&((ui128ptr)dest)[i], _mm_load_si128(&((ui128ptr)source)[i]));
 #endif
 #endif
@@ -715,39 +715,39 @@ inline void Stream(cptrc source, ptrc dest, cui64 byteCount) {
    else                                                          Stream64(source, dest, RoundDownToNearest64(byteCount));
 }
 
-// Interlock copy byteCount (rounded-up to the nearest 8) bytes of data
+// Interlock copy byteCount (rounded-down to the nearest 8) bytes of data
 inline void LockedCopy(ptrc source, vptrc dest, csi32 byteCount) {
-   csi32 j = (byteCount + 7) >> 3;
+   csi32 j = byteCount >> 3;
    for(si32 i = 0; i < j; i++) _InterlockedExchange64(&((vsi64ptr)dest)[i], ((si64ptr)source)[i]);
 }
 
-// Interlock copy byteCount (rounded-up to the nearest 8) bytes of data
+// Interlock copy byteCount (rounded-down to the nearest 8) bytes of data
 inline void LockedCopy(vptrc source, vptrc dest, csi32 byteCount) {
-   csi32 j = (byteCount + 7) >> 3;
+   csi32 j = byteCount >> 3;
    for(si32 i = 0; i < j; i++) _InterlockedExchange64(&((vsi64ptr)dest)[i], ((si64ptr)source)[i]);
 }
 
-// Interlock swap byteCount (rounded-up to the nearest 8) bytes of data
+// Interlock swap byteCount (rounded-down to the nearest 8) bytes of data
 inline void LockedSwap(ptrc source1, vptrc source2, csi32 byteCount) {
-   csi32 j = (byteCount + 7) >> 3;
+   csi32 j = byteCount >> 3;
    for(si32 i = 0; i < j; i++) ((vsi64ptr)source1)[i] = _InterlockedExchange64(&((vsi64ptr)source2)[i], ((si64ptr)source1)[i]);
 }
 
-// Interlock swap byteCount (rounded-up to the nearest 8) bytes of data
+// Interlock swap byteCount (rounded-down to the nearest 8) bytes of data
 inline void LockedSwap(vptrc source1, vptrc source2, csi32 byteCount) {
-   csi32 j = (byteCount + 7) >> 3;
+   csi32 j = byteCount >> 3;
    for(si32 i = 0; i < j; i++) ((vsi64ptr)source1)[i] = _InterlockedExchange64(&((vsi64ptr)source2)[i], ((si64ptr)source1)[i]);
 }
 
-// Interlock move byteCount (rounded-up to the nearest 8) bytes of data and zeroes source
+// Interlock move byteCount (rounded-down to the nearest 8) bytes of data and zeroes source
 inline void LockedMoveAndClear(vptrc source, ptrc dest, csi32 byteCount) {
-   csi32 j = (byteCount + 7) >> 3;
+   csi32 j = byteCount >> 3;
    for(si32 i = 0; i < j; i++) ((vsi64ptr)dest)[i] = _InterlockedExchange64(&((vsi64ptr)source)[i], 0);
 }
 
-// Interlock move byteCount (rounded-up to the nearest 8) bytes of data and zeroes source
+// Interlock move byteCount (rounded-down to the nearest 8) bytes of data and zeroes source
 inline void LockedMoveAndClear(vptrc source, vptrc dest, csi32 byteCount) {
-   csi32 j = (byteCount + 7) >> 3;
+   csi32 j = byteCount >> 3;
    for(si32 i = 0; i < j; i++)
       ((vsi64ptr)dest)[i] = _InterlockedExchange64(&((vsi64ptr)source)[i], 0);
 }
