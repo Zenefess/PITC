@@ -187,7 +187,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    if(argc > 1) {
       for(i = 1; i < argc; ++i) {
          switch(argv[i][0]) {
-         case L'b': // Run benchmark: All virtual cores, constant computation, ALU + largest vector unit, L3 cache, 8MB memory per virtual core, for 60 seconds
+         case L'b': // Run benchmark: All virtual cores, constant computation, ALU + largest vector unit, 8MB memory per virtual core, for 60 seconds
          case L'B':
             if(argv[i][1] && argv[i][1] != L' ') { wprintf(wstrMessage[37], argv[i]); return -25; }
             // 'B' may be given twice on one command line, and each occurrence allocated a fresh block over
@@ -214,7 +214,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             cfg.allocMem[0] = 8388608;
             cfg.allocMem[1] = 0;
             cfg.procSync    = 0x092;
-            cfg.procUnits   = (cfg.sys.cpuAVX512 ? 0x091 : cfg.sys.cpuAVX2 ? 0x089 : 0x085);
+            cfg.procUnits   = (cfg.sys.cpuAVX512 ? 0x011 : cfg.sys.cpuAVX2 ? 0x09 : 0x05);
             break;
          case L'i': // Set instruction usage options
          case L'I':
