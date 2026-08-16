@@ -884,8 +884,10 @@ manual. The rules that bite most often when editing here:
 - **`Version:` is the product version, not a per-file one.** All eleven read `v1.0.2`, so a release moves them
   together with `README.md:1`, `en-GB.h`'s banner and `CLAUDE.md` — the hand-maintained sites ISSUES.MD K3
   counts, now fourteen rather than three. Do not start versioning PITC-proper files individually.
-- **No history in file prologs** (c1) — a root `CHANGELOG.md` is required (c2) but has not been created yet;
-  `typedefs.h` and `vector structures.h` still carry inline changelog blocks awaiting migration.
+- **No history in file prologs** (c1), and none now carries any: the inline changelog blocks that sat in
+  `typedefs.h` and `vector structures.h` are gone (ISSUES.MD I14), and r17's field list has no slot for one.
+  The root `CHANGELOG.md` that c2 requires still does not exist (L1), so the history those blocks held is not
+  in this repository at all, and a new entry has nowhere to go until that file is created.
 - Mark intentional deviations `// RULE-DEV:<rule-id> <why>` (en3).
 - Performance rules that shape this codebase specifically: explicit alignment-aware allocators with matching
   frees (p2); SIMD preferred with a scalar baseline retained, compile-time specialisation plus run-time CPUID
