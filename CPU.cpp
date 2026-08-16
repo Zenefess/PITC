@@ -139,7 +139,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    cfg.sys.cpuAVX2    = IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE);
    cfg.sys.cpuAVX512  = IsProcessorFeaturePresent(PF_AVX512F_INSTRUCTIONS_AVAILABLE);
 
-   // Set vector-dependant functions to use largest instruction width available. The SSE poll is not the
+   // Set vector-dependent functions to use largest instruction width available. The SSE poll is not the
    // baseline it was being used as: AllFalse of two ui128 is _mm_testz_si128, an SSE4.1 instruction, so
    // selecting it on nothing but the absence of AVX2 faulted with an illegal instruction on a CPU carrying
    // SSE2 and no more -- before any test began, and before the pre-flight check at the end of the parse
@@ -669,7 +669,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                cfg.tics     = timer.siFrequency * 1800;
                cfg.onTime   = 2000;
                break;
-            case L'7': // Synchronised sweeping-width pulsed stress on all virtual cores. 30 minute duration. 10 minute duration
+            case L'7': // Synchronised sweeping-width pulsed stress on all virtual cores. 30 minute duration
                cfg.procSync = 0x04A;
                cfg.SMTLoad  = 3;
                cfg.tics     = timer.siFrequency * 1800;

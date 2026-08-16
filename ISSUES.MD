@@ -51,8 +51,9 @@ audited and survived adversarial review with **no new findings** — section D o
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **0** | **1** | **18** | **38** | **57** |
 
-**A1, A2, B1, B2, C1, C2, C3, E1, F1, F2, F3, F4, G1, H1, H3 and I1–I6 are fixed** — see the `Fixed` note on
-each entry. The counts in the table above are as first audited and have not been decremented.
+**A1, A2, B1, B2, C1, C2, C3, E1, F1, F2, F3, F4, G1, H1, H3, I1–I9, I11–I15, I17, J2, K1, K2, K4, K7 and
+K10–K12 are fixed** — see the `Fixed` note on each entry. The counts in the table above are as first audited
+and have not been decremented.
 
 No Critical finding remains: the false-pass and false-fail families of the previous audit are gone, and the
 one High entry was a start-up crash on a narrow class of old hardware rather than a wrong verdict. The Medium
@@ -829,30 +830,59 @@ dependency; note the change is spelling-only under MSVC today, so `cpu.values` i
 
 ## K. Documentation and localisation
 
-### K1. Preset 8/9 "Synchronised" labels are swapped in the help text and README — **Medium** — *carried forward (old K2)*
+### K1. Preset 8/9 "Synchronised" labels are swapped in the help text and README — **Medium** — *carried forward (old K2)* — *Fixed*
 
 `en-GB.h:86–87` and `README.md:61–62` call preset 8 "Synchronised staggered" and preset 9 plain "Staggered",
 but the code sets preset 8 to `0x024` — staggered fixed pulse, *no* time-sync bit — and preset 9 to `0x02C`,
 which carries it (`CPU.cpp:593, :600`; the inline comments there agree with the code). A user choosing `-8`
 for the synchronised test gets the unsynchronised one and vice versa.
 
-### K2. README omits the mandatory `W` first step, the exit codes, and any build instructions — **Low** — *carried forward (old K6)*
+> **Fixed** in the documents rather than in the code, which is the half that was wrong: the two `case` arms
+> and their comments already agree with each other, and each preset's remaining attributes — one thread per
+> physical core and an hour for `-8`, every virtual core and four hours for `-9` — were documented correctly,
+> so only the word "Synchronised" was on the wrong line. Moving it, rather than moving bit 3 between two
+> presets that differ in duration and thread count as well, leaves every existing command line running what
+> it ran before and makes both documents describe it. The Appendix B row for `-8` is struck with the change.
+
+### K2. README omits the mandatory `W` first step, the exit codes, and any build instructions — **Low** — *carried forward (old K6)* — *Fixed*
 
 `README.md` never states that `PITC.exe W` must run before any test (without `cpu.values` every test returns
 `-1`), carries no return-value table, and gives no build line, toolchain version or x64-only note for a repo
 with no `.sln` and no CI.
 
+> **Fixed**, all three, as three new sections. *Building* gives the two `msbuild` lines with the output each
+> produces, names the toolchain (VS 2022, v143, Windows 10 SDK) and states that `CPU_build.h` refuses any
+> other architecture, any compiler but MSVC and any floating-point model but `/fp:strict` — with the reason,
+> since a reader who does not know why `/fp:strict` is load-bearing is the reader most likely to relax it. It
+> also records what the repository does not have: no CI, no test suite, no lint or format tooling.
+> *Generating "cpu.values"* states the `W` step, that a test without the file stops at `-1`, that a file from
+> another build is refused at `-21` rather than graded against, and that the file *is* portable between CPUs
+> of different vector width — the property B1's ladder check exists to hold, and the one thing about the file
+> a user would otherwise have to guess. *Return values* is the exit-code table from
+> `wstrInstructions_English`, all 29 codes, in the same wording. The help text gains the `W` sentence too, so
+> the requirement is stated wherever the reader is.
+
 ### K3. Version 1.0.2 exists only in prose, and the README fronts a benchmark screenshot from before the score rescale — **Low** — *carried forward (old K7)*
 
 Three hand-maintained prose sites (`README.md:1`, `en-GB.h:12`, `CLAUDE.md`), no `VERSIONINFO` resource, and
 the number has not moved across ~95 behavioural fixes — including the E12 rewrite that multiplied the KUPS
-scale by ~4.5×, which makes the 5950X screenshot at `README.md:69–70` misleading for anyone comparing a
+scale by ~4.5×, which makes the 5950X screenshot at `README.md:143–144` misleading for anyone comparing a
 current run against it.
 
-### K4. Typographical errors persist in the user-facing text — **Low** — *carried forward (old K8)*
+### K4. Typographical errors persist in the user-facing text — **Low** — *carried forward (old K8)* — *Fixed*
 
 "Successul completion" (`en-GB.h:15`), "intruction" (`en-GB.h:48` and `README.md:14`), and the preset-7
 comment "30 minute duration. 10 minute duration" (`CPU.cpp:586`), of which the code implements the first.
+
+> **Fixed**: "Successful", "instruction" in both files, and the preset-7 comment cut to the "30 minute
+> duration" its `timer.siFrequency * 1800` implements. A sweep of every PITC-proper file against the usual
+> misspelling list found one more, `vector-dependant` in `CPU.cpp`'s poll-selection comment, which went with
+> them. Two further slips in the same text are corrected while they are in hand: the `M` option's `T=Total`,
+> alone among that line's four entries in using one `=` where the option letters are glossed with two, and
+> the README's "stacked with **the** one of the remaining (A,E,O)", which the help text spells correctly. The
+> README's preset heading also regains the "By default will use the ALU & the largest vector unit, and 8MB
+> memory per core" sentence the help text carries and it had lost, since a preset table without it does not
+> say what the presets run.
 
 ### K5. Failure-report and results-table strings remain outside the translation tables — **Low** — *carried forward (old K9)*
 
@@ -869,11 +899,20 @@ so `wprintf` output converts through the ANSI code page: pure-ASCII English surv
 translation with characters outside the console code page will print mojibake through the very mechanism
 built to carry it.
 
-### K7. The no-option defaults are documented nowhere — **Low** — *carried forward (old K12)*
+### K7. The no-option defaults are documented nowhere — **Low** — *carried forward (old K12)* — *Fixed*
 
 15-minute duration, ALU+FPU, parallel constant execution, 2000 ms start-up delay, and the 100 ms/900 ms
 pulse a later mode change inherits (`CPU.cpp:139–142`, `CPU.h:83–85`) appear in no document; only the preset
 defaults are stated.
+
+> **Fixed**: a *Defaults* paragraph now sits in the option preamble of both the help text and `README.md`,
+> beside the ordering rules that govern how options overwrite them. It states all six — every virtual core,
+> ALU & FPU, parallel constant execution, no memory (which is what makes a default run register-resident
+> rather than arena-backed, `allocMem` being `{0, 0}`), a 2000 ms start-up delay, a 15-minute duration — and
+> keeps the 100 ms/900 ms pulse in its own sentence, because those two are not part of a default run at all:
+> they are what a `Tf` or `Ts` given without `[` or `]` inherits, which is the only way a user meets them.
+> `CLAUDE.md` gains the rule that binds the three sites together, since the defaults live in `wmain`'s
+> `/// Defaults ///` block and `GLOBAL_CFG`'s initialisers and are now restated in two documents.
 
 ### K8. GCS v1.1.4 MUST-rules the repository reviews against are violated in the tree — **Low** — *carried forward (old K13)*
 
@@ -888,19 +927,32 @@ unconditionally by `CPU.cpp:140–141` before any argument is read, so the struc
 four `THREAD_CFG` fields (`packetSizeRAM`, `maxTics`, `inactiveTime`, `records32`) are written in the spawn
 loop and read by nothing.
 
-### K10. `CLAUDE.md` says exit code `-21` is shared by five messages; the code has four — **Low**
+### K10. `CLAUDE.md` says exit code `-21` is shared by five messages; the code has four — **Low** — *Fixed*
 
 Exactly four `return -21` sites exist, printing `wstrMessage[26]`–`[29]` (`CPU.cpp:682, :690, :700, :717`).
 A maintainer auditing the table against the document hunts for a fifth rejection path that does not exist.
 
-### K11. The help claims every efficiency core of a hybrid CPU carries a single virtual core — **Low**
+> **Fixed**: "four messages", and the sentence now names the range `wstrMessage[26]`–`[29]` as well, in the
+> form the `-22` and `-5` sentences beside it already use. A count with the entries beside it can be checked
+> against the source in one pass, which is what the bare number could not be.
+
+### K11. The help claims every efficiency core of a hybrid CPU carries a single virtual core — **Low** — *Fixed*
 
 `en-GB.h:74` / `README.md:47`: "A physical core carrying a single virtual core is kept by both; on a hybrid
 CPU that is every efficiency core." True of Intel hybrids only; the G9 rework explicitly supports parts
 whose efficiency class carries SMT (`CPU.h:951–953` names Zen 4 + Zen 4c). On such a part `Ue` keeps one
 thread per physical efficiency core — half that class's virtual cores — against the documented expectation.
 
-### K12. `Ut`'s 64-characters-per-group numbering is documented nowhere users look — **Low**
+> **Fixed** by stating the rule instead of an example of it: "Both keep one virtual core per active physical
+> core, whatever its SMT width; a core carrying only one is kept by either." That is exactly what masking
+> with `cfg.sys.coreSibling[0]` or `[1]` does, on every topology — Intel hybrid, Zen 4 plus Zen 4c, and a CPU
+> with SMT disabled in firmware alike — so no machine can now falsify the sentence, and the "kept by both"
+> half the entry does not dispute survives inside it. The hybrid claim is dropped rather than qualified: the
+> two `M` lines above already tell a hybrid user what its two classes are, and a per-vendor exception in a
+> line about `Ue`/`Uo` would describe the machine rather than the option. `CLAUDE.md` records the rule beside
+> `SetSMTLoading`, where the masking is explained.
+
+### K12. `Ut`'s 64-characters-per-group numbering is documented nowhere users look — **Low** — *Fixed*
 
 `Ut` character *n* is deliberately bit `n & 63` of group `n >> 6` (`CPU.h:1128–1134`; the design is
 documented in the source and `CLAUDE.md`). But `en-GB.h:69` and `README.md:42` present `Ut` as a plain
@@ -908,6 +960,14 @@ binary sequence, and the banner prints each group's row only to its highest core
 groups hold fewer than 64 virtual cores (Windows commonly splits large machines evenly), nothing tells the
 user that characters for a group's unpopulated high bits are dead padding they must write anyway to reach
 the next group.
+
+> **Fixed** in the documentation, the design being deliberate and left alone (Appendix A says so). Three
+> lines under the two map options in the help text and `README.md` now give both numberings, since the
+> contrast is the point: `Uc` walks the physical cores in sequence, group after group, while `Ut` gives every
+> processor group 64 characters however many virtual cores it holds, so the characters past a group's last
+> core are padding that must still be written to reach the next. The third line names the trap the entry
+> identifies — the thread bitmap prints each group to its own width, not to 64 — because that banner is the
+> one display a user builds a map from, and on a machine of several short groups it is the wrong ruler.
 
 ## L. Project process
 
@@ -944,6 +1004,9 @@ layer — no check of the *cross-unit* ladder equivalence — is recorded as B1.
 
 ## Appendix B — command lines that misbehave today
 
+Every row is now struck: no command line this audit found is still known to misbehave. The table is kept for
+the history, and a row is added rather than replaced whenever a later audit finds one.
+
 | Command line | Machine | Behaviour |
 |---|---|---|
 | ~~any, including none~~ | ~~x64 CPU without POPCNT (Core 2, early Athlon 64 X2)~~ | ~~Illegal-instruction crash before any output~~ — **fixed** (G1) |
@@ -951,4 +1014,4 @@ layer — no check of the *cross-unit* ladder equivalence — is recorded as B1.
 | ~~`Ia Tct5.0 Ue` (the documented smoke test)~~ | ~~Windows set to a comma-decimal locale~~ | ~~Refused `-25` "Unrecognised '.' option"~~ — **fixed** (F2) |
 | ~~`Ia Sr Tft60[15000]15000 Ua`~~ | ~~16+ virtual cores~~ | ~~"60-second" run takes ~7.5 minutes; threads 3+ graded on one job cycle~~ — **fixed** (E1) |
 | ~~`-1 Mc999999 O[results.txt]`~~ | ~~any, with an existing `results.txt`~~ | ~~Exits `-17` having silently truncated the previous results file~~ — **fixed** (C1) |
-| `-8` | any | Runs the *unsynchronised* staggered preset the help text calls synchronised (K1) |
+| ~~`-8`~~ | ~~any~~ | ~~Runs the *unsynchronised* staggered preset the help text calls synchronised~~ — **fixed** (K1) |

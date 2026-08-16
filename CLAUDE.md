@@ -198,11 +198,11 @@ each name one class). `-19` is the one runtime failure that aborts a run: a work
 created or resumed, in either the test or the `W` path. `-20` is a `cpu.values` header that could not be
 written; `-21` is a `cpu.values` this build will not read — bad magic, an unreadable or unsupported format
 version, a different build or kernel revision, or contents that disagree with the hashes in the header —
-one code shared by five messages, the way `-11` and `-17` already share theirs. `-22` is a job kernel that
-disagrees with the kernel it is required to reproduce, raised by `ValidateKernelFamilies` under `W` and
-shared by two messages: `wstrMessage[30]` for a memory-array or combined kernel that has drifted from the
-register-resident kernel of its own unit, and `wstrMessage[41]` for a vector kernel that no longer computes
-`JobFPU` element-wise.
+one code shared by four messages, `wstrMessage[26]`–`[29]`, the way `-11` and `-17` already share theirs.
+`-22` is a job kernel that disagrees with the kernel it is required to reproduce, raised by
+`ValidateKernelFamilies` under `W` and shared by two messages: `wstrMessage[30]` for a memory-array or
+combined kernel that has drifted from the register-resident kernel of its own unit, and `wstrMessage[41]`
+for a vector kernel that no longer computes `JobFPU` element-wise.
 `-23` is a processor topology that could not be enumerated — `GetLogicalProcessorInformationEx` failing at
 either of its two calls, a buffer that could not be allocated for it, or a walk that named no processor core
 — raised by `EnumerateTopology` before anything else in `wmain` and shared by three messages (ISSUES.MD G6,
@@ -219,6 +219,18 @@ that a thread could not be pinned, `wstrMessage[33]` that the machine carries mo
 `MAX_THREADS`, `wstrMessage[34]` names the two core classes of a hybrid CPU, because there the split is not
 the non-SMT/SMT one the options are documented against (ISSUES.MD G9), and `wstrMessage[39]` reports a
 language code this build does not carry; none of the four stops the run.
+
+**The help text is this program's reference manual, and three of its blocks restate code rather than describe
+it.** `wstrInstructions_English` (`en-GB.h`) states the exit codes above; the no-option defaults — every
+virtual core, ALU+FPU, parallel constant execution, a 2000 ms start-up delay, a 15-minute duration and the
+100 ms/900 ms pulse a later mode change inherits, which are `wmain`'s `/// Defaults ///` block and
+`GLOBAL_CFG`'s initialisers, and which were documented nowhere at all (ISSUES.MD K7); and the preset table,
+in which "Synchronised" is bit 3 of that preset's `procSync` and nothing else. Presets 8 and 9 carried each
+other's labels — `-8` sets `0x024` and `-9` `0x02C` — so each ran what the other's line promised, while the
+inline comments beside the two cases were right and both documents were wrong (ISSUES.MD K1). `README.md`
+repeats all three blocks, and since K2 the `W` step every test depends upon and the build line as well, so
+**a changed default, a changed preset, a new exit code or a new option letter is an edit to `en-GB.h` and
+`README.md` together**.
 
 **An unrecognised or malformed argument is fatal, and deliberately so.** Every one of these used to be
 skipped in silence, so a mistyped option ran a configuration other than the one on the command line and
@@ -488,6 +500,13 @@ same bit to both maps, so one thread per physical core keeps it either way. Rebu
 `coreCount[1]` and a stride instead is what deselected every non-SMT core on a hybrid part, and what shifted
 by 64 on a CPU reporting no SMT at all (ISSUES.MD G1, G2, G7). **A bitmap added to `GLOBAL_CFG` must be
 freed in its destructor**, which is what the `mfree` call there is for.
+
+What both policies deliver is **one virtual core per active physical core, whatever that core's width**, and
+that is what the help text and `README.md` now say. They used to gloss it as "a physical core carrying a
+single virtual core is kept by both; on a hybrid CPU that is every efficiency core", which is true of Intel's
+hybrids and false of a part whose efficiency class carries SMT — the Zen 4 plus Zen 4c case G9 exists for,
+where `Ue` keeps one thread per physical efficiency core rather than all of that class's virtual cores, as
+the code has always done and the documentation denied (ISSUES.MD K11).
 
 `Ua` reads the same two bitmaps in the other direction, one physical core at a time: each first-sibling bit
 is paired with the lowest last-sibling bit at or above it, `(last | (last - first))` is that core's span, and
@@ -797,6 +816,14 @@ the whole command line with `-25`. The documented grammar did not work at all on
   sub-option follow it — the documented `Uc!.!!...!a` spelling. That is why the enabling characters are an
   explicit set in `CoreMapChar` rather than "any other character": the two cannot both be true. Add a
   character to either set and `en-GB.h` and `README.md` have to say so.
+
+Both documents also state the **numbering** the two maps use, which is the half a user cannot infer from
+anything the program prints: `Uc` walks the physical cores in sequence, group after group, while `Ut` gives
+every processor group 64 characters however many virtual cores it holds. Windows commonly splits a large
+machine into groups of fewer than 64, and the banner's thread bitmap prints each group only to its highest
+core, so the one display a user has to work from is exactly the width the `Ut` map is *not* — nothing said
+that a short group's surplus characters are padding that must still be written to reach the next group
+(ISSUES.MD K12). The design itself is deliberate and unchanged; only its documentation was missing.
 
 ## Shared headers vendored from an external library
 

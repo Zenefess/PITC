@@ -4,14 +4,43 @@
 This software is primarily for testing the idle stability of CPUs, but also provides a range of options for more traditional stress testing. Run the executable without parameters to display instructions.
 
 
+Building
+--------
+ Windows x64 only, built with MSVC — Visual Studio 2022, platform toolset v143, Windows 10 SDK. No solution file is checked in, so build the project file directly:
+
+```
+msbuild CPU.vcxproj /p:Configuration=Release /p:Platform=x64    ->  x64\PITC.exe
+msbuild CPU.vcxproj /p:Configuration=Debug   /p:Platform=x64    ->  x64\Debug\PITC.exe  (AddressSanitizer)
+```
+
+ x64 is the only platform the project offers, and the sources say so themselves: `CPU_build.h` fails the build for any other architecture, for a compiler other than MSVC, and for any floating-point model other than `/fp:strict`. The last is not a style preference — the golden values are a chain of divides and square roots, so a build that rounds differently produces different correct answers, and `cpu.values` records the model it was written under.
+
+ There is no CI, no automated test suite and no lint or format tooling in the repository; the functional smoke test is the program itself.
+
+
+Generating "cpu.values"
+-----------------------
+ Every test grades what the CPU computes against `cpu.values`, a file of golden results the program generates for itself. It is not shipped, so generate it once, in the directory the executable is run from, before the first test of a build:
+
+```
+PITC.exe W
+```
+
+ Without that file a test stops immediately and returns `-1`. The file records the build and the job kernels that produced it, so one written by a different build of PITC is refused with `-21` rather than graded against — regenerate it after any rebuild that changes a job kernel. It is not machine-specific: a file written on one CPU verifies on another, whatever vector width either of them carries.
+
+ `W` verifies every entry it generates, and cross-checks the job kernels against each other before it generates anything, so expect it to run for minutes rather than seconds. The file is built under a temporary name and moved into place once complete, so an interrupted run leaves any previous `cpu.values` exactly as it was.
+
+
 Command-line options
 --------------------
  Options are applied in the order given: where two of them set the same property, the last one wins. 'B' and the presets reset the processing units and the memory configuration, so give either of them before any 'I' or 'M' option. A sweeping-pulse run has no off-time, so ']' is ignored wherever it is given.
 
+ Defaults, where no option and no preset sets otherwise: the ALU & FPU of every virtual core, parallel constant execution, no memory (the register-resident kernels), a 2000ms start-up delay and a 15 minute duration. The 100ms on-time and 900ms off-time are what a pulsed mode selected without '[' or ']' inherits.
+
  B  : Run the benchmark. Options after 'B' override defaults; eg. pitc.exe B Iaf mt1024 !!! Cache use not yet implemented !!!
  
       Utilises the ALU and largest vector unit of all (virtual) cores in the system, level 3 cache, and 8MB memory per thread for 60 seconds.
- Ix : Set intruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av !!! Cache use not yet implemented !!!
+ Ix : Set instruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av !!! Cache use not yet implemented !!!
  
       Caches: 1==Level 1, 2==Level 2, 3==Level 3                                                |  At least one processing unit is required
       Processing: A==ALU, F==FPU, S==SSE4.1, V==AVX2, X==AVX512                                 |  F, S, V and X are mutually exclusive
@@ -20,7 +49,7 @@ Command-line options
       Recognises ISO 639-1 language codes; eg. Len-GB
  Mx : Set amount of memory to utilise during test. Values are in MebiBytes; eg. Mt128
  
-      C==Per virtual core, N==Per first-class core, S==Per second-class virtual core, T=Total split amongst all virtual cores
+      C==Per virtual core, N==Per first-class core, S==Per second-class virtual core, T==Total split amongst all virtual cores
          The two core classes are the CPU's non-SMT and SMT cores; on a hybrid CPU they are its efficiency and performance cores
          'N' and 'S' each cover one class only: where the CPU has cores of both, give both, or the class left without memory is refused
  Ox : Results file output options. A filename can be stacked with any of the remaining options; eg. O[results.txt]16
@@ -37,14 +66,17 @@ Command-line options
       Fixed-length pulse options (in milliseconds): [x==Active duration, ]x==Inactive duration  |  Replace 'x' with a whole number; eg. [250
       Sweeping-length pulse option (in milliseconds): [x==Cycle duration                        |  A sweep has no off-time
          Each cycle begins idle and the duty cycle rises in a straight line to 100% at the end of the test duration
- Ux : Set core usage options. One of the first two options (C,T) can be stacked with the one of the remaining (A,E,O); eg. Uc!.!!...!a
+ Ux : Set core usage options. One of the first two options (C,T) can be stacked with one of the remaining (A,E,O); eg. Uc!.!!...!a
  
       C==Binary sequence map of physical cores to utilise, T==Binary sequence map of virtual cores to utilise
          Core disabled: '.' ',' '_' '-' '0'  |  Core enabled: '!' '*' '#' '+' '1' 'x' 'X'  |  Any other character ends the map
          The map is the whole selection: a core it does not name is not utilised, and an empty selection is refused
+         'C' numbers the physical cores in sequence, group after group. 'T' gives every processor group 64 characters
+         however many virtual cores it holds, so the characters past a group's last core are padding that must still be
+         written to reach the next group; the thread bitmap prints each group to its own width, not to 64
       A==Symmetric Multi-Threading; forces utilisation of every virtual core of each active physical core
       E==Only utilise the first virtual core of each active physical core, O==Only utilise the last virtual core of each active physical core
-         A physical core carrying a single virtual core is kept by both; on a hybrid CPU that is every efficiency core
+         Both keep one virtual core per active physical core, whatever its SMT width; a core carrying only one is kept by either
  W  : Write new "cpu.values" file.
  
       The file is built as "cpu.values.tmp" and moved into place once it is complete, so an interrupted run leaves any previous
@@ -54,7 +86,7 @@ Command-line options
       The job kernels are cross-checked first: each memory and combined kernel against the register-resident kernel of its
       own unit, and each vector kernel against the FPU kernel lane for lane, which is what makes the file readable on a CPU
       of a different vector width.
- -x : Configuration presets.
+ -x : Configuration presets. By default will use the ALU & the largest vector unit, and 8MB memory per core.
  
       1==Constant stress; one thread per physical core. 10 minute duration
       2==Constant stress on all virtual cores. 30 minute duration
@@ -63,12 +95,49 @@ Command-line options
       5==Synchronised fixed-width pulsed stress on all virtual cores. 30 minute duration
       6==Sweeping-width pulsed stress; one thread per physical core. 30 minute duration
       7==Synchronised sweeping-width pulsed stress on all virtual cores. 30 minute duration
-      8==Synchronised staggered fixed-width pulsed stress; one thread per physical core. 1 hour duration
-      9==Staggered fixed-width pulsed stress on all virtual cores. 4 hour duration
+      8==Staggered fixed-width pulsed stress; one thread per physical core. 1 hour duration
+      9==Synchronised staggered fixed-width pulsed stress on all virtual cores. 4 hour duration
       0==Synchronised fixed-width pulsed stress on all virtual cores, using ALU & SSE code-paths with 2MB memory per core. 1 hour duration
 
 
 Example: "pitc.exe I3x Mc8 Spt Tcd8.0t3600 Ua"
+
+
+Return values
+-------------
+ The process exit code says what the run did. Zero and above are outcomes, below zero are refusals.
+
+| Code | Meaning |
+|-----:|---------|
+| `2` | Instructions displayed to console |
+| `1` | Correct values successfully saved to file |
+| `0` | Successful completion of stability test |
+| `-1` | File containing correct values not found |
+| `-2` | Insufficient input entries found in file |
+| `-3` | Insufficient output entries found in file |
+| `-4` | Computational errors detected while generating correct values |
+| `-5` | Unable to create or replace the file for correct values |
+| `-6` | Failed to write all correct input values to file |
+| `-7` | Failed to write all correct output values to file |
+| `-8` | Invalid filename for results file |
+| `-9` | Unable to create results file |
+| `-10` | Failed to write results file |
+| `-11` | Requested processing unit not supported by the CPU |
+| `-12` | More than one thread synchronisation option requested |
+| `-13` | Test duration of zero or less requested |
+| `-14` | Pulse on-time of zero requested |
+| `-15` | No processing unit requested |
+| `-16` | More than one non-ALU processing unit requested |
+| `-17` | Unable to allocate the requested amount of memory |
+| `-18` | Insufficient memory per thread for the requested processing unit(s) |
+| `-19` | Unable to create a computation thread |
+| `-20` | Unable to write the "cpu.values" header |
+| `-21` | Contents of "cpu.values" are not valid for this build |
+| `-22` | A job kernel disagrees with the kernel it is required to reproduce |
+| `-23` | Unable to enumerate the processor topology of the system |
+| `-24` | Missing, malformed or out-of-range value for a command-line option |
+| `-25` | Unrecognised command-line option |
+| `-26` | The selected core map contains no cores to test |
 
 
 Screenshot of the benchmark result of an AMD Ryzen 9 5950X:
