@@ -13,8 +13,23 @@
 // This unit carries the SSE job cycles, the SSE family cross-check, the SSE arena seeding and the SSE
 // completion-bitmap poll as well as the kernels, so that no 128-bit comparison or move is emitted from
 // CPU.cpp, which compiles at the StreamingSIMDExtensions2 baseline (ISSUES.MD H4). It is the one unit whose
-// instruction set CPU.vcxproj cannot raise: MSVC offers /arch:AVX2 and /arch:AVX512 but nothing for SSE4.1,
-// which is why _mm_testz_si128 below carries a run-time gate (cfg.sys.cpuSSE4_1) rather than a build-time one
+// own instruction set CPU.vcxproj cannot name: MSVC offers /arch:AVX2 and /arch:AVX512 but nothing for
+// SSE4.1, which is why _mm_testz_si128 below carries a run-time gate (cfg.sys.cpuSSE4_1) rather than a
+// build-time one, and why this unit states no lower bound -- there is no macro a correct build would set.
+
+// What CPU.vcxproj can do is raise this unit *above* its own set, and that is what the guard below refuses.
+// A per-file /arch:AVX, /arch:AVX2 or /arch:AVX512 leaves every intrinsic here compiling and every answer
+// right, while the compiler-generated code around them takes VEX or EVEX encoding -- and wmain gates these
+// kernels on cfg.sys.cpuSSE4_1, so it dispatches them to every CPU reporting SSE4.1, on which a VEX opcode
+// is an illegal instruction. The Penryn, Nehalem and Westmere parts that carry SSE4.1 and no AVX are exactly
+// the hardware this unit exists to serve. The _mm_abs_pd definition below rests on the same bound from the
+// other side: SIMD management.h states its own only for a unit compiling below AVX2, and this one says here
+// that it always does. It is the AVX2 unit's upper bound and the scalar unit's, spelt for the set between
+// them (ISSUES.MD H3, H1)
+#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
+   #error "CPU_jobs_SSE.cpp must compile at the SSE2 baseline. See CPU.vcxproj and ISSUES.MD H3."
+#endif
+
 #include "CPU_job_cycles.h"
 
 #ifndef UNLOOPx4

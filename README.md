@@ -47,6 +47,8 @@ Command-line options
          A physical core carrying a single virtual core is kept by both; on a hybrid CPU that is every efficiency core
  W  : Write new "cpu.values" file.
  
+      The file is built as "cpu.values.tmp" and moved into place once it is complete, so an interrupted run leaves any previous
+      "cpu.values" exactly as it was.
       File will only be created if the integrity of the results pass 65,536 iterations.
       All 512 entries are verified, not one per thread, so expect the check to run for minutes rather than seconds.
       The job kernels are cross-checked first: each memory and combined kernel against the register-resident kernel of its

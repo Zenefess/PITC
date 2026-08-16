@@ -16,7 +16,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n-2  : Insufficient input entries found in file"
  "\n-3  : Insufficient output entries found in file                                 1 : Correct values successfully saved to file"
  "\n-4  : Computational errors detected while generating correct values"
- "\n-5  : Unable to create file for correct values                                  2 : Instructions displayed to console"
+ "\n-5  : Unable to create or replace the file for correct values                   2 : Instructions displayed to console"
  "\n-6  : Failed to write all correct input values to file"
  "\n-7  : Failed to write all correct output values to file"
  "\n-8  : Invalid filename for results file"
@@ -73,6 +73,8 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      E==Only utilise the first virtual core of each active physical core, O==Only utilise the last virtual core of each active physical core"
  "\n         A physical core carrying a single virtual core is kept by both; on a hybrid CPU that is every efficiency core"
  "\n W  : Write new \"cpu.values\" file."
+ "\n      The file is built as \"cpu.values.tmp\" and moved into place once it is complete, so an interrupted"
+ "\n      run leaves any previous \"cpu.values\" exactly as it was."
  "\n      File will only be created if the integrity of the results pass 65,536 iterations."
  "\n      All 512 entries are verified, not one per thread, so expect the check to run for minutes rather than seconds."
  "\n      The job kernels are cross-checked first: each memory and combined kernel against the register-resident kernel of its"
@@ -90,14 +92,14 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      9==Staggered fixed-width pulsed stress on all virtual cores. 4 hour duration"
  "\n      0==Synchronised fixed-width pulsed stress on all virtual cores, using ALU & SSE code-paths with 2MB memory per core. 1 hour duration\n\n";
 
-cwchptrc wstrMessage_English[42] = {
+cwchptrc wstrMessage_English[43] = {
    L"\nSuccessfully wrote results to \"%s\" file.\n\n",
    L"\n\nNew \"cpu.values\" file generated.\n\n",
    L"\n\n\"cpu.values\" file not found. Generate via 'W' command-line option.\n\n",
    L"\n\nInsufficient input entries in \"cpu.values\" file.\n\n",
    L"\n\nInsufficient output entries in \"cpu.values\" file.\n\n",
    L"\n\nComputational error(s) detected. Results not written.\n\n",
-   L"\n\nCannot create \"cpu.values\" file.\n\n",
+   L"\n\nCannot create the \"%s\" file.\n\n",
    L"\n\nFailed to write all input entries to \"cpu.values\" file.\n\n",
    L"\n\nFailed to write all output entries to \"cpu.values\" file.\n\n",
    L"\nNo valid filename for the results file in the argument \"%s\"; expected 'O[name]'.\n\n",
@@ -135,7 +137,8 @@ cwchptrc wstrMessage_English[42] = {
    L"\nWARNING: The language \"%s\" is not available in this build; the interface remains in en-GB.\n",
    L"\nThe 'U' core map selected no cores; there is nothing to test.\n\n",
    L"\n\nThe %s kernel does not compute JobFPU element-wise, so a \"cpu.values\" written here would not be\n"
-    "  readable on a CPU of a different vector width. \"cpu.values\" not written.\n\n"
+    "  readable on a CPU of a different vector width. \"cpu.values\" not written.\n\n",
+   L"\n\nUnable to replace the \"%s\" file; any previous one has been left exactly as it was.\n\n"
 };
 
 cwchptrc wstrInterface_English[13] = {

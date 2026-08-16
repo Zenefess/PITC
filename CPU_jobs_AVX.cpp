@@ -21,6 +21,17 @@
    #error "CPU_jobs_AVX.cpp must be compiled with /arch:AVX2. See CPU.vcxproj and ISSUES.MD H3."
 #endif
 
+// ...and with /arch:AVX2 rather than with anything above it, which is the half of the bound that was missing.
+// /arch:AVX512 defines __AVX2__ as well, so raising this one file's per-file setting satisfies the guard above
+// while the compiler-generated code around these intrinsics becomes EVEX-encoded -- and wmain gates this
+// unit's kernels on cfg.sys.cpuAVX2, so it dispatches them to every CPU reporting plain AVX2, where an EVEX
+// opcode is an illegal instruction. A lower bound alone cannot catch that: the arithmetic would still be
+// right and every intrinsic below would still compile. The scalar unit's guard is two-sided for exactly this
+// reason, and this is its counterpart at the other end of the range (ISSUES.MD H3, H1)
+#if defined(__AVX512F__)
+   #error "CPU_jobs_AVX.cpp must be compiled with /arch:AVX2, not above it. See CPU.vcxproj and ISSUES.MD H3."
+#endif
+
 // The AVX2 job cycles, family cross-check, arena seeding and completion-bitmap poll live here rather than in
 // CPU.cpp, beside the kernels of their own width, so that no 256-bit instruction is emitted from a file
 // compiled at the StreamingSIMDExtensions2 baseline (ISSUES.MD H4)
