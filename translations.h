@@ -1,11 +1,18 @@
-/************************************************************
- * File: translations.h                 Created: 2025/02/19 *
- *                                    Last mod.: 2026/08/15 *
- *                                                          *
- * Desc:                                                    *
- *                                                          *
- * MIT license             Copyright (c) David William Bull *
- ************************************************************/
+/*
+ * File: translations.h
+ * Version: v1.0.2
+ * Owner: David William Bull
+ * Created: 2025-02-19
+ * Last Modified: 2026-08-16
+ * Description: Language selection: declares the three string-table pointers every message, prompt and report is read through.
+ * To Do: 1) Make selection data-driven, so a language is a header and a table entry rather than an edit to the 'L' case (ISSUES.MD K6)
+ *        2) Set the console output code page before the first wide write, so a translation outside it does not print mojibake (K6)
+ * Dependencies: en-GB.h
+ * ISA: Scalar
+ * Thread-safety: N/A
+ * Reviewers: David William Bull
+ * License: MIT  Copyright: David William Bull
+ */
 #pragma once
 
 #include "en-GB.h"

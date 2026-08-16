@@ -1,13 +1,19 @@
-/************************************************************
- * File: CPU.cpp                        Created: 2025/01/21 *
- *                                    Last mod.: 2026/08/15 *
- *                                                          *
- * Desc: Pulsed integrity tests for CPUs.                   *
- *                                                          *
- * To do: *) Add utilisation of (code) caches               *
- *                                                          *
- * MIT license             Copyright (c) David William Bull *
- ************************************************************/
+/*
+ * File: CPU.cpp
+ * Version: v1.0.2
+ * Owner: David William Bull
+ * Created: 2025-01-21
+ * Last Modified: 2026-08-16
+ * Description: PITC entry point: option parsing, arena allocation, thread spawn and reporting; defines every namespace-scope object.
+ * To Do: 1) Give the L1/L2/L3 cache bits a reader, or withdraw them from the parser and the banner (ISSUES.MD A3)
+ *        2) Move Failed's per-unit value formats and the results-table labels into the translation tables (ISSUES.MD K5)
+ *        3) Add a VERSIONINFO resource, so the build states its version rather than the prose around it (ISSUES.MD K3)
+ * Dependencies: CPU_methods.h
+ * ISA: Scalar
+ * Thread-safety: MT-safe
+ * Reviewers: David William Bull
+ * License: MIT  Copyright: David William Bull
+ */
 #include "CPU_methods.h"
 
 //--- Global variables ---//
@@ -37,8 +43,11 @@ cwchptrcptr wstrInterface    = wstrInterface_English;
 // Job cycle functions array. [0][]==Without memory, [1][]==With memory. Each entry is defined in the
 // translation unit of the kernel it wraps (ISSUES.MD H4); CPU_job_cycles.h declares them and states the rules
 // this table has to keep, of which the first is that all 32 indices of the (procUnits & 0x1F) domain are
-// covered, because ComputationPulse does not range-check the index it dispatches through
-al64 cui8 (*JobCycle[2][32])(cui64 coreNum, csi64 offset, vchptrc threadByte) = {
+// covered, because ComputationPulse does not range-check the index it dispatches through.
+// UPPER_SNAKE because it is a table at namespace scope, which GCS r12 spells that way; the entries keep the
+// PascalCase r11 gives a function, so the one name here that is not a function is the one that reads
+// differently from the eighteen that are (ISSUES.MD K8)
+al64 cui8 (*JOB_CYCLE[2][32])(cui64 coreNum, csi64 offset, vchptrc threadByte) = {
  { JobCycleALU,       JobCycleALU,           JobCycleFPU,       JobCycleALU_FPU,       JobCycleSSE,       JobCycleALU_SSE,       JobCycleSSE,       JobCycleALU_SSE,
    JobCycleAVX2,      JobCycleALU_AVX2,      JobCycleAVX2,      JobCycleALU_AVX2,      JobCycleAVX2,      JobCycleALU_AVX2,      JobCycleAVX2,      JobCycleALU_AVX2,
    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,
@@ -67,23 +76,38 @@ void Failed(cui64 coreNum, vchptrc threadByte, cui8 unit) {
    // last left in those lanes -- zero, under any 'M', 'B' or preset run. Only the ALU case, which already
    // read value[3], reported the value the CPU actually produced (ISSUES.MD A8)
    wprintf(wstrInterface[11], coreNum);
+   // Each vector case binds the two planes' lanes to a pair of local views before formatting them. Spelt
+   // out, one 'value[2][coreNum].avx512.m512d_f64[k]' per lane, the AVX-512 case ran to 184 columns against
+   // the 180 GCS e2 makes a hard cap, and the AVX2 and SSE cases to 172 and 173 against the 150 it asks for
+   // (ISSUES.MD K8). The views are per case rather than one pair before the switch, so that each names the
+   // member of RESULTS its own unit writes: nothing here has to know the lane offsets that Evaluate and the
+   // results table derive from the union's widest-unit-first ordering
    switch(unit) {
-   case 0:
+   case 0: {
+      cfl64ptrc expect = value[2][coreNum].avx512.m512d_f64;
+      cfl64ptrc actual = value[3][coreNum].avx512.m512d_f64;
+
       wprintf(L"%1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f  %s %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f\n",
-         value[2][coreNum].avx512.m512d_f64[0], value[2][coreNum].avx512.m512d_f64[1], value[2][coreNum].avx512.m512d_f64[2], value[2][coreNum].avx512.m512d_f64[3],
-         value[2][coreNum].avx512.m512d_f64[4], value[2][coreNum].avx512.m512d_f64[5], value[2][coreNum].avx512.m512d_f64[6], value[2][coreNum].avx512.m512d_f64[7], wstrInterface[12],
-         value[3][coreNum].avx512.m512d_f64[0], value[3][coreNum].avx512.m512d_f64[1], value[3][coreNum].avx512.m512d_f64[2], value[3][coreNum].avx512.m512d_f64[3],
-         value[3][coreNum].avx512.m512d_f64[4], value[3][coreNum].avx512.m512d_f64[5], value[3][coreNum].avx512.m512d_f64[6], value[3][coreNum].avx512.m512d_f64[7]);
+         expect[0], expect[1], expect[2], expect[3], expect[4], expect[5], expect[6], expect[7], wstrInterface[12],
+         actual[0], actual[1], actual[2], actual[3], actual[4], actual[5], actual[6], actual[7]);
       break;
-   case 1:
+   }
+   case 1: {
+      cfl64ptrc expect = value[2][coreNum].avx.m256d_f64;
+      cfl64ptrc actual = value[3][coreNum].avx.m256d_f64;
+
       wprintf(L"%1.9f, %1.9f, %1.9f, %1.9f  %s %1.9f, %1.9f, %1.9f, %1.9f\n",
-         value[2][coreNum].avx.m256d_f64[0], value[2][coreNum].avx.m256d_f64[1], value[2][coreNum].avx.m256d_f64[2], value[2][coreNum].avx.m256d_f64[3], wstrInterface[12],
-         value[3][coreNum].avx.m256d_f64[0], value[3][coreNum].avx.m256d_f64[1], value[3][coreNum].avx.m256d_f64[2], value[3][coreNum].avx.m256d_f64[3]);
+         expect[0], expect[1], expect[2], expect[3], wstrInterface[12],
+         actual[0], actual[1], actual[2], actual[3]);
       break;
-   case 2:
-      wprintf(L"%1.9f, %1.9f  %s %1.9f, %1.9f\n",
-         value[2][coreNum].sse.m128d_f64[0], value[2][coreNum].sse.m128d_f64[1], wstrInterface[12], value[3][coreNum].sse.m128d_f64[0], value[3][coreNum].sse.m128d_f64[1]);
+   }
+   case 2: {
+      cfl64ptrc expect = value[2][coreNum].sse.m128d_f64;
+      cfl64ptrc actual = value[3][coreNum].sse.m128d_f64;
+
+      wprintf(L"%1.9f, %1.9f  %s %1.9f, %1.9f\n", expect[0], expect[1], wstrInterface[12], actual[0], actual[1]);
       break;
+   }
    case 3:
       wprintf(L"%1.9f  %s %1.9f\n", value[2][coreNum].fpu, wstrInterface[12], value[3][coreNum].fpu);
       break;
@@ -1141,22 +1165,36 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       switch(cfg.procUnits & mask) { default: i = 5; break; case 4: i = 9; break; case 8: i = 17; break; case 16: i = 33; } while(--i) c += swprintf(&wstrOutput[c], L"----");
       c += swprintf(&wstrOutput[c], L".");
       for(i = 0; i < threadCount[2]; ++i) {
+         // The expected and observed lanes of this row, bound once. Spelt out per lane, the AVX-512 row ran
+         // to 224 columns and the AVX2 row to 209, against the 180 GCS e2 makes a hard cap (ISSUES.MD K8).
+         // Both are the union's ui64 view: this table prints bit patterns, which is the same question the
+         // job cycles ask of them, and RESULTS orders that view widest unit first
+         cui64ptrc expect = value[2][i].raw;
+         cui64ptrc actual = value[3][i].raw;
+
          switch(cui8 bit = threadData[i].procUnits & mask) {
          default:
-            c += swprintf(&wstrOutput[c], L"\n  #%3.1d  |  %s 64  | %16.16llX | %16.16llX | %s", i, wstrUnitsCPU[j], value[2][i].raw[16 - bit], value[3][i].raw[16 - bit], wstrPass[Evaluate(i, 5 - bit)]);
+            c += swprintf(&wstrOutput[c], L"\n  #%3.1d  |  %s 64  | %16.16llX | %16.16llX | %s",
+               i, wstrUnitsCPU[j], expect[16 - bit], actual[16 - bit], wstrPass[Evaluate(i, 5 - bit)]);
             break;
          case 4:
             c += swprintf(&wstrOutput[c], L"\n  #%3.1d  | SSE  128 | %16.16llX%16.16llX | %16.16llX%16.16llX | %s",
-               i, value[2][i].raw[12], value[2][i].raw[13], value[3][i].raw[12], value[3][i].raw[13], wstrPass[Evaluate(i, 2)]);
+               i, expect[12], expect[13], actual[12], actual[13], wstrPass[Evaluate(i, 2)]);
             break;
          case 8:
-            c += swprintf(&wstrOutput[c], L"\n  #%3.1d  | AVX  256 | %16.16llX%16.16llX%16.16llX%16.16llX | %16.16llX%16.16llX%16.16llX%16.16llX | %s",
-               i, value[2][i].raw[8], value[2][i].raw[9], value[2][i].raw[10], value[2][i].raw[11], value[3][i].raw[8], value[3][i].raw[9], value[3][i].raw[10], value[3][i].raw[11], wstrPass[Evaluate(i, 1)]);
+            c += swprintf(&wstrOutput[c],
+               L"\n  #%3.1d  | AVX  256 | %16.16llX%16.16llX%16.16llX%16.16llX | %16.16llX%16.16llX%16.16llX%16.16llX | %s",
+               i, expect[8], expect[9], expect[10], expect[11], actual[8], actual[9], actual[10], actual[11], wstrPass[Evaluate(i, 1)]);
             break;
          case 16:
-            c += swprintf(&wstrOutput[c], L"\n  #%3.1d  | AVX  512 | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX | %s",
-               i, value[2][i].raw[0], value[2][i].raw[1], value[2][i].raw[2], value[2][i].raw[3], value[2][i].raw[4], value[2][i].raw[5], value[2][i].raw[6], value[2][i].raw[7],
-               value[3][i].raw[0], value[3][i].raw[1], value[3][i].raw[2], value[3][i].raw[3], value[3][i].raw[4], value[3][i].raw[5], value[3][i].raw[6], value[3][i].raw[7], wstrPass[Evaluate(i, 0)]);
+            // The format is one literal per plane, joined by concatenation: sixteen %16.16llX and their
+            // separators are 224 columns on one line, and a wide literal is the one token here that cannot
+            // be broken any other way. en-GB.h joins its own multi-line messages the same way
+            c += swprintf(&wstrOutput[c],
+               L"\n  #%3.1d  | AVX  512 | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX"
+                " | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX | %s",
+               i, expect[0], expect[1], expect[2], expect[3], expect[4], expect[5], expect[6], expect[7],
+               actual[0], actual[1], actual[2], actual[3], actual[4], actual[5], actual[6], actual[7], wstrPass[Evaluate(i, 0)]);
          }
       }
       c+= swprintf(&wstrOutput[c], L"\n");
@@ -1166,7 +1204,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       // dispatch table selects, plus the ALU's own lane where the ALU bit is set. The weight was
       // '(procUnits & 0x1F) >> 1', an arithmetic accident of the bit-field that yields a vector width only
       // for the three combinations 'B' itself installs -- 'Iasv' weighted by 6, a width no unit has, while
-      // the run executed the AVX2 kernel JobCycle had selected. It described what was requested, where the
+      // the run executed the AVX2 kernel JOB_CYCLE had selected. It described what was requested, where the
       // score has to describe what was dispatched (ISSUES.MD E12)
       csi64 unitLanes = si64(cfg.procUnits & 0x010 ? 8 : cfg.procUnits & 0x08 ? 4 : cfg.procUnits & 0x04 ? 2 : cfg.procUnits & 0x02 ? 1 : 0) +
                         si64(cfg.procUnits & 0x01 ? 1 : 0);

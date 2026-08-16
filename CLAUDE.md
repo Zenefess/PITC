@@ -148,7 +148,7 @@ the checks themselves are four `ValidateFamily*` functions, one per `CPU_jobs_*.
 AVX-512 halves move values of those widths and may not be compiled at the baseline (ISSUES.MD H4). Each
 returns the `wstrKernelName` index of the first kernel that disagreed, and each derives its own ALU reference
 rather than being handed one, so it is a complete statement of its own family. **Add a `Job*` family and it
-must be added to its unit's `ValidateFamily*`, to `wstrKernelName`, and to `JobCycle`.**
+must be added to its unit's `ValidateFamily*`, to `wstrKernelName`, and to `JOB_CYCLE`.**
 
 **That half holds each unit to itself; a second half holds the units to each other.** `ValidateFamily*`
 derives its reference from its own unit's register kernel, so nothing in it can see that `JobSSE`, `JobAVX2`
@@ -314,7 +314,7 @@ ahead of the completion bit `wmain` is waiting on.
 
 **Every object at namespace scope is declared `extern` in a header and defined once, in `CPU.cpp`.** That is
 `timer`, `cfg`, `threadData`, `value`, `threadBits`, `wstrOut`, `resArray`, `generateError` and `wstrLang`
-from `CPU.h`, the three language pointers from `translations.h`, and the `JobCycle[2][32]` dispatch table from
+from `CPU.h`, the three language pointers from `translations.h`, and the `JOB_CYCLE[2][32]` dispatch table from
 `CPU_job_cycles.h`; `Failed` is a function definition in `CPU.cpp` for the same reason. The definitions sit
 together at the top of `CPU.cpp`, above `wmain`, and the declaration in the header names the `declare*` macro
 that defines each pointer, because the macro carries the allocation with it and the two have to be changed
@@ -357,7 +357,7 @@ compares a value wider than 64 bits belongs in the unit for its width, not in `C
 Every kernel is `for(i < 16) { UNLOOPx4( ...4 chained ops... ) }` — the `UNLOOPx4` macro is manual unrolling,
 and the arithmetic is deliberately chosen to be latency-bound and irreducible (chained `sqrt`/divide for FP,
 multiply/shift/xor/divide for integer). The `ALU_` variants interleave integer and FP ops to load both pipes
-simultaneously. Adding a new unit means adding all eight functions plus its `JobCycle` entries.
+simultaneously. Adding a new unit means adding all eight functions plus its `JOB_CYCLE` entries.
 
 Three properties of that arithmetic are load-bearing, and all three are easy to undo by accident:
 
@@ -385,18 +385,22 @@ bit — that is what lets a `cpu.values` written on one vector width verify on a
 arithmetic must be made in all four units identically, and `W`'s `ValidateKernelFamilies` is what proves the
 eighteen kernels still agree afterwards.
 
-### Dispatch: `JobCycle[2][32]`
+### Dispatch: `JOB_CYCLE[2][32]`
 
 Each kernel is wrapped in a `JobCycle*` function that seeds the working values from `value[0]`, runs the
 kernel, compares against `value[2]`, and on mismatch records `value[3]` and calls `Failed()`. The wrappers are
 defined in the four `CPU_jobs_*.cpp` units (H4) and declared in `CPU_job_cycles.h`, which also states the
 rules the table below keeps; the table itself is defined in `CPU.cpp` with the other globals (H9).
+**The table is `JOB_CYCLE` and the eighteen wrappers are `JobCycle*`**, and the difference in the names is the
+difference in the things: r12 spells a table at namespace scope `UPPER_SNAKE`, r11 spells a function
+`PascalCase`. It was `JobCycle`, which read as a nineteenth wrapper (ISSUES.MD K8) — so anything here that is
+indexed rather than called takes the same spelling, and a new *wrapper* keeps `PascalCase`.
 **`Failed()`'s third argument must name the unit whose `value[3]` member the wrapper just wrote**
 (0=AVX-512, 1=AVX2, 2=SSE, 3=FPU, 4=ALU), because that argument is what selects the format the mismatch is
 printed in and the lanes it is read from. `JobCycleMemFPU` passed 4 for all four of its records, so an FPU
 fault printed two unrelated ALU integers with `%lld` (ISSUES.MD A12) — the combined `JobCycle*ALU_*`
 wrappers, which call `Failed()` twice with different units, are the shape to copy.
-These are indexed by a **function-pointer table** — `JobCycle[hasMemory][procUnits & 0x1F]` — resolved once per
+These are indexed by a **function-pointer table** — `JOB_CYCLE[hasMemory][procUnits & 0x1F]` — resolved once per
 thread in `ComputationPulse`, so the hot loop has no branching on configuration.
 
 The table's shape encodes a real rule: **only the ALU bit and the widest enabled vector unit matter.** Index 6
@@ -677,7 +681,7 @@ Three rules follow the switch and must survive any edit to it:
   multiple of 4, adjacent threads shared the line at each boundary and the false sharing was measured as the
   cache behaviour this mode exists to exercise.
 - **A count of 0 is rejected** with `-18` rather than run. Zero records also drops the thread onto the
-  *register* code path (`JobCycle[recCount ? 1 : 0]`) with `p0`–`p4` already overwritten by arena pointers.
+  *register* code path (`JOB_CYCLE[recCount ? 1 : 0]`) with `p0`–`p4` already overwritten by arena pointers.
   This is also the check that refuses a core class given no memory at all — `Mn8` names the first class and
   leaves the second holding nothing (ISSUES.MD C9) — so a class with threads must be given a size.
 - **`bos`, the running per-thread record offset, counts across both thread classes.** It is initialised once,
@@ -751,7 +755,7 @@ KUPS score weighted by the 64-bit lanes a job cycle updates. Two rules hold that
 were broken (ISSUES.MD E12). `resArray.iter` counts records, not loop iterations: a memory-backed iteration
 is four records and a register-resident one is a single record, and an idle iteration of a pulsed run is no
 records at all, so `j` advances by `recStep` inside the compute branch alone. And the weight is derived the
-way `JobCycle` dispatches — the widest vector unit selected, plus the ALU's lane where bit 0 is set — which
+way `JOB_CYCLE` dispatches — the widest vector unit selected, plus the ALU's lane where bit 0 is set — which
 makes it equal to the arena's own `recSize / 8` for every unit selection `wmain` accepts. It was
 `(procUnits & 0x1F) >> 1`, which is a vector width only for the three combinations `B` installs, and even
 there was short by the ALU lane. The rate is `fl64` over `cfg.tics`, never over a count of whole seconds:
@@ -835,8 +839,11 @@ consequences:
   project's `IncludePath` also references `D:\Programming\include`, where the upstream originals live. Quoted
   includes resolve to the repo copies first, so local edits do take effect — but changes made here are local
   forks unless carried upstream.
-- They carry the newer GCS-compliant file prolog (`Version:`/`Owner:`/`To Do:`/`ISA:`/`Thread-safety:`), while
-  the PITC-proper files still use the older boxed-comment prolog. Both styles are live in the tree.
+- Three of them — `typedefs.h`, `memory management.h` and `common functions.h` — carry the GCS r17 prolog the
+  eleven PITC-proper files now carry as well (ISSUES.MD K8). The other three, `vector structures.h`,
+  `class_timers.h` and `SIMD management.h`, still use the older boxed-comment prolog, so both styles remain
+  live in the tree — but the boxed one is now confined to vendored files, and converting those three is
+  upstream's change to make rather than this repo's.
 
 What they provide: the `ui8`/`si64`/`fl64x8` type-alias lattice and `defpa`/`refpa` pointer-array macros
 (`typedefs.h`); aligned allocation and the `declare1d64z`/`zalloc64`/`mfree` family plus SIMD copy/stream
@@ -866,8 +873,21 @@ manual. The rules that bite most often when editing here:
   exactly three spaces (r4).
 - `///` for API docs with `@param`/`@return` tags, `//` for notes, `//==`/`//--` for grouping headers (r5).
   Disable >5 lines of code with `/* */`, fewer with `//` (r6).
-- **No history in file prologs** (c1) — a root `CHANGELOG.md` is required (c2) but has not been created yet;
-  `typedefs.h` and `vector structures.h` still carry inline changelog blocks awaiting migration.
+- **Every PITC-proper file opens with the r17 prolog** (ISSUES.MD K8): a `/* … */` block whose content lines
+  begin with exactly `' * '`, ASCII only, wrapped at 150, carrying `File`, `Version`, `Owner`, `Created`,
+  `Last Modified`, `Description`, `To Do`, `Dependencies`, `ISA`, `Thread-safety`, `Reviewers` and `License`
+  in that order and no other field. `Description` is one line; `To Do` is `1)`, `2)`, `3)` with continuations
+  aligned under the value; `License` is `MIT` followed by **two** spaces and `Copyright:`. `ISA` takes tokens
+  from `{Scalar, SSE4.2, AVX2, AVX-512}` and nothing else — which is why `CPU_jobs_SSE.cpp` is spelt
+  `Scalar | SSE4.2` although its one gated instruction is SSE4.1: that is the narrowest token the vocabulary
+  offers, and the file's `To Do` records the gap. **A new file needs the prolog before it needs anything else.**
+- **`Version:` is the product version, not a per-file one.** All eleven read `v1.0.2`, so a release moves them
+  together with `README.md:1`, `en-GB.h`'s banner and `CLAUDE.md` — the hand-maintained sites ISSUES.MD K3
+  counts, now fourteen rather than three. Do not start versioning PITC-proper files individually.
+- **No history in file prologs** (c1), and none now carries any: the inline changelog blocks that sat in
+  `typedefs.h` and `vector structures.h` are gone (ISSUES.MD I14), and r17's field list has no slot for one.
+  The root `CHANGELOG.md` that c2 requires still does not exist (L1), so the history those blocks held is not
+  in this repository at all, and a new entry has nowhere to go until that file is created.
 - Mark intentional deviations `// RULE-DEV:<rule-id> <why>` (en3).
 - Performance rules that shape this codebase specifically: explicit alignment-aware allocators with matching
   frees (p2); SIMD preferred with a scalar baseline retained, compile-time specialisation plus run-time CPUID

@@ -1,11 +1,23 @@
-/************************************************************
- * File: CPU.h                          Created: 2025/01/25 *
- *                                    Last mod.: 2026/08/15 *
- *                                                          *
- * Desc:                                                    *
- *                                                          *
- * MIT license             Copyright (c) David William Bull *
- ************************************************************/
+/*
+ * File: CPU.h
+ * Version: v1.0.2
+ * Owner: David William Bull
+ * Created: 2025-01-25
+ * Last Modified: 2026-08-16
+ * Description: Core types, global declarations and scalar helpers: values-file format, completion bitmap, pulse timing, topology, parsing.
+ * To Do: 1) Drop GLOBAL_CFG's in-class procUnits and procSync defaults; wmain overwrites both before an argument is read (ISSUES.MD K9)
+ *        2) Remove THREAD_CFG's packetSizeRAM, maxTics, inactiveTime and records32, written by the spawn loop and read by nothing (K9)
+ *        3) Give procUnits bits 5-7 a reader, or remove them along with the cache records the topology walk files (ISSUES.MD A3)
+ *        4) Raise MAX_THREADS past 512, widening every thread-indexed table with it
+ *        5) Add vector forms of Evaluate
+ *        6) Move wstrPass into the translation tables, with the results-table labels beside it (ISSUES.MD K5)
+ * Dependencies: iostream, atomic, stdlib.h, string.h, locale.h, windows.h, process.h, memory management.h, class_timers.h,
+ *               CPU_build.h, translations.h
+ * ISA: Scalar
+ * Thread-safety: MT-safe
+ * Reviewers: David William Bull
+ * License: MIT  Copyright: David William Bull
+ */
 #pragma once
 
 #define _CRT_RAND_S

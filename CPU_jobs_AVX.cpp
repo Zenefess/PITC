@@ -1,11 +1,18 @@
-/************************************************************
- * File: CPU_jobs_AVX.cpp               Created: 2025/01/23 *
- *                                    Last mod.: 2026/08/15 *
- *                                                          *
- * Desc: AVX2 job kernels.                                  *
- *                                                          *
- * MIT license             Copyright (c) David William Bull *
- ************************************************************/
+/*
+ * File: CPU_jobs_AVX.cpp
+ * Version: v1.0.2
+ * Owner: David William Bull
+ * Created: 2025-01-23
+ * Last Modified: 2026-08-16
+ * Description: AVX2 job kernels, with their job cycles, family and ladder cross-checks, arena seeding, completion poll and comparison.
+ * To Do: 1) Give the kernels AVX2-only arithmetic when a "cpu.values" version bump is scheduled; today only the encoding is AVX2 (J1)
+ *        2) Add /// API documentation with @param tags to the four kernels and four job cycles defined here (GCS d1)
+ * Dependencies: typedefs.h, CPU_build.h, CPU_job_cycles.h
+ * ISA: Scalar | AVX2
+ * Thread-safety: MT-safe
+ * Reviewers: David William Bull
+ * License: MIT  Copyright: David William Bull
+ */
 
 #include "typedefs.h"
 #include "CPU_build.h"

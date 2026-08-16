@@ -1,11 +1,18 @@
-/************************************************************
- * File: CPU_job_cycles.h               Created: 2025/02/17 *
- *                                    Last mod.: 2026/08/15 *
- *                                                          *
- * Desc: Job cycle declarations and the dispatch table.     *
- *                                                          *
- * MIT license             Copyright (c) David William Bull *
- ************************************************************/
+/*
+ * File: CPU_job_cycles.h
+ * Version: v1.0.2
+ * Owner: David William Bull
+ * Created: 2025-02-17
+ * Last Modified: 2026-08-16
+ * Description: Declarations of the eighteen job cycles and of the JOB_CYCLE dispatch table, with the rules that table and its callers keep.
+ * To Do: 1) Check at startup that no JOB_CYCLE entry is null: the declared extent rules out a short table, a missing initialiser does not
+ *        2) Assert that JOB_CYCLE's second extent equals the (procUnits & 0x1F) index domain, so widening that field fails the build
+ * Dependencies: CPU.h
+ * ISA: Scalar
+ * Thread-safety: MT-safe
+ * Reviewers: David William Bull
+ * License: MIT  Copyright: David William Bull
+ */
 #pragma once
 
 #include "CPU.h"
@@ -77,5 +84,8 @@ extern cui8 JobCycleMemALU_AVX512(cui64 coreNum, csi64 offset, vchptrc threadByt
 // entry: a shorter table is read past its end and calls through whatever follows it. Only the ALU bit and
 // the widest selected unit alter the dispatch, which makes 24~31 (AVX2 with AVX-512) AVX-512 entries and
 // matches the arena-sizing switch in wmain, whose own cases already span the whole 0~31 domain.
-// Defined in CPU.cpp, with every other object this program holds at namespace scope (ISSUES.MD H9)
-al64 extern cui8 (*JobCycle[2][32])(cui64 coreNum, csi64 offset, vchptrc threadByte);
+// Defined in CPU.cpp, with every other object this program holds at namespace scope (ISSUES.MD H9).
+// The name is UPPER_SNAKE where the eighteen above are PascalCase because GCS r12 spells a table at
+// namespace scope that way and r11 spells a function the other -- and this is the only one of the two here
+// that is not a function, so the difference in the name is the difference in the thing (ISSUES.MD K8)
+al64 extern cui8 (*JOB_CYCLE[2][32])(cui64 coreNum, csi64 offset, vchptrc threadByte);

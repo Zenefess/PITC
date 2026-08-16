@@ -51,7 +51,7 @@ audited and survived adversarial review with **no new findings** — section D o
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **0** | **1** | **18** | **38** | **57** |
 
-**A1, A2, B1, B2, C1, C2, C3, E1, F1, F2, F3, F4, G1, H1, H3, I1–I9, I11–I15, I17, J2, K1, K2, K4, K7 and
+**A1, A2, B1, B2, C1, C2, C3, E1, F1, F2, F3, F4, G1, H1, H3, I1–I9, I11–I15, I17, J2, K1, K2, K4, K7, K8 and
 K10–K12 are fixed** — see the `Fixed` note on each entry. The counts in the table above are as first audited
 and have not been decremented.
 
@@ -869,6 +869,11 @@ the number has not moved across ~95 behavioural fixes — including the E12 rewr
 scale by ~4.5×, which makes the 5950X screenshot at `README.md:143–144` misleading for anyone comparing a
 current run against it.
 
+Now **fourteen** sites, not three: r17 makes `Version:` a required prolog field, so the eleven PITC-proper
+files each restate `v1.0.2` as well (K8). They all carry the *product* version rather than per-file ones, so a
+release is still one decision — but it is now fourteen edits, which is the case for the `VERSIONINFO` resource
+rather than against the field.
+
 ### K4. Typographical errors persist in the user-facing text — **Low** — *carried forward (old K8)* — *Fixed*
 
 "Successul completion" (`en-GB.h:15`), "intruction" (`en-GB.h:48` and `README.md:14`), and the preset-7
@@ -914,11 +919,76 @@ defaults are stated.
 > `CLAUDE.md` gains the rule that binds the three sites together, since the defaults live in `wmain`'s
 > `/// Defaults ///` block and `GLOBAL_CFG`'s initialisers and are now restated in two documents.
 
-### K8. GCS v1.1.4 MUST-rules the repository reviews against are violated in the tree — **Low** — *carried forward (old K13)*
+### K8. GCS v1.1.4 MUST-rules the repository reviews against are violated in the tree — **Low** — *carried forward (old K13)* — *Fixed*
 
 Five lines exceed the 180-column hard cap (`CPU.cpp:74, :1038, :1046, :1049, :1051`); every PITC-proper file
 keeps the boxed prolog instead of the r17 template; the `JobCycle` dispatch table is lowercase against r12's
 UPPER_SNAKE for global tables.
+
+> **Fixed**, in all three parts.
+>
+> **The five long lines were all the same shape**: an argument list naming one lane of one result plane per
+> lane — `value[2][coreNum].avx512.m512d_f64[4], value[2][coreNum].avx512.m512d_f64[5], …` in `Failed`'s
+> AVX-512 case, and `value[2][i].raw[0], … value[3][i].raw[7]` across the results table's rows. Each now binds
+> the two planes to a pair of local views and indexes those, which is what takes the AVX-512 row from 224
+> columns to 130 and the AVX2 row from 209 to 137. The two sites bind them differently, and deliberately:
+> `Failed` takes a `cfl64ptrc` per `switch` case from the `RESULTS` member of that case's own unit, so nothing
+> in it has to know a lane offset, while the results table takes one `cui64ptrc` pair per row over the union's
+> `raw` view, because that table prints bit patterns rather than values and `raw`'s widest-unit-first ordering
+> is the same ordering `Evaluate` already derives its windows from. The AVX-512 row's *format string* was
+> itself 224 columns, sixteen `%16.16llX` and their separators being a single unbreakable token by any other
+> reading; it is split into one wide literal per plane and joined by adjacent-literal concatenation, which is
+> how `en-GB.h:144` already joins its own multi-line messages. Every format string in `CPU.cpp` was compared
+> against `HEAD` afterwards and all 28 are byte-identical, so no row of the report changed.
+>
+> The same pass took `Failed`'s AVX2 and SSE cases (172 and 173 columns) and the results table's AVX2 row
+> under the 150 of e2 as well, since they were being rewritten anyway. What is left between 150 and 180 is the
+> eight `JOB_CYCLE` initialiser rows, which are column-padded under r3 and would lose that padding to fit, and
+> three 175-column banner lines in the table header — e2 permits both, its 150 being the target it asks for
+> "unless splitting is impractical" and 180 the cap it makes absolute.
+>
+> **All eleven PITC-proper files carry the r17 prolog**: `CPU.cpp`, `CPU.h`, `CPU_build.h`, `CPU_job_cycles.h`,
+> `CPU_methods.h`, `en-GB.h`, `translations.h` and the four `CPU_jobs_*.cpp`. Fields A–L in order, ASCII, no
+> tabs, wrapped at 150, `License: MIT` with the two spaces before `Copyright:` the validation regex requires,
+> and no `History:` — which costs nothing, the boxed prologs they replace having carried none either. Each
+> `Created:` date is the one its boxed prolog stated, reformatted to `YYYY-MM-DD`; nothing about a file's
+> history is lost in the conversion.
+>
+> Two of the fields needed a decision rather than a transcription. **`Version:` is the product version in all
+> eleven, `v1.0.2`** — r17 makes the field mandatory, and one number across the eleven is what keeps a release
+> a single pass rather than eleven numbers free to drift apart. The cost is stated rather than hidden: K3
+> counts the hand-maintained sites of that number and this raises them from three to fourteen, which is an
+> argument for the `VERSIONINFO` resource K3 asks for and not an argument against the field. **`ISA:` takes
+> tokens from `{Scalar, SSE4.2, AVX2, AVX-512}` and no others**, and the vocabulary has no SSE4.1: the SSE unit
+> is therefore `Scalar | SSE4.2`, the narrowest admissible token, which overstates by one instruction group —
+> its own `To Do` records the gap, since the unit's real bound is the run-time `cfg.sys.cpuSSE4_1` gate and not
+> a build-time one. The AVX-512 unit reads `Scalar | AVX2 | AVX-512` because I10's completion poll genuinely
+> issues two AVX2 `vptest`s; `Thread-safety:` is `N/A` for the three headers that declare data and define no
+> code, and `MT-safe` for the eight the worker threads reach.
+>
+> The `To Do:` fields are drawn from open findings rather than invented, so the prologs are a live index into
+> this document: A3 in `CPU.cpp`, `CPU.h` and `CPU_methods.h`; K9 in `CPU.h`; K5 in `CPU.cpp` and `en-GB.h`;
+> K3 in `CPU.cpp` and `en-GB.h`; K6 in `translations.h`; H1 in `CPU_build.h`; J1 in the SSE and AVX2 units;
+> I10 in the AVX-512 unit; and GCS d1's missing `///` tags in all four kernel units. `CPU.cpp`'s old boxed
+> "Add utilisation of (code) caches" is item 1 of its new list, which is A3 under its finding number.
+>
+> The six vendored headers are untouched. Three of them (`typedefs.h`, `memory management.h`,
+> `common functions.h`) already carried r17 and three (`vector structures.h`, `class_timers.h`,
+> `SIMD management.h`) still carry the boxed form; converting those three is a change to the upstream library,
+> not to this repository, and `CLAUDE.md` now says so — the boxed prolog is confined to vendored files.
+>
+> **The dispatch table is `JOB_CYCLE`**, at its definition (`CPU.cpp`), its declaration (`CPU_job_cycles.h`)
+> and the three sites that index it (`CPU_methods.h`). The eighteen wrappers keep `PascalCase` under r11,
+> which is the whole point of the rename: the one name in that header which is not a function now reads
+> differently from the eighteen that are. `CPU_job_cycles.h:36`'s `JobCycle<UNIT>(…)` is left alone — it names
+> the wrapper family, not the table — and `CLAUDE.md` carries the rule beside the dispatch section.
+>
+> One observation this fix does not act on: r12 covers `wstrKernelName`, `wstrUnitsCPU`, `wstrSyncCPU` and
+> `wstrPass` as well, all four being immutable tables at namespace scope and all four lowercase. K8 names
+> `JobCycle` alone and they are left as they are, for two reasons: the `wstr` prefix is what says they hold
+> wide strings and is shared with the *mutable* `wstrOut` and `wstrLang` beside them, which r12 does not reach;
+> and K5 is due to move `wstrPass` and the results-table labels into the translation tables, at which point
+> what survives at namespace scope is worth renaming once rather than twice.
 
 ### K9. Dead configuration declarations misdescribe the program — **Low** — *carried forward (old K14)*
 
