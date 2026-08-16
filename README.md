@@ -37,13 +37,17 @@ Command-line options
 
  Defaults, where no option and no preset sets otherwise: the ALU & FPU of every virtual core, parallel constant execution, no memory (the register-resident kernels), a 2000ms start-up delay and a 15 minute duration. The 100ms on-time and 900ms off-time are what a pulsed mode selected without '[' or ']' inherits.
 
- B  : Run the benchmark. Options after 'B' override defaults; eg. pitc.exe B Iaf mt1024 !!! Cache use not yet implemented !!!
+ B  : Run the benchmark. Options after 'B' override defaults; eg. pitc.exe B Iaf mt1024
  
       Utilises the ALU and largest vector unit of all (virtual) cores in the system, and 8MB memory per thread for 60 seconds.
- Ix : Set instruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av !!! Cache use not yet implemented !!!
+ Ix : Set instruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av
  
-      Caches: 1==Level 1, 2==Level 2, 3==Level 3                                                |  At least one processing unit is required
+      Caches: 1==Level 1, 2==Level 2, 3==Level 3                                                |  The highest cache level given is used
       Processing: A==ALU, F==FPU, S==SSE4.1, V==AVX2, X==AVX512                                 |  F, S, V and X are mutually exclusive
+         At least one processing unit is required; a cache level names no unit of its own and is optional
+         A cache level sizes the memory per thread to it: the blocks of every selected thread sharing one instance of that level
+         fill it, and together overflow the level below. An 'M' option overrides the derived sizes, and a level this system does
+         not report is refused with -27 rather than tested at some other size
  Lx : Set interface language.
  
       Recognises ISO 639-1 language codes; eg. Len-GB
@@ -52,6 +56,7 @@ Command-line options
       C==Per virtual core, N==Per first-class core, S==Per second-class virtual core, T==Total split amongst all virtual cores
          The two core classes are the CPU's non-SMT and SMT cores; on a hybrid CPU they are its efficiency and performance cores
          'N' and 'S' each cover one class only: where the CPU has cores of both, give both, or the class left without memory is refused
+         An 'M' overrides the sizes an 'I1', 'I2' or 'I3' would derive; a size outside that level's residency window is warned about
  Ox : Results file output options. A filename can be stacked with any of the remaining options; eg. O[results.txt]16
  
       []=Filename, A=Non-UTF ASCII, 8=UTF-8, 16=UTF-16
@@ -100,7 +105,7 @@ Command-line options
       0==Synchronised fixed-width pulsed stress on all virtual cores, using ALU & SSE code-paths with 2MB memory per core. 1 hour duration
 
 
-Example: "pitc.exe I3x Mc8 Spt Tcd8.0t3600 Ua"
+Example: "pitc.exe I3x Spt Tcd8.0t3600 Ua"
 
 
 Return values
@@ -138,6 +143,7 @@ Return values
 | `-24` | Missing, malformed or out-of-range value for a command-line option |
 | `-25` | Unrecognised command-line option |
 | `-26` | The selected core map contains no cores to test |
+| `-27` | Requested cache level not reported by the system |
 
 
 Screenshot of the benchmark result of an AMD Ryzen 9 5950X:

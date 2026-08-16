@@ -121,6 +121,8 @@ PITC.exe Ia Tct5.0 Ue      # 5-second ALU-only constant run, one thread per phys
 PITC.exe -1                # preset 1 (10-minute constant stress)
 PITC.exe B                 # 60-second benchmark, prints a KUPS score
 PITC.exe Iax Mc8 Spt Tfd2.0t60[250]1750 Ua   # AVX-512 + ALU, 8MB/core, synchronised parallel pulses
+PITC.exe I3a Tct5.0        # ALU over blocks sized to the level-3 cache; I1/I2 for the levels below
+PITC.exe I123a Tct5.0      # the highest level given wins, so this is I3a
 ```
 
 **`cpu.values` must be regenerated (`PITC.exe W`) after any change to a `Job*` kernel in `CPU_jobs_*.cpp`.**
@@ -209,7 +211,11 @@ either of its two calls, a buffer that could not be allocated for it, or a walk 
 G3). `-24`, `-25` and `-26` are the command-line rejections: a numeric option with no value, a malformed one
 or one outside its documented range; an option letter, argument or preset digit this build does not
 recognise; and a `U` core map that selects no core at all, which is refused before `threadCount[2]` is used
-as a divisor (ISSUES.MD F4, F9, F2, C8). `-5` is shared by two messages of the `W` path, both about the file
+as a divisor (ISSUES.MD F4, F9, F2, C8). `-27` is a cache level an `I1`, `I2` or `I3` named that the system
+does not report — including an input the level's window needs, such as the class's L1 data size for a
+level-2 run or its L2 instances for a level-3 one — raised by the sizing block in `wmain` before anything is
+allocated, and refused rather than given a fallback size whether the sizes were to be derived or only
+checked (ISSUES.MD A1). `-5` is shared by two messages of the `W` path, both about the file
 it could not put in place: `wstrMessage[6]` for a temporary it could not create — which is also how a second
 concurrent `W` is refused — and `wstrMessage[42]` for one it wrote but could not move over `cpu.values`.
 Add a code and the table in `wstrInstructions_English` and the message in `wstrMessage_*` have to grow with
@@ -217,8 +223,10 @@ it; a new *message* under an existing code grows the second table alone.
 Not every message is an exit code: `wstrMessage[24]` warns
 that a thread could not be pinned, `wstrMessage[33]` that the machine carries more virtual cores than
 `MAX_THREADS`, `wstrMessage[34]` names the two core classes of a hybrid CPU, because there the split is not
-the non-SMT/SMT one the options are documented against (ISSUES.MD G9), and `wstrMessage[39]` reports a
-language code this build does not carry; none of the four stops the run.
+the non-SMT/SMT one the options are documented against (ISSUES.MD G9), `wstrMessage[39]` reports a
+language code this build does not carry, `wstrMessage[44]` withdraws a cache-residency claim the thread count
+makes impossible, and `wstrMessage[45]` reports an explicit `M` outside the requested level's residency
+window; none of the six stops the run.
 
 **The help text is this program's reference manual, and three of its blocks restate code rather than describe
 it.** `wstrInstructions_English` (`en-GB.h`) states the exit codes above; the no-option defaults — every
@@ -658,7 +666,10 @@ Requesting memory (`M`, or any preset) switches every thread from register-resid
 working over a RAM arena — this is what exercises load/store units and the cache hierarchy.
 
 `wmain` allocates one 64-byte-aligned block (`malloc64`) for the whole run and hands each thread a slice via
-`value[1][k].p0..p4`. The `switch(cfg.procUnits & 0x01F)` is the arena layout. It yields two numbers:
+`value[1][k].p0..p4`. `RecordGeometry` (`CPU.h`) is the arena layout — the `switch(cfg.procUnits & 0x01F)`
+that used to sit in the arena block, moved into a function of its own because the cache sizing pass needs the
+same numbers before the arena block is reached, and a derived block size *is* a record count scaled by the
+record size. It yields two numbers:
 `recSize`, the per-record byte cost of the selected units (8 for ALU-only, 40 for ALU+AVX2, 72 for
 ALU+AVX-512, …), and `vecUnits`, the same record's *vector* portion counted in the 8-byte units
 `resArray.alu` is indexed by. Whenever the ALU bit is set the two satisfy `recSize == (vecUnits + 1) * 8`,
@@ -667,7 +678,8 @@ and that identity is what makes the ALU sub-array — placed *after* the vector 
 count of **both** thread classes: applying it to the SMT term alone dropped the ALU base inside the vector
 sub-array on any topology with non-SMT threads (ISSUES.MD C2). Change the unit set or the record size and
 this switch must change with it, and keep its `default:` arm — without one an index with no case leaves
-`recSize` uninitialised (ISSUES.MD A10).
+`recSize` uninitialised (ISSUES.MD A10). `wmain` calls it once, above the sizing block, and the arena block
+reads the locals it filled rather than calling it again.
 
 Three rules follow the switch and must survive any edit to it:
 
@@ -707,7 +719,11 @@ reset: each of `M`'s four sub-options assigns `memConfig` together with the size
 to set a property still wins. `en-GB.h:44` documents only `B` and the presets as resetting the memory
 configuration, and each of those now clears `allocMem[1]` beside the `allocMem[0]` it sets, so **a new
 per-class size added to `M` needs a matching zero in the `B` case, the preset preamble and the defaults
-block** — and none in `M` itself. The arena and `resArray.iter` are freed by
+block** — and none in `M` itself. The same three sites clear `cfg.memExplicit`, which every `M` sub-option
+sets: that flag is what separates a size this command line asked for from one a reset left behind, and it is
+the whole of how cache-derived sizing decides between writing the block sizes and merely checking them.
+`Mc8 -1` therefore derives and `-1 Mc8` does not, which is the last-option-wins contract the help text
+already states. The arena and `resArray.iter` are freed by
 `~RESULTS_ARRAYS` (`CPU.h`) — `wmain` leaves by more than a dozen returns, so the frees belong to the object
 that owns the pointers, exactly as `GLOBAL_CFG`'s destructor owns its bitmaps (C13, GCS p2). A second `B` on
 one command line frees `resArray.iter` before allocating it again, and **the result of that allocation is
@@ -739,6 +755,57 @@ that width (ISSUES.MD H4). The seed is passed **by reference** for the three vec
 vector of more than 16 bytes by address anyway, and a reference says so without the caller having to form the
 value in a register it may not have.
 
+### Cache-targeted block sizing
+
+`I1`, `I2` and `I3` set `procUnits` bits 5–7, and for a long time nothing read them: a saved results file
+carried `CL3` in the banner of a run that had never been sized to any cache (ISSUES.MD A1). The
+`//--- Cache-test block sizing ---//` group in `CPU.h` is their reader. It derives one block size per core
+class such that **the blocks of every selected thread sharing one instance of the named level fit inside it,
+and together span twice the level below** — and that is the whole of the feature: a non-zero record count
+already puts every thread onto the `JobCycleMem*` path, so no kernel, no `JOB_CYCLE` entry and no seeding
+pass changes with it, and bits 5–7 never reach a dispatch index.
+
+Five things hold it together, and each is easy to undo:
+
+- **Both bounds are budgets over *selected* sharers**, counted from the final core map rather than from a core
+  count. A ceiling divides an instance's capacity by the most selected threads it serves (the worst-cased
+  thread must fit); a defeat bound doubles the widest per-thread share any instance of the level below grants
+  (the best-cached thread must still be defeated). Four efficiency cores sharing a 4 MB cluster L2 therefore
+  need 2 MB each to defeat it, where a lone thread on a 2 MB private L2 needs 4 MB.
+- **The sharer counts come from a fresh `GetLogicalProcessorInformationEx(RelationCache)`**, in
+  `QueryCacheDomains`, not from anything `EnumerateTopology` kept. The `U` maps and the SMT policy are applied
+  *after* the enumeration returns, so a count taken before them describes a selection that is not the one
+  about to run. It skips instruction and trace caches (the arena is data) and any instance reporting no size,
+  and it is the reason the sizing block sits where it does in `wmain` — after `SetSMTLoading`, the `U` maps
+  and the `-26` check, after the `-15`/`-16` unit checks that make `RecordGeometry`'s domain valid, and before
+  the `memConfig` switch that sizes the arena from what it wrote.
+- **A level the system does not report is refused with `-27`**, never given a fallback size — the label on the
+  test would otherwise be unverifiable — and that refusal stands whether the sizes were to be derived or only
+  checked. **An empty window is warned about and run** at the defeat bound (`wstrMessage[44]`, naming the
+  largest per-instance thread count that could have been resident); the residency claim is withdrawn by the
+  warning rather than by refusing a run that is still a valid stress.
+- **An explicit `M` wins.** `cfg.memExplicit` is what says one was given; where it is set the pass computes
+  the window and only warns (`wstrMessage[45]`) if the requested size falls outside it. That check sits
+  *below* the `memConfig` switch, because the switch is what turns an `Mt` total into a per-thread size.
+- **Rounding is applied last**: `records = (size / recSize) & ~7`, floored at 8, so every derived block is one
+  the arena's own ×8-record rule (C12) and its `-18` check accept unchanged.
+
+`memConfig` gains value **3**, "derived from the requested cache level", whose arm in the switch is a
+deliberate no-op: the sizing block has already written both `resArray.blockSize[]` entries and the true
+`cfg.allocMem[0]` total, so the `-17` pre-flight, `malloc64` and the banner's MB figure all describe the
+allocation about to be made. `B` is **not** a cache-targeted run — it carries no cache bit and keeps its
+8 MB per thread — so its KUPS score is unaffected by any of this; `B I3a` and `-1 I3a` are, because both
+resets clear `memExplicit`.
+
+Two limitations are inherited rather than introduced, and are recorded in the code: `QueryCacheDomains` reads
+the single `Cache.GroupMask` exactly as `WalkTopology`'s cache pass does, so a cache spanning processor groups
+under-counts its sharers (`Cache.GroupCount`/`Cache.GroupMasks` are the fields a fix would read, in **both**
+walks or neither); and an exclusive victim L3 holds rather more than its own capacity, so budgeting against
+that capacity errs toward guaranteed residency. **A new cache level, or a change to the occupancy policy, is
+an edit to `CACHE_OCCUPANCY_*`/`CACHE_CEILING_*`/`CACHE_DEFEAT_MUL` and to `CalcCacheBlockSizes`'s `switch`
+together** — and everything in the group is scalar, as everything in `CPU.h` must be (H4), counting bits
+through `SetBitCount64` rather than through an intrinsic no `/arch` setting gates.
+
 ### Configuration bit-fields
 
 `cfg.procUnits` and `cfg.procSync` (`GLOBAL_CFG`, `CPU.h`) are copied verbatim into each `THREAD_CFG` and are
@@ -749,7 +816,11 @@ procUnits  bit 0 ALU   1 FPU   2 SSE4.1   3 AVX2   4 AVX512   5 L1$   6 L2$   7 
 procSync   bit 0 R-R   1 Par   2 Stag     3 T-Sync 4 Constant 5 Fixed pulse  6 Sweep  7 Benchmark
 ```
 
-Cache bits 5–7 are parsed and displayed but **not implemented** (the README and help text say so explicitly).
+Cache bits 5–7 select the *size* of the memory blocks, and nothing else: `HighestCacheLevel` reduces them to
+one level the way `JOB_CYCLE` reduces bits 1–4 to one unit — the highest given wins — and
+`CalcCacheBlockSizes` turns that level into one block size per core class (see "Cache-targeted block sizing"
+below). They never reach the dispatch index, which is why `ComputationPulse` and the arena still mask with
+`0x01F`.
 Benchmark mode (bit 7) additionally records each thread's **record** count into `resArray.iter` and prints a
 KUPS score weighted by the 64-bit lanes a job cycle updates. Two rules hold that score together, and both
 were broken (ISSUES.MD E12). `resArray.iter` counts records, not loop iterations: a memory-backed iteration
@@ -897,7 +968,7 @@ manual. The rules that bite most often when editing here:
 ## Localisation
 
 `translations.h` selects a language by pointing three globals at one header's string tables; `en-GB.h` is the
-only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[43]`
+only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[46]`
 and `wstrInterface_*[13]`, then extending both `translations.h` and the `L` case in `CPU.cpp`. The three
 globals are *declared* in `translations.h` and defined, pointing at English, in `CPU.cpp`: the `L` option
 writes them at run time, so a definition in the header would have given each translation unit a copy and left
@@ -955,7 +1026,10 @@ Verify against current source before relying on any of these:
   were given, which can be hours long, so the handles are released rather than waited on and `~RESULTS_ARRAYS`
   frees the arena under them on the way out. The process is exiting with an error either way; every path that
   goes on to *read* a result joins first (ISSUES.MD D8).
-- Cache-targeting (`I1`/`I2`/`I3`) is accepted, displayed, and does nothing.
+- **Cache-targeting (`I1`/`I2`/`I3`) sizes the memory blocks and nothing else.** It is a *residency* claim
+  about a sequential stream, not latency isolation: the walk engages the hardware prefetchers, so it drives
+  the fill path, tags and data arrays of the named level at full bandwidth. Isolating load-to-use latency
+  would need a pointer-chase kernel, which does not exist here. `B` is not a cache-targeted run.
 - **The program is no longer confined to one translation unit** (ISSUES.MD H9), and the five it now has are
   compiled at four different instruction sets. A new file has to be added to `CPU.vcxproj`'s `ClCompile` list
   with the ISA and `Optimization` metadata of the unit it belongs beside; a new *header* still has to be added

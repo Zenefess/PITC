@@ -5,9 +5,8 @@
  * Created: 2025-02-17
  * Last Modified: 2026-08-16
  * Description: The computation thread body: pulse-shape set-up, the dispatch loop, and the record count the benchmark score is taken from.
- * To Do: 1) Read the L1/L2/L3 cache bits this loop masks away with 0x1F, or see them withdrawn from the option set (ISSUES.MD A3)
- *        2) Range-check the dispatch index once per thread, so a hand-built 'I' string cannot reach a wild indirect call
- *        3) Delete the superseded 'goto fail' spelling left commented at the forced first job cycle and at the loop's exit
+ * To Do: 1) Range-check the dispatch index once per thread, so a hand-built 'I' string cannot reach a wild indirect call
+ *        2) Delete the superseded 'goto fail' spelling left commented at the forced first job cycle and at the loop's exit
  * Dependencies: CPU.h, CPU_job_cycles.h
  * ISA: Scalar
  * Thread-safety: MT-safe
