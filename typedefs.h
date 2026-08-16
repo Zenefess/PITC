@@ -3,7 +3,7 @@
  * Version: v1.0
  * Owner: David William Bull
  * Created: 2007-07-01
- * Last Modified: 2025-09-26
+ * Last Modified: 2026-08-16
  * Description: Shorthand type aliases and composites; scalar width/sign, SIMD vector aliases, and common size constants.
  * To Do: Add static_assert size/ISA guards for vector aliases.
  *        Publish "constness legend" and pointer-lattice table.
@@ -29,8 +29,6 @@
 #define al16 __declspec(align(16))
 #define al32 __declspec(align(32))
 #define al64 __declspec(align(64))
-
-#define vol volatile
 
 #define $LoopMT   __pragma(loop(hint_parallel(0)))
 #define $LoopMT2  __pragma(loop(hint_parallel(2)))
@@ -116,78 +114,78 @@ typedef const          wchar_t cwchar;
 
 // Volatile types
 #ifdef _WINNT_
-typedef vol          HANDLE  vHANDLE;
-typedef vol          HWND    vHWND;
+typedef volatile          HANDLE  vHANDLE;
+typedef volatile          HWND    vHWND;
 #endif
-typedef vol          bool    vbool;
-typedef vol unsigned char    vBYTE;
-typedef vol unsigned short   vWORD;
-typedef vol unsigned long    vDWORD;
-typedef vol unsigned __int64 vQWORD;
-typedef vol unsigned __int8  vui8;
-typedef vol unsigned __int16 vui16;
-typedef vol unsigned __int32 vui32;
-typedef vol unsigned __int64 vui64;
-typedef vol          __m128i vui128;
-typedef vol          __m256i vui256;
-typedef vol          __m512i vui512;
-typedef vol   signed __int8  vsi8;
-typedef vol   signed __int16 vsi16;
-typedef vol   signed __int32 vsi32;
-typedef vol   signed __int64 vsi64;
-typedef vol          __m128i vsi128;
-typedef vol          __m256i vsi256;
-typedef vol          __m512i vsi512;
-typedef vol       __bfloat16 vfl16;
-typedef vol          float   vfl32;
-typedef vol          double  vfl64;
-typedef vol     long double  vfl80;
-typedef vol          __m128  vfl32x4;
-typedef vol          __m256  vfl32x8;
-typedef vol          __m512  vfl32x16;
-typedef vol          __m128d vfl64x2;
-typedef vol          __m256d vfl64x4;
-typedef vol          __m512d vfl64x8;
-typedef vol             char vchar;
-typedef vol          wchar_t vwchar;
+typedef volatile          bool    vbool;
+typedef volatile unsigned char    vBYTE;
+typedef volatile unsigned short   vWORD;
+typedef volatile unsigned long    vDWORD;
+typedef volatile unsigned __int64 vQWORD;
+typedef volatile unsigned __int8  vui8;
+typedef volatile unsigned __int16 vui16;
+typedef volatile unsigned __int32 vui32;
+typedef volatile unsigned __int64 vui64;
+typedef volatile          __m128i vui128;
+typedef volatile          __m256i vui256;
+typedef volatile          __m512i vui512;
+typedef volatile   signed __int8  vsi8;
+typedef volatile   signed __int16 vsi16;
+typedef volatile   signed __int32 vsi32;
+typedef volatile   signed __int64 vsi64;
+typedef volatile          __m128i vsi128;
+typedef volatile          __m256i vsi256;
+typedef volatile          __m512i vsi512;
+typedef volatile       __bfloat16 vfl16;
+typedef volatile          float   vfl32;
+typedef volatile          double  vfl64;
+typedef volatile     long double  vfl80;
+typedef volatile          __m128  vfl32x4;
+typedef volatile          __m256  vfl32x8;
+typedef volatile          __m512  vfl32x16;
+typedef volatile          __m128d vfl64x2;
+typedef volatile          __m256d vfl64x4;
+typedef volatile          __m512d vfl64x8;
+typedef volatile             char vchar;
+typedef volatile          wchar_t vwchar;
 
 // Void pointer types
-typedef void       *               ptr;       // Pointer
-typedef void const *               cptr;      // Pointer to constant
-typedef void vol   *               vptr;      // Pointer to volatile
-typedef void       * const         ptrc;      // Constant pointer
-typedef void const * const         cptrc;     // Constant pointer to constant
-typedef void vol   * const         vptrc;     // Constant pointer to volatile
-typedef void       * vol           ptrv;      // Volatile pointer
-typedef void const * vol           cptrv;     // Volatile pointer to constant
-typedef void vol   * vol           vptrv;     // Volatile pointer to volatile
-typedef void       *       *       ptrptr;    // Pointer to pointer
-typedef void const *       *       cptrptr;   // Pointer to pointer to constant
-typedef void vol   *       *       vptrptr;   // Pointer to pointer to volatile
-typedef void       * const *       ptrcptr;   // Pointer to constant pointer
-typedef void const * const *       cptrcptr;  // Pointer to constant pointer to constant
-typedef void vol   * const *       vptrcptr;  // Pointer to constant pointer to volatile
-typedef void       * vol   *       ptrvptr;   // Pointer to volatile pointer
-typedef void const * vol   *       cptrvptr;  // Pointer to volatile pointer to constant
-typedef void vol   * vol   *       vptrvptr;  // Pointer to volatile pointer to volatile
-typedef void       *       * const ptrptrc;   // Constant pointer to pointer
-typedef void const *       * const cptrptrc;  // Constant pointer to pointer to constant
-typedef void vol   *       * const vptrptrc;  // Constant pointer to pointer to volatile
-typedef void       * const * const ptrcptrc;  // Constant pointer to constant pointer
-typedef void const * const * const cptrcptrc; // Constant pointer to constant pointer to constant
-typedef void vol   * const * const vptrcptrc; // Constant pointer to constant pointer to volatile
-typedef void       * vol   * const ptrvptrc;  // Constant pointer to volatile pointer
-typedef void const * vol   * const cptrvptrc; // Constant pointer to volatile pointer to constant
-typedef void vol   * vol   * const vptrvptrc; // Constant pointer to volatile pointer to volatile
-typedef void       *       * vol   ptrptrv;   // Volatile pointer to pointer
-typedef void const *       * vol   cptrptrv;  // Constant pointer to pointer to constant
-typedef void vol   *       * vol   vptrptrv;  // Volatile pointer to pointer to volatile
-typedef void       * const * vol   ptrcptrv;  // Volatile pointer to constant pointer
-typedef void const * const * vol   cptrcptrv; // Volatile pointer to constant pointer to constant
-typedef void vol   * const * vol   vptrcptrv; // Volatile pointer to constant pointer to volatile
-typedef void       * vol   * vol   ptrvptrv;  // Volatile pointer to volatile pointer
-typedef void const * vol   * vol   cptrvptrv; // Volatile pointer to volatile pointer to constant
-typedef void vol   * vol   * vol   vptrvptrv; // Volatile pointer to volatile pointer to volatile
+typedef void          *                     ptr;       // Pointer
+typedef void const    *                     cptr;      // Pointer to constant
+typedef void volatile *                     vptr;      // Pointer to volatile
+typedef void          * const               ptrc;      // Constant pointer
+typedef void const    * const               cptrc;     // Constant pointer to constant
+typedef void volatile * const               vptrc;     // Constant pointer to volatile
+typedef void          * volatile            ptrv;      // Volatile pointer
+typedef void const    * volatile            cptrv;     // Volatile pointer to constant
+typedef void volatile * volatile            vptrv;     // Volatile pointer to volatile
+typedef void          *          *          ptrptr;    // Pointer to pointer
+typedef void const    *          *          cptrptr;   // Pointer to pointer to constant
+typedef void volatile *          *          vptrptr;   // Pointer to pointer to volatile
+typedef void          * const    *          ptrcptr;   // Pointer to constant pointer
+typedef void const    * const    *          cptrcptr;  // Pointer to constant pointer to constant
+typedef void volatile * const    *          vptrcptr;  // Pointer to constant pointer to volatile
+typedef void          * volatile *          ptrvptr;   // Pointer to volatile pointer
+typedef void const    * volatile *          cptrvptr;  // Pointer to volatile pointer to constant
+typedef void volatile * volatile *          vptrvptr;  // Pointer to volatile pointer to volatile
+typedef void          *          * const    ptrptrc;   // Constant pointer to pointer
+typedef void const    *          * const    cptrptrc;  // Constant pointer to pointer to constant
+typedef void volatile *          * const    vptrptrc;  // Constant pointer to pointer to volatile
+typedef void          * const    * const    ptrcptrc;  // Constant pointer to constant pointer
+typedef void const    * const    * const    cptrcptrc; // Constant pointer to constant pointer to constant
+typedef void volatile * const    * const    vptrcptrc; // Constant pointer to constant pointer to volatile
+typedef void          * volatile * const    ptrvptrc;  // Constant pointer to volatile pointer
+typedef void const    * volatile * const    cptrvptrc; // Constant pointer to volatile pointer to constant
+typedef void volatile * volatile * const    vptrvptrc; // Constant pointer to volatile pointer to volatile
+typedef void          *          * volatile ptrptrv;   // Volatile pointer to pointer
+typedef void const    *          * volatile cptrptrv;  // Constant pointer to pointer to constant
+typedef void volatile *          * volatile vptrptrv;  // Volatile pointer to pointer to volatile
+typedef void          * const    * volatile ptrcptrv;  // Volatile pointer to constant pointer
+typedef void const    * const    * volatile cptrcptrv; // Volatile pointer to constant pointer to constant
+typedef void volatile * const    * volatile vptrcptrv; // Volatile pointer to constant pointer to volatile
+typedef void          * volatile * volatile ptrvptrv;  // Volatile pointer to volatile pointer
+typedef void const    * volatile * volatile cptrvptrv; // Volatile pointer to volatile pointer to constant
+typedef void volatile * volatile * volatile vptrvptrv; // Volatile pointer to volatile pointer to volatile
 
 // Pointer to types
 #ifdef _FILE_DEFINED
@@ -456,74 +454,74 @@ typedef             char const * const * const cchptrcptrc;
 typedef          wchar_t const * const * const cwchptrcptrc;
 
 // Pointers to volatile types
-typedef vol          bool     *vboolptr;
-typedef vol unsigned char     *vbptr;
-typedef vol unsigned short    *vwptr;
-typedef vol unsigned long     *vdwptr;
-typedef vol unsigned __int64  *vqwptr;
-typedef vol unsigned __int8   *vui8ptr;
-typedef vol unsigned __int16  *vui16ptr;
-typedef vol unsigned __int32  *vui32ptr;
-typedef vol unsigned __int64  *vui64ptr;
-typedef vol          __m128i  *vui128ptr;
-typedef vol          __m256i  *vui256ptr;
-typedef vol          __m512i  *vui512ptr;
-typedef vol   signed __int8   *vsi8ptr;
-typedef vol   signed __int16  *vsi16ptr;
-typedef vol   signed __int32  *vsi32ptr;
-typedef vol   signed __int64  *vsi64ptr;
-typedef vol          __m128i  *vsi128ptr;
-typedef vol          __m256i  *vsi256ptr;
-typedef vol          __m512i  *vsi512ptr;
-typedef vol       __bfloat16  *vfl16ptr;
-typedef vol          float    *vfl32ptr;
-typedef vol          double   *vfl64ptr;
-typedef vol     long double   *vfl80ptr;
-typedef vol          __m128   *vfl32x4ptr;
-typedef vol          __m256   *vfl32x8ptr;
-typedef vol          __m512   *vfl32x16ptr;
-typedef vol         __m128d   *vfl64x2ptr;
-typedef vol         __m256d   *vfl64x4ptr;
-typedef vol         __m512d   *vfl64x8ptr;
-typedef vol          char     *vchptr;
-typedef vol          char    **vchptrptr;
-typedef vol          wchar_t  *vwchptr;
-typedef vol          wchar_t **vwchptrptr;
+typedef volatile          bool     *vboolptr;
+typedef volatile unsigned char     *vbptr;
+typedef volatile unsigned short    *vwptr;
+typedef volatile unsigned long     *vdwptr;
+typedef volatile unsigned __int64  *vqwptr;
+typedef volatile unsigned __int8   *vui8ptr;
+typedef volatile unsigned __int16  *vui16ptr;
+typedef volatile unsigned __int32  *vui32ptr;
+typedef volatile unsigned __int64  *vui64ptr;
+typedef volatile          __m128i  *vui128ptr;
+typedef volatile          __m256i  *vui256ptr;
+typedef volatile          __m512i  *vui512ptr;
+typedef volatile   signed __int8   *vsi8ptr;
+typedef volatile   signed __int16  *vsi16ptr;
+typedef volatile   signed __int32  *vsi32ptr;
+typedef volatile   signed __int64  *vsi64ptr;
+typedef volatile          __m128i  *vsi128ptr;
+typedef volatile          __m256i  *vsi256ptr;
+typedef volatile          __m512i  *vsi512ptr;
+typedef volatile       __bfloat16  *vfl16ptr;
+typedef volatile          float    *vfl32ptr;
+typedef volatile          double   *vfl64ptr;
+typedef volatile     long double   *vfl80ptr;
+typedef volatile          __m128   *vfl32x4ptr;
+typedef volatile          __m256   *vfl32x8ptr;
+typedef volatile          __m512   *vfl32x16ptr;
+typedef volatile         __m128d   *vfl64x2ptr;
+typedef volatile         __m256d   *vfl64x4ptr;
+typedef volatile         __m512d   *vfl64x8ptr;
+typedef volatile          char     *vchptr;
+typedef volatile          char    **vchptrptr;
+typedef volatile          wchar_t  *vwchptr;
+typedef volatile          wchar_t **vwchptrptr;
 
 // Constant pointers to volatile types
-typedef vol          bool     * const vboolptrc;
-typedef vol unsigned char     * const vbptrc;
-typedef vol unsigned short    * const vwptrc;
-typedef vol unsigned long     * const vdwptrc;
-typedef vol unsigned __int64  * const vqwptrc;
-typedef vol unsigned __int8   * const vui8ptrc;
-typedef vol unsigned __int16  * const vui16ptrc;
-typedef vol unsigned __int32  * const vui32ptrc;
-typedef vol unsigned __int64  * const vui64ptrc;
-typedef vol          __m128i  * const vui128ptrc;
-typedef vol          __m256i  * const vui256ptrc;
-typedef vol          __m512i  * const vui512ptrc;
-typedef vol   signed __int8   * const vsi8ptrc;
-typedef vol   signed __int16  * const vsi16ptrc;
-typedef vol   signed __int32  * const vsi32ptrc;
-typedef vol   signed __int64  * const vsi64ptrc;
-typedef vol          __m128i  * const vsi128ptrc;
-typedef vol          __m256i  * const vsi256ptrc;
-typedef vol          __m512i  * const vsi512ptrc;
-typedef vol       __bfloat16  * const vfl16ptrc;
-typedef vol          float    * const vfl32ptrc;
-typedef vol          double   * const vfl64ptrc;
-typedef vol     long double   * const vfl80ptrc;
-typedef vol          __m128   * const vfl32x4ptrc;
-typedef vol          __m256   * const vfl32x8ptrc;
-typedef vol          __m512   * const vfl32x16ptrc;
-typedef vol         __m128d   * const vfl64x2ptrc;
-typedef vol         __m256d   * const vfl64x4ptrc;
-typedef vol         __m512d   * const vfl64x8ptrc;
-typedef vol          char     * const vchptrc;
-typedef vol          char    ** const vchptrptrc;
-typedef vol          wchar_t  * const vwchptrc;
-typedef vol          wchar_t ** const vwchptrptrc;
+typedef volatile          bool     * const vboolptrc;
+typedef volatile unsigned char     * const vbptrc;
+typedef volatile unsigned short    * const vwptrc;
+typedef volatile unsigned long     * const vdwptrc;
+typedef volatile unsigned __int64  * const vqwptrc;
+typedef volatile unsigned __int8   * const vui8ptrc;
+typedef volatile unsigned __int16  * const vui16ptrc;
+typedef volatile unsigned __int32  * const vui32ptrc;
+typedef volatile unsigned __int64  * const vui64ptrc;
+typedef volatile          __m128i  * const vui128ptrc;
+typedef volatile          __m256i  * const vui256ptrc;
+typedef volatile          __m512i  * const vui512ptrc;
+typedef volatile   signed __int8   * const vsi8ptrc;
+typedef volatile   signed __int16  * const vsi16ptrc;
+typedef volatile   signed __int32  * const vsi32ptrc;
+typedef volatile   signed __int64  * const vsi64ptrc;
+typedef volatile          __m128i  * const vsi128ptrc;
+typedef volatile          __m256i  * const vsi256ptrc;
+typedef volatile          __m512i  * const vsi512ptrc;
+typedef volatile       __bfloat16  * const vfl16ptrc;
+typedef volatile          float    * const vfl32ptrc;
+typedef volatile          double   * const vfl64ptrc;
+typedef volatile     long double   * const vfl80ptrc;
+typedef volatile          __m128   * const vfl32x4ptrc;
+typedef volatile          __m256   * const vfl32x8ptrc;
+typedef volatile          __m512   * const vfl32x16ptrc;
+typedef volatile         __m128d   * const vfl64x2ptrc;
+typedef volatile         __m256d   * const vfl64x4ptrc;
+typedef volatile         __m512d   * const vfl64x8ptrc;
+typedef volatile          char     * const vchptrc;
+typedef volatile          char    ** const vchptrptrc;
+typedef volatile          wchar_t  * const vwchptrc;
+typedef volatile          wchar_t ** const vwchptrptrc;
 
 // Function pointer types
 typedef void (*func)(void);
