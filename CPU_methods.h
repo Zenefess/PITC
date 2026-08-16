@@ -142,7 +142,10 @@ ui32 __stdcall ComputationPulse(ptrc dataPtr) {
       // is that test, done once, and it is a thread-local reading rather than the shared timer another
       // thread may be part-way through updating (ISSUES.MD E5, D2). j opens at the cycle forced above
       for(i = 0, j = recStep; (curTics = CurrentTics()) < tcfg->endTics; i = (i >= recCount - 4 ? 0 : i + 4)) {
-         if(!coreNum && curTics - oldTics > timer.siFrequency) { printf("."); oldTics = curTics; }
+         // One dot per second from the first thread only, wide like every other write this program makes to
+         // stdout: byte I/O on a stream the rest of the program has oriented wide is undefined in both
+         // languages, and works here only because the MSVC CRT implements no orientation (ISSUES.MD F4)
+         if(!coreNum && curTics - oldTics > timer.siFrequency) { wprintf(L"."); oldTics = curTics; }
          if(curTics < nextTic) {
             if(JobCycle[recCount ? 1 : 0][jobProc](coreNum, i, threadByte)) break;
             // Counted here rather than in the loop's increment, and in records rather than in iterations:

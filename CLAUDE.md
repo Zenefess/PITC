@@ -46,6 +46,11 @@ the debug build: MSVC accepts an intrinsic whatever `/arch` says, so the answers
 around them could not be VEX-encoded and paid an AVX-to-SSE transition at every boundary (ISSUES.MD H3). The
 requirement is now enforced from the sources as well — `CPU_jobs_AVX.cpp` `#error`s unless `__AVX2__` is
 defined and `CPU_jobs_AVX512.cpp` unless `__AVX512F__` is, the complement of H1's guard on the baseline unit.
+**The AVX2 unit's guard is two-sided**: it also `#error`s *if* `__AVX512F__` is defined, because
+`/arch:AVX512` defines `__AVX2__` as well, so a lower bound alone accepts a raised per-file setting — and
+`wmain` gates these kernels on `cfg.sys.cpuAVX2`, which dispatches them to every CPU reporting plain AVX2,
+where the EVEX encoding the compiler would then use around the intrinsics is an illegal instruction
+(ISSUES.MD H3). The AVX-512 unit needs no such upper bound; MSVC has no `/arch` above `/arch:AVX512`.
 `CPU_jobs_SSE.cpp` has no such guard because MSVC has no `/arch` for SSE4.1: that unit compiles at the
 baseline by construction, and its one SSE4.1 instruction is gated on `cfg.sys.cpuSSE4_1` at run time instead.
 `Optimization=Custom` is likewise unconditional; `Debug|x64` sets no `Optimization` of its own, so it emits no
@@ -149,12 +154,30 @@ with it. That boundary is how `wmain` tells the two disagreements apart: below i
 `ValidateLadder*` as well as a `ValidateFamily*`, an entry in each half of `wstrKernelName`, and
 `KERNEL_NAME_LADDER` moved past its new family entry.**
 
+**`W` replaces `cpu.values`; it never writes into it.** The header and the two blocks go to `cpu.values.tmp`
+— `CREATE_ALWAYS`, share mode **0** — and `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`
+moves that over `cpu.values` once the last block is written and `FlushFileBuffers` has returned. Written in
+place, as it was, a crash, a full disk or a Ctrl-C anywhere between the open and the last write left a
+truncated file where the user's previous one had been: the header hashes make the next run reject the remnant
+with `-21` rather than grade a CPU against it, but the good file is gone and another costs the minutes of
+ladder runs above (ISSUES.MD B2). Three rules hold that arrangement together. **The flush is part of the
+write** — without it the rename can reach the disk ahead of the bytes it renames, publishing the right name
+over the wrong contents — so a failed `FlushFileBuffers` is treated as a failed write. **Every failure path
+deletes the temporary**, so an error return leaves the directory as it found it. And **the temporary's name
+is fixed rather than generated**: with a share mode of 0 that is what makes two concurrent `W` runs collide
+at the `CreateFileW` and refuses the second with `-5`, where `FILE_SHARE_WRITE` let both interleave their
+blocks into one file. A failed move reports `wstrMessage[42]`, which names the file and says the previous one
+is untouched. **A new write between the open and the move needs a delete on its failure path**, and nothing
+between them may name `cpu.values` itself.
+
 Exit codes are meaningful and documented in `en-GB.h` (`wstrInstructions_English`): negative = error,
 `0` = stability test completed, `1` = values file written, `2` = instructions displayed. `-11` … `-18` are the
 pre-flight rejections in `wmain` — an unsupported vector unit, more than one `S` pulse shape, a test duration
 of zero or less, a zero pulse on-time, an `I` string naming no processing unit, an `I` string naming more
 than one of FPU/SSE4.1/AVX2/AVX-512, a memory request the machine cannot satisfy (`-17`, shared by the
-pre-flight size check and a failed `malloc64`), and a per-thread slice too small to hold the eight records a
+pre-flight size check, a failed `malloc64`, a failed report buffer and — since ISSUES.MD C2 — a failed
+`resArray.iter` under `B`; every run-length allocation in the program now answers with it), and a per-thread
+slice too small to hold the eight records a
 slice is rounded to (`-18`, which is also where a core class given no memory at all arrives — `Mn` and `Ms`
 each name one class). `-19` is the one runtime failure that aborts a run: a worker thread that could not be
 created or resumed, in either the test or the `W` path. `-20` is a `cpu.values` header that could not be
@@ -171,8 +194,12 @@ either of its two calls, a buffer that could not be allocated for it, or a walk 
 G3). `-24`, `-25` and `-26` are the command-line rejections: a numeric option with no value, a malformed one
 or one outside its documented range; an option letter, argument or preset digit this build does not
 recognise; and a `U` core map that selects no core at all, which is refused before `threadCount[2]` is used
-as a divisor (ISSUES.MD F4, F9, F2, C8). Add a code and the table in `wstrInstructions_English` and the
-message in `wstrMessage_*` have to grow with it. Not every message is an exit code: `wstrMessage[24]` warns
+as a divisor (ISSUES.MD F4, F9, F2, C8). `-5` is shared by two messages of the `W` path, both about the file
+it could not put in place: `wstrMessage[6]` for a temporary it could not create — which is also how a second
+concurrent `W` is refused — and `wstrMessage[42]` for one it wrote but could not move over `cpu.values`.
+Add a code and the table in `wstrInstructions_English` and the message in `wstrMessage_*` have to grow with
+it; a new *message* under an existing code grows the second table alone.
+Not every message is an exit code: `wstrMessage[24]` warns
 that a thread could not be pinned, `wstrMessage[33]` that the machine carries more virtual cores than
 `MAX_THREADS`, `wstrMessage[34]` names the two core classes of a hybrid CPU, because there the split is not
 the non-SMT/SMT one the options are documented against (ISSUES.MD G9), and `wstrMessage[39]` reports a
@@ -645,7 +672,20 @@ per-class size added to `M` needs a matching zero in the `B` case, the preset pr
 block** — and none in `M` itself. The arena and `resArray.iter` are freed by
 `~RESULTS_ARRAYS` (`CPU.h`) — `wmain` leaves by more than a dozen returns, so the frees belong to the object
 that owns the pointers, exactly as `GLOBAL_CFG`'s destructor owns its bitmaps (C13, GCS p2). A second `B` on
-one command line frees `resArray.iter` before allocating it again.
+one command line frees `resArray.iter` before allocating it again, and **the result of that allocation is
+checked**: `B` refuses with `-17` on a null, where it used to spawn the threads and let every one of them
+write its record count through a null pointer as it ended (ISSUES.MD C2).
+
+**The report buffer is the third run-length allocation, and it is owned rather than freed at the point of
+use.** `wstrOutput` is a local of `wmain` sized from the group and thread counts, so neither destructor above
+can reach it; `REPORT_BUFFER` (`CPU.h`) is the two-line owner that does — one `wchptrc` and a destructor that
+`mfree1`s it — and `wmain` declares a `cREPORT_BUFFER` over the pointer immediately below the `declare1d64z`
+that allocates it, above the null check, so a failed allocation destructs on the same path as a successful
+one. It had no free at all before (ISSUES.MD C3), and seven error returns stand between the allocation and
+the end of the function, which is exactly the arrangement C13 rejected for the arena. **Nothing reads the
+owner**: every write still goes through `wstrOutput` itself, and a new error return between the two needs no
+free of its own. A fourth run-length allocation should follow the same rule — an owner, not a free per
+return.
 
 Of the five pointers handed to each thread, `p0`–`p3` are four views of the *same* arena address at different
 element strides (only `p4` is advanced past them, and only for the `ALU_` combinations). The seeding pass must
@@ -784,7 +824,7 @@ manual. The rules that bite most often when editing here:
 ## Localisation
 
 `translations.h` selects a language by pointing three globals at one header's string tables; `en-GB.h` is the
-only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[42]`
+only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[43]`
 and `wstrInterface_*[13]`, then extending both `translations.h` and the `L` case in `CPU.cpp`. The three
 globals are *declared* in `translations.h` and defined, pointing at English, in `CPU.cpp`: the `L` option
 writes them at run time, so a definition in the header would have given each translation unit a copy and left
@@ -801,6 +841,14 @@ are still
 hard-coded outside the tables — `wstrUnitsCPU`, `wstrSyncCPU` and `wstrPass` in `CPU.h` (the last is flagged
 `///--- Modify for translation ---///`). `wstrKernelName` in `CPU.h` is also outside the tables, but
 deliberately: its entries are C++ identifiers naming the job kernels, and are not translated.
+
+**Every write to `stdout` is wide, and a new one must be too.** Both languages give a stream an orientation
+at its first use and forbid byte I/O on a wide-oriented one; five writes were `printf` — `GenerateValues`'
+progress dot (`CPU.h`), `ComputationPulse`'s (`CPU_methods.h`) and three newlines in `CPU.cpp` — beside the
+`wprintf` that carries every message and the report, and worked only because the MSVC CRT deliberately
+implements no orientation at all (ISSUES.MD F4). They are `wprintf` now. `_setmode(_fileno(stdout),
+_O_U16TEXT)` is deliberately *not* set: that changes how the console renders each of these writes, where the
+defect was the mixing alone.
 
 ## Known constraints and latent issues
 

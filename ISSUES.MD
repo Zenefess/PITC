@@ -51,8 +51,8 @@ audited and survived adversarial review with **no new findings** — section D o
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **0** | **1** | **18** | **38** | **57** |
 
-**A1, A2, B1, C1, E1, F1, G1, H1 and I1–I6 are fixed** — see the `Fixed` note on each entry. The counts in the
-table above are as first audited and have not been decremented.
+**A1, A2, B1, B2, C1, C2, C3, E1, F1, F4, G1, H1, H3 and I1–I6 are fixed** — see the `Fixed` note on each
+entry. The counts in the table above are as first audited and have not been decremented.
 
 No Critical finding remains: the false-pass and false-fail families of the previous audit are gone, and the
 one High entry was a start-up crash on a narrow class of old hardware rather than a wrong verdict. The Medium
@@ -168,7 +168,7 @@ seed already in hand.
 > with no mismatches, so the check does not reject the tree it was written against. Injecting a
 > single-kernel drift then produced 14, 15 and 16 respectively, so it does not pass one either.
 
-### B2. `cpu.values` is written in place, shared for write, with no atomic replace — **Low**
+### B2. `cpu.values` is written in place, shared for write, with no atomic replace — **Low** — *Fixed*
 
 The `W` path opens `cpu.values` with `CreateFileW(..., GENERIC_WRITE, FILE_SHARE_WRITE, 0, CREATE_ALWAYS,
 ...)` (`CPU.cpp:502`) and writes header and blocks directly. `FILE_SHARE_WRITE` admits a second concurrent
@@ -176,6 +176,27 @@ writer (two `W` runs interleave), and a crash or Ctrl-C mid-write leaves a trunc
 previous good one. The damage is bounded — the header hashes make the next read reject the remnant with
 `-21` rather than grade against it — but the previous good file is still lost. **Fix:** write to a temporary
 name and `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)`, and drop the share-write bit.
+
+> **Fixed** as proposed. The header and the two blocks are written to `cpu.values.tmp`, opened `CREATE_ALWAYS`
+> with a share mode of 0, and `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` moves it
+> over `cpu.values` once the last block is written. Nothing between the two names touches the previous file,
+> so a crash, a full disk or a Ctrl-C anywhere in the write leaves it exactly as it was and costs the user
+> only the run — where before it cost them the file, and the minutes of ladder runs that produce another.
+>
+> `FlushFileBuffers` stands between the last `WriteBlock` and the `CloseHandle`, and a failure of it is
+> treated as a failed write: without it the rename could reach the disk ahead of the bytes it renames, which
+> would publish the right name over the wrong contents — the one outcome the arrangement exists to prevent.
+> The three write failures each close the handle and `DeleteFileW` the temporary, so an error return leaves
+> the directory as it found it; so does a failed move, which is reported through a new `wstrMessage[42]`
+> naming the file and stating that the previous one is untouched. It shares exit code `-5` with the failed
+> create above it, the way `-21` is shared by the `cpu.values` rejections.
+>
+> The share mode is the second half of the entry: two concurrent `W` runs now meet at the `CreateFileW` of
+> the temporary and the second is refused with `-5` before it has written a byte, rather than interleaving
+> its blocks with the first's. The temporary name is fixed rather than generated, which is what makes that
+> collision detectable; `GetTempFileNameW` would have let both runs proceed to the same `MoveFileExW`.
+> The `W` help text and the README both state the arrangement, because a `cpu.values.tmp` left by a killed
+> run is otherwise unexplained.
 
 ## C. Memory and resource handling
 
@@ -209,7 +230,7 @@ and the write at :1087.
 > than at the start. The report has already gone to the console by then, and the exit code is the same `-9`.
 > `CLAUDE.md`'s parsing section records the arrangement and why the creation should not be moved back up.
 
-### C2. `resArray.iter` is the one run-length allocation never checked for failure — **Low**
+### C2. `resArray.iter` is the one run-length allocation never checked for failure — **Low** — *Fixed*
 
 `CPU.cpp:154`: `resArray.iter = zalloc1d64(si64, cfg.sys.vCoreCount);` — the arena (`CPU.cpp:833`) and the
 report buffer (`CPU.cpp:881`) both return `-17` on null, but a failed `iter` allocation proceeds to spawn
@@ -217,12 +238,31 @@ threads, and every benchmark thread then writes through the null pointer (`CPU_m
 allocation is a few KiB, so the trigger is remote; the asymmetry against the codebase's own rule is the
 defect.
 
-### C3. `wstrOutput` is allocated with `zalloc64` and never freed — **Low**
+> **Fixed.** The `B` case now refuses the run with `-17` and `wstrMessage[22]` on a null, the same code and
+> the same message the arena and the report buffer answer with, and does so where it allocates — during the
+> option loop, before a thread exists to write through the pointer. The size is reported in MB the way both
+> of the others report theirs, which is 0MB for a table of this size; the figure is the vocabulary of the
+> message rather than the diagnosis, and the message names the condition.
+
+### C3. `wstrOutput` is allocated with `zalloc64` and never freed — **Low** — *Fixed*
 
 The report buffer (`CPU.cpp:879`, up to ~1 MiB at 512 threads) has no matching `mfree` on any path — not at
 the normal `return 0` nor on the later error returns. GCS rule p2 mandates a matching free for every aligned
 allocation, and the old C13 entry moved the arena and `iter` frees into `~RESULTS_ARRAYS` for exactly this
 reason. Reclaimed by process exit, so hygiene rather than a runtime defect.
+
+> **Fixed** the way C13 was, rather than with a free before each return. `REPORT_BUFFER` (`CPU.h`) is a
+> two-line owner — one `wchptrc` member and a destructor that `mfree1`s it — and `wmain` declares a
+> `cREPORT_BUFFER` over `wstrOutput` immediately below the `declare1d64z` that allocates it. The buffer is
+> then freed on all eight paths out of the function — the seven error returns below the allocation and the
+> `return 0` — and on any return added between them later; a free at each of those points is the arrangement
+> C13 rejected for the arena, for the reason it gives.
+>
+> The owner sits *above* the null check rather than below it, so a failed allocation destructs on the same
+> path as a successful one — `mdealloc` ignores a null, exactly as it does for the two pointers
+> `~RESULTS_ARRAYS` frees. Nothing reads the owner: every one of the thirty-odd `swprintf`, `wprintf`,
+> `WideCharToMultiByte` and `WriteBlock` sites still writes through `wstrOutput` itself, so the change is
+> one declaration and a type, not a rewrite of the report.
 
 ## D. Concurrency
 
@@ -327,13 +367,19 @@ banner's duration (`wstrInterface[5]`), and the observed/expected doubles `Faile
 where the documentation and any parsing consumer expect `1.234567`. **Fix:** format through the same
 invariant locale as F2, or confine `setlocale` to the console code page it was installed for.
 
-### F4. Byte and wide output are mixed on one stream — **Low** — *benign under the MSVC CRT*
+### F4. Byte and wide output are mixed on one stream — **Low** — *benign under the MSVC CRT* — *Fixed*
 
 `GenerateValues` prints its progress dots with `printf(".")` (`CPU.h:1218`), `ComputationPulse` likewise
 (`CPU_methods.h:125`), and `CPU.cpp` mixes `printf("\n")` (:886, :933, :1019) between `wprintf` calls on the
 same `stdout`. C and C++ forbid byte I/O on a wide-oriented stream (and vice versa); the code works because
 the MSVC CRT deliberately does not implement stream orientation. Formally nonportable, and the first thing to
 break under any other runtime.
+
+> **Fixed.** All five are now `wprintf` — the two progress dots (`CPU.h`, `CPU_methods.h`) and the three
+> newlines in `CPU.cpp` — so every write this program makes to `stdout` is wide and the stream carries one
+> orientation whoever implements it. No output changed: the same characters are written in the same places.
+> `_setmode(_fileno(stdout), _O_U16TEXT)` was deliberately *not* added with them, being a change to how the
+> console renders every one of these writes rather than a repair of the mixing this entry names.
 
 ## G. Topology and scaling
 
@@ -422,13 +468,19 @@ absent from the `ClInclude` list (:126–133) and from `CPU.vcxproj.filters`. A 
 because `cl` silently ignores the nonexistent directory and quoted includes resolve to the repo copies
 first; any future angle-bracket include would resolve against a path that exists on one machine.
 
-### H3. The AVX2 unit's `#error` guard enforces only a lower ISA bound — **Low**
+### H3. The AVX2 unit's `#error` guard enforces only a lower ISA bound — **Low** — *Fixed*
 
 `CPU_jobs_AVX.cpp:19–21` rejects a build *below* AVX2 but not above it: `/arch:AVX512` also defines
 `__AVX2__`, so raising this one file's per-file setting passes the guard while the unit's compiler-generated
 code becomes EVEX-encoded — and `wmain` dispatches these kernels to any CPU reporting plain AVX2. The scalar
 unit's H1 guard is two-sided for exactly this reason. **Fix:** add `#if defined(__AVX512F__) #error` beside
 the existing guard.
+
+> **Fixed** as proposed: `#if defined(__AVX512F__)` and an `#error` naming the file and this entry now sit
+> below the `!defined(__AVX2__)` guard, so the unit states both ends of its range. A raised per-file setting
+> is a build failure rather than an illegal instruction on every CPU without AVX-512, which is what
+> `cfg.sys.cpuAVX2` dispatches these kernels to. `CPU_jobs_AVX512.cpp` is left with its lower bound alone —
+> MSVC has no `/arch` above `/arch:AVX512` for a build to be raised to, so there is no upper bound to state.
 
 ### H4. `WholeProgramOptimization` is still present (set `false`) in two places `CLAUDE.md` says it is gone from — **Low**
 

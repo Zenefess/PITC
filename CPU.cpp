@@ -157,6 +157,16 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             // the pointer to the last one, leaking it; mdealloc ignores the null of the first (ISSUES.MD C13)
             mfree1(resArray.iter);
             resArray.iter = zalloc1d64(si64, cfg.sys.vCoreCount);
+            // The counters are one of the program's three run-length allocations, and were the only one whose
+            // result was never examined: the arena and the report buffer below both refuse the run with -17
+            // on a null, while this one went on to spawn the threads, every one of which writes its record
+            // count through the pointer as it ends (CPU_methods.h) -- a null-pointer write from every thread
+            // of the run, in place of the diagnosis the other two give. A few KiB is a remote failure, which
+            // is what made it easy to leave unchecked and is no reason to treat it differently (ISSUES.MD C2)
+            if(!resArray.iter) {
+               wprintf(wstrMessage[22], (si64(cfg.sys.vCoreCount) * si64(sizeof(si64))) >> 20);
+               return -17;
+            }
             cfg.tics        = timer.siFrequency * 60;
             cfg.SMTLoad     = 3;
             cfg.memConfig   = 1;
@@ -524,7 +534,21 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                return -4;
             }
 
-            outFile = CreateFileW(L"cpu.values", GENERIC_WRITE, FILE_SHARE_WRITE, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+            // The file is built under a temporary name and moved over the old one once every byte of it has
+            // reached the disk, rather than written into "cpu.values" itself. Written in place, a crash, a
+            // full disk or a Ctrl-C anywhere between the CreateFileW and the last WriteFile left a truncated
+            // file where the previous good one had been: the header hashes make the next run reject the
+            // remnant with -21 rather than grade a CPU against it, but the file it replaced is gone either
+            // way, and it costs minutes of ladder runs to produce another. Nothing here can now destroy it
+            // except a move that succeeds.
+            // The share mode is 0 rather than FILE_SHARE_WRITE, which admitted a second writer to the very
+            // bytes this one is writing -- two concurrent 'W' runs interleaving their blocks. They now meet
+            // at this call instead, and the second is refused with -5 before it has written anything
+            // (ISSUES.MD B2)
+            cwchptrc valuesName = L"cpu.values";
+            cwchptrc valuesTemp = L"cpu.values.tmp";
+
+            outFile = CreateFileW(valuesTemp, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
             if(outFile == INVALID_HANDLE_VALUE) {
                wprintf(wstrMessage[6]);
                return -5;
@@ -533,28 +557,45 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             // The header records the build and the kernel arithmetic these values were produced by, and a
             // hash of each block, so a file left over from an earlier revision is reported as a stale file
             // rather than reaching the comparison and accusing the CPU. Each write is checked for length --
-            // WriteFile reports a partial write as success -- and each failure path closes the file
+            // WriteFile reports a partial write as success -- and each failure path closes the file and
+            // removes the temporary, leaving both the directory and any previous "cpu.values" as it found them
             FillValuesHeader(header, value[0], value[3]);
 
             if(!WriteBlock(outFile, &header, ui32(sizeof(VALUES_HEADER)))) {
                wprintf(wstrMessage[25]);
-               CloseHandle(outFile);
+               CloseHandle(outFile);   DeleteFileW(valuesTemp);
                return -20;
             }
             if(!WriteBlock(outFile, value[0], ui32(RESULTS_BUF_SIZE))) {
                wprintf(wstrMessage[7]);
-               CloseHandle(outFile);
+               CloseHandle(outFile);   DeleteFileW(valuesTemp);
                return -6;
             }
             if(!WriteBlock(outFile, value[3], ui32(RESULTS_BUF_SIZE))) {
                wprintf(wstrMessage[8]);
-               CloseHandle(outFile);
+               CloseHandle(outFile);   DeleteFileW(valuesTemp);
                return -7;
             }
 
-            wprintf(wstrMessage[1]);
+            // Flushed before the handle is closed, so that the contents cannot still be in a cache when the
+            // move below publishes the name: a power loss between the two would otherwise leave a
+            // "cpu.values" of the right name and the wrong contents, which is the one outcome this whole
+            // arrangement exists to prevent. A failed flush is a failed write, and is treated as one
+            cbool flushed = FlushFileBuffers(outFile) ? true : false;
 
             CloseHandle(outFile);
+
+            // MOVEFILE_REPLACE_EXISTING is the replacement itself -- a rename within one directory, so the
+            // old file is either wholly there or wholly replaced -- and MOVEFILE_WRITE_THROUGH holds the call
+            // until the move itself is on the disk. A failure leaves the previous file exactly as it was, so
+            // there is nothing to repair beyond removing the temporary this run built
+            if(!flushed || !MoveFileExW(valuesTemp, valuesName, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+               wprintf(wstrMessage[42], valuesName);
+               DeleteFileW(valuesTemp);
+               return -5;
+            }
+
+            wprintf(wstrMessage[1]);
 
             return 1;
          }
@@ -915,12 +956,26 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
 
    al64 declare1d64z(wchar, wstrOutput, outChars);
 
+   // The buffer had no matching free on any path out of this function -- not on the seven returns below and
+   // not on the successful one, so a run of any length ended by handing back up to a mebibyte for the process
+   // teardown to reclaim, against GCS rule p2 and against the rule the arena and the benchmark counters were
+   // moved into ~RESULTS_ARRAYS to keep (ISSUES.MD C3, C13). The owner below frees it as its scope ends, by
+   // whichever return that happens to be, and freeing null is a no-op so it stands above the check as safely
+   // as below it. Nothing reads it: wstrOutput is still the pointer everything from here down is written
+   // through, and no error return between here and the end of the function needs a free of its own
+   cREPORT_BUFFER wstrOutputOwner = { wstrOutput };
+
    if(!wstrOutput) {
       wprintf(wstrMessage[22], (si64(outChars) * si64(sizeof(wchar))) >> 20);
       return -17;
    }
 
-   printf("\n");
+   // Wide, as every write this program makes to stdout is. C and C++ give a stream an orientation at its
+   // first use and forbid byte I/O on a wide-oriented one, and every other write here -- the banner below,
+   // the results table, each message -- is a wprintf; the byte spelling of these three newlines and of the
+   // two progress dots worked only because the MSVC CRT deliberately implements no orientation at all, and
+   // would have been the first thing to break under any other runtime (ISSUES.MD F4)
+   wprintf(L"\n");
    // RULE-DEV:C4996 The report below is built with the two-argument swprintf, which MSVC deprecates in favour
    // of the count-taking ISO form; every call in this region is one, and there is nothing else here that
    // C4996 has anything to say about. The suppression used to be a bare '#pragma warning(disable:4996)' at
@@ -967,7 +1022,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    // but wstrOut -- a filename straight off the command line -- is already interpolated into messages
    // elsewhere, and one edit is all it would take (ISSUES.MD F11)
    wprintf(L"%s", wstrOutput);
-   printf("\n");
+   wprintf(L"\n"); // Wide, as every write to stdout is; see the note above the banner (ISSUES.MD F4)
 
    // The one clock reading every thread's deadlines are derived from, and the reason it is taken here: the
    // arena is allocated and seeded between the option loop and this point, which writes every byte of the
@@ -1053,7 +1108,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    JoinThreads(threadHandle, threadCount[2]);
 
    // Output results
-   printf("\n");
+   wprintf(L"\n"); // Wide, as every write to stdout is; see the note above the banner (ISSUES.MD F4)
    // RULE-DEV:C4996 The second of the two regions built with the two-argument swprintf; see the note above
    // the configuration banner
 #pragma warning(push)

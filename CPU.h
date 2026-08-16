@@ -167,6 +167,22 @@ al32 struct RESULTS_ARRAYS { // 96 bytes
    ~RESULTS_ARRAYS(void) { mfree(p, iter); }
 };
 
+// Owner of the report buffer wmain builds its banner, results table and benchmark score in -- the third
+// run-length allocation, and the one the C13 pair left behind. Its size is derived from the processor group
+// count and the thread count, so it cannot be a fixed array; it is a local of wmain rather than a global, so
+// it cannot be freed by either of the destructors above; and seven further returns stand between its
+// allocation and the end of the function, so freeing it where it is used would mean seven frees and a leak
+// the next time an error return is added between them. An owning object frees it on every one of those paths
+// and on any path added later, which is the whole of why the arena belongs to RESULTS_ARRAYS rather than to
+// wmain. GCS rule p2 requires a matching free for every aligned allocation; this is that free, and mdealloc
+// ignores a null, so the failed-allocation path destructs exactly as safely as a successful one
+// (ISSUES.MD C3, C13)
+struct REPORT_BUFFER {
+   wchptrc text; // The buffer, as the declare1d64z that allocates it produced; freed however its scope ends
+
+   ~REPORT_BUFFER(void) { mfree1(text); }
+}; typedef const REPORT_BUFFER cREPORT_BUFFER;
+
 //--- Global variables ---//
 // Declared here, defined once in CPU.cpp. A header that *defines* an object at namespace scope hands every
 // translation unit that includes it either a duplicate symbol at link time or -- for the `dataType *const`
@@ -1302,7 +1318,10 @@ static ui32 __stdcall GenerateValues(ptr dataPtr) {
          value[2][coreNum] = resultCopy;
       }
 
-      printf(".");
+      // One dot per entry generated, wide like every other write this program makes to stdout: byte I/O on a
+      // stream the rest of the program has oriented wide is undefined in both languages, and worked here only
+      // because the MSVC CRT implements no stream orientation at all (ISSUES.MD F4)
+      wprintf(L".");
    }
 
    _InterlockedAnd8(&((chptr)threadBits)[tcfg->threadByte], threadMask);
