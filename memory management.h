@@ -5,7 +5,7 @@
  * Created: 2008-12-08
  * Last Modified: 2026-08-16
  * Description: Aligned allocators, pattern fill, zeroing, temporal and non-temporal copies, and interlocked transfers; optional allocation tracking.
- * To Do: 1) Replace the retained #ifdef __AVX512__ forks with run-time CPUID dispatch per GCS a8; retire the pre-AVX fallback arms per a2.
+ * To Do: 1) Replace the retained #ifdef __AVX512F__ forks with run-time CPUID dispatch per GCS a8; retire the pre-AVX fallback arms per a2.
  *        2) Unit-test the salloc, mset, and mzero tail paths and the Copy and Stream families.
  *        3) Benchmark the non-temporal Stream16/32/64 against temporal copies per bd1/bd2 before asserting a performance win.
  *        4) Unify the truncation semantics of the two Copy64 overloads (const floors, volatile ceils; divergence is documented but unresolved).
@@ -162,7 +162,7 @@
    (dataType (*)[dim2])salloc(RoundUpToNearest32(sizeof(dataType) * ((dim1) * (dim2))), 32u, null128)
 #endif
 
-#ifdef __AVX512__
+#ifdef __AVX512F__
 // Allocates RAM at 64-byte boundary, then sets the entire array to zero
 #define zalloc64(byteCount) salloc(byteCount, 64u, null512)
 
@@ -371,7 +371,7 @@ inline cui64 mdealloc_(ptr pointer, ...) {
 // Set a region of memory to zero
 inline void mzero(ptrc addr, cui64 numBytes) {
    ui64 i;
-#ifdef __AVX512__
+#ifdef __AVX512F__
    if(numBytes & 0x03Fu) {
 #endif
 #ifdef __AVX__
@@ -396,7 +396,7 @@ inline void mzero(ptrc addr, cui64 numBytes) {
       for(i <<= 2; i < numBytes; ++i) ((ui8ptr)addr)[i] = 0u;
       return;
 #endif
-#ifdef __AVX512__
+#ifdef __AVX512F__
    }
    cui64 count = numBytes >> 6;
    for(i = 0; i < count; ++i) ((ui512ptr)addr)[i] = null512;
@@ -408,7 +408,7 @@ inline void mzero(ptrc addr, cui64 numBytes) {
 // Set a region of memory to zero
 inline void mzero(vptrc addr, cui64 numBytes) {
    ui64 i;
-#ifdef __AVX512__
+#ifdef __AVX512F__
    if(numBytes & 0x03Fu) {
 #endif
 #ifdef __AVX__
@@ -433,7 +433,7 @@ inline void mzero(vptrc addr, cui64 numBytes) {
       for(i <<= 2; i < numBytes; ++i) ((ui8ptr)addr)[i] = 0u;
       return;
 #endif
-#ifdef __AVX512__
+#ifdef __AVX512F__
    }
    cui64 count = numBytes >> 6;
    for(i = 0; i < count; ++i) ((ui512ptr)addr)[i] = null512;
@@ -472,7 +472,7 @@ inline void mzero(ui256ptrc addr, cui64 numBytes) {
 // Set a region of memory to zero
 inline void mzero(ui512ptrc addr, cui64 numBytes) {
    ui64 i;
-#ifdef __AVX512__
+#ifdef __AVX512F__
    cui64 count = numBytes >> 6;
    for(i = 0; i < count; ++i) ((ui512ptr)addr)[i] = null512;
    for(i <<= 3; i < (numBytes >> 3); ++i) ((ui64ptr)addr)[i] = 0u;
@@ -524,7 +524,7 @@ inline void mset(ptrc addr, cui64 numBytes, cui512 bitPattern) {
    for(os <<= 3; os < numBytes; os++) ((ui8ptr)addr)[os] = bitPattern.m512i_u8[os & 0x03F];
 }
 
-#ifdef __AVX512__
+#ifdef __AVX512F__
 #define _mm_PB64_mm_ cui512 { .m512i_u64 = { bitPattern64, bitPattern64, bitPattern64, bitPattern64, \
                                              bitPattern64, bitPattern64, bitPattern64, bitPattern64 } }
 #else
@@ -570,7 +570,7 @@ inline void mset(ptrc addr, cui64 numBytes, cui64 bitPattern64) {
 inline void Copy(cptrc source, ptrc dest, cui64 byteCount) {
    cui64 k = byteCount >> 2;
    ui64  i = 0;
-#ifdef __AVX512__
+#ifdef __AVX512F__
    cui64 j = byteCount >> 6;
    for(; i < j; i++) _mm512_storeu_epi64(&((ui512ptr)dest)[i], _mm512_loadu_epi64(&((ui512ptr)source)[i]));
    i <<= 4;
@@ -637,7 +637,7 @@ inline void Copy32(vptrc source, vptrc dest, cui64 byteCount) {
 
 // Copy byteCount (rounded-down to the nearest 64) bytes of 512-bit-aligned data via SIMD instruction
 inline void Copy64(cptrc source, ptrc dest, cui64 byteCount) {
-#ifdef __AVX512__
+#ifdef __AVX512F__
    cui64 j = byteCount >> 6;
    for(ui64 i = 0; i < j; i++) ((ui512ptr)dest)[i] = _mm512_load_epi32(&((ui512ptr)source)[i]);
 #else
@@ -653,7 +653,7 @@ inline void Copy64(cptrc source, ptrc dest, cui64 byteCount) {
 
 // Copy byteCount (rounded-down to the nearest 64) bytes of 512-bit-aligned data via SIMD instruction
 inline void Copy64(vptrc source, vptrc dest, cui64 byteCount) {
-#ifdef __AVX512__
+#ifdef __AVX512F__
    cui64 j = byteCount >> 6;
    for(ui64 i = 0; i < j; i++) ((ui512ptr)dest)[i] = _mm512_load_epi32(&((ui512ptr)source)[i]);
 #else
@@ -691,7 +691,7 @@ inline void Stream32(cptrc source, ptrc dest, cui64 byteCount) {
 // Non-temporally copy byteCount (rounded-down to the nearest 64) bytes of 512-bit-aligned data via SIMD instruction.
 // NT stores are weakly ordered; the trailing _mm_sfence makes the writes globally visible before return.
 inline void Stream64(cptrc source, ptrc dest, cui64 byteCount) {
-#ifdef __AVX512__
+#ifdef __AVX512F__
    cui64 j = byteCount >> 6;
    for(ui64 i = 0; i < j; i++) _mm512_stream_si512(&((ui512ptr)dest)[i], _mm512_load_si512(&((ui512ptr)source)[i]));
 #else
