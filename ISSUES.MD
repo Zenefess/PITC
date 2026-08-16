@@ -49,7 +49,7 @@ unchanged and comparable across this change; the design's decision 2 for `B` was
 These files are copies of the author's general-purpose library. Defects here are latent for PITC unless
 noted — but they are live for any other client, and `CPU.h` includes two of them into every translation unit.
 
-### B1. `refp1a1` expands to a cast to an array type, ill-formed on any use — **Low**
+### B1. `refp1a1` expands to a cast to an array type, ill-formed on any use — **Low** — **RESOLVED**
 
 `typedefs.h:577`: the macro produces a C-style cast whose type-id is an array type, which C++ forbids —
 every expansion is a compile error on every compiler, unlike its `defpa`/`refpa` companions. No PITC file
