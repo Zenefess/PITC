@@ -12,14 +12,6 @@
 
 #include "typedefs.h"
 
-#ifndef max
-#define max(a,b) (((a) > (b)) ? (a) : (b))
-#endif
-
-#ifndef min
-#define min(a,b) (((a) < (b)) ? (a) : (b))
-#endif
-
 // Real allocator with bounds-checked, lock-serialised tracking. Replaces the former standalone salloc fallback,
 // which duplicated an inline definition (ODR hazard), referenced sysData with no include, and appended to the
 // tracking table with no maxAllocations check.
