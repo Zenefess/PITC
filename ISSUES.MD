@@ -51,8 +51,8 @@ audited and survived adversarial review with **no new findings** — section D o
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **0** | **1** | **18** | **38** | **57** |
 
-**A1, A2, B1, C1 and G1 are fixed** — see the `Fixed` note on each entry. The counts in the table above are
-as first audited and have not been decremented.
+**A1, A2, B1, C1, E1, F1, G1, H1 and I1–I6 are fixed** — see the `Fixed` note on each entry. The counts in the
+table above are as first audited and have not been decremented.
 
 No Critical finding remains: the false-pass and false-fail families of the previous audit are gone, and the
 one High entry was a start-up crash on a narrow class of old hardware rather than a wrong verdict. The Medium
@@ -232,7 +232,7 @@ ordering, and the per-thread jitter generator were each re-reviewed and survived
 
 ## E. Scheduling and timing
 
-### E1. The round-robin start offset is neither folded down nor clamped, so late threads idle past `endTics` and are graded on a single forced job cycle — **Medium**
+### E1. The round-robin start offset is neither folded down nor clamped, so late threads idle past `endTics` and are graded on a single forced job cycle — **Medium** — *Fixed*
 
 `CPU_methods.h:53–54` offsets thread *n*'s `startTics` by *n* whole cycles with no fold-down — unlike the
 staggered arm directly below it, whose ramp is folded until the first window fits the run (the E3 fix) — and
@@ -246,9 +246,35 @@ does" and "the only overshoot left is one job cycle". **Fix:** fold the offset t
 folds its ramp (threads share slots when the run is too short), or at minimum clamp the initial wait to
 `min(startTics, endTics)` so a late thread runs its forced cycle at the deadline instead of long after it.
 
+> **Fixed** by both halves, the fold being the one that does the work and the clamp the one that makes the
+> invariant unconditional.
+>
+> The round-robin arm now derives a *slot count* rather than using the thread count directly:
+> `slots` opens at `threadCount` and is decremented while
+> `cycleTics * (slots - 1) + activeTics > endTics - startTics`, which is the staggered arm's own predicate
+> with its power-of-two ramp replaced by a count that need not be one. Thread *n* takes slot `n % slots` and
+> the cycle is stretched by `slots`, so the last slot's first window is guaranteed to close on or before the
+> deadline. Where the run already holds the whole rotation the loop does not execute, `slots == threadCount`,
+> and the arithmetic is the same expression it replaced — a `Sr` run long enough to complete its rotation is
+> byte-for-byte the run it was before. Decrementing rather than halving keeps as much of the
+> one-thread-at-a-time property as the run can pay for; where it cannot pay for any, `slots` reaches 1 and
+> every thread pulses together, which is the same compromise the staggered fold makes.
+>
+> The entry's example is the check: `Ia Sr Tft60[15000]15000 Ua` on 16 virtual cores folds from 16 slots to
+> 2, the last first window closing at 45 s of the 60-second run instead of at 465 s, and no thread starts
+> after the deadline where 14 of 16 did. `Sr Tf[250]1750` across 128 threads in a 60-second run folds to 30
+> slots (58.2 s) from 254.2 s and 98 late threads; at a one-hour duration the same command folds not at all.
+>
+> The clamp is `PulseWaitUntil(pulseTimer, min(startTics, tcfg->endTics))`. The two folds leave nothing for
+> it to do on the round-robin and staggered shapes, but a parallel thread's start carries a jitter of up to a
+> quarter of its shorter phase and no fold, so a run shorter than that window — `Tft0.05[250]250` — could
+> still open a wait that outlives the test. Clamping the one wait that is not already `min`-bounded makes
+> "no wait may end after the run does" true of every wait in the executor rather than of the pulse boundaries
+> alone, which is what `CLAUDE.md` claims for it.
+
 ## F. Command-line parsing and output
 
-### F1. The `M` option's per-argument reset clears `allocMem[0]` but never `allocMem[1]`, so `Mn8 Ms8` is refused while `Ms8 Mn8` runs — **Medium**
+### F1. The `M` option's per-argument reset clears `allocMem[0]` but never `allocMem[1]`, so `Mn8 Ms8` is refused while `Ms8 Mn8` runs — **Medium** — *Fixed*
 
 Every `M` argument begins with `cfg.memConfig = 0; cfg.allocMem[0] = 0;` (`CPU.cpp:225–226`) and nothing —
 not this reset, not `B` (:157–158), not the preset preamble (:545–546) — ever clears `allocMem[1]`. Giving
@@ -260,6 +286,26 @@ set *different* properties, yet one erases the other), and "'N' and 'S' each cov
 CPU has cores of both, give both" (`en-GB.h:56` — the natural spelling of "give both" is the one refused).
 **Fix:** reset both entries, or reset neither — `en-GB.h:44` documents only `B` and the presets as resetting
 the memory configuration, so dropping the reset is the spelling that matches the documentation.
+
+> **Fixed** by dropping the reset, which is the half of the choice that makes the documented spelling work:
+> clearing `allocMem[1]` as well would have made the two orders agree only by refusing both of them, and
+> "where the CPU has cores of both, give both" would still have named a command line that cannot run.
+>
+> The two lines at the head of the `M` case are gone. Nothing is lost by their going: each of the four
+> sub-options assigns `memConfig` together with the size it names — `c`→1, `n`→2, `s`→2, `t`→0 — and the
+> `default` arm rejects anything else with `-25`, so a valid `M` argument still settles the configuration
+> completely and "the last one to set a property wins" still holds. What no longer happens is one `M`
+> argument erasing a *different* property another had set.
+>
+> The reset the documentation does promise is now complete where it is promised. `B` and the preset preamble
+> each clear `allocMem[1]` beside the `allocMem[0]` they were already setting, and the defaults block states
+> both entries rather than one, so a preset or a benchmark still discards every memory option given before it
+> — including an `Ms` — exactly as `en-GB.h:44` says.
+>
+> Checked against the arena sizing and the `-18` gate for both orders and for the spellings around them:
+> `Mn8 Ms8` now runs `{8MB, 8MB}` where it was refused, and agrees with `Ms8 Mn8` and `Mn8s8`, which already
+> ran. `Mc8`, `Mt1024`, `B Mt1024`, `Ms4 -1` and a bare preset are unchanged. `Mn8` alone on a two-class
+> machine is still `-18`, which is the outcome `en-GB.h:56` documents for a class left without memory.
 
 ### F2. `ParseDecimal` is locale-dependent: every documented decimal spelling is rejected on comma-decimal locales — **Medium** — *needs confirmation on a real Windows system*
 
@@ -334,7 +380,7 @@ deliberately intrinsic-free; three call sites, none hot.
 
 ## H. Build configuration
 
-### H1. `CPU_build.h`'s `/fp:strict` guard exempts clang-cl, the build route it exists to police — **Medium**
+### H1. `CPU_build.h`'s `/fp:strict` guard exempts clang-cl, the build route it exists to police — **Medium** — *Fixed*
 
 The guard is `#if defined(_MSC_VER) && !defined(__clang__) && !defined(_M_FP_STRICT)` (`CPU_build.h:35`).
 clang-cl defines both `_MSC_VER` and `__clang__`, so it is exempt from the `#error` — yet a build made
@@ -344,6 +390,30 @@ outside `CPU.vcxproj` is precisely what the guard says it exists to catch. clang
 differently — the false-`!Fail!` class the H2 fix exists to prevent, reachable through one unguarded
 toolchain. **Fix:** either drop the `__clang__` exemption (clang-cl models `/fp:strict` and could satisfy a
 suitable check) or `#error` outright on `__clang__` until the golden values are validated under it.
+
+> **Fixed** by the second of the two. The first is not available: clang-cl does model `/fp:strict`, but it
+> publishes no macro that says it did — there is no `__STRICT_FP__`, and `__FAST_MATH__` names only the mode
+> at the opposite end — so a "suitable check" cannot be written, and a guard that cannot distinguish
+> `/fp:strict` from `/fp:precise` is the defect this entry describes rather than a fix for it.
+>
+> The single condition is now a three-armed ladder. `__clang__` is refused outright, whatever else it defines,
+> with a message saying the model cannot be checked; a toolchain defining neither `__clang__` nor `_MSC_VER`
+> is refused for the same reason, that being the other route by which `VALUES_FP_MODEL` reached its `0` arm;
+> and MSVC proper keeps the original `_M_FP_STRICT` requirement and the original message. The ladder is
+> ordered so that clang-cl — which defines `_MSC_VER` as well — meets the clang arm first rather than being
+> graded as an MSVC build.
+>
+> The consequence worth stating plainly is that `VALUES_FP_MODEL` can no longer be `0`. Its final `#else`
+> is now unreachable, so the constant is `1` in every build that compiles, and `0` has stopped being a value
+> that two builds with differently-rounding arithmetic could share a `buildID` through. That was the whole of
+> the harm: a `cpu.values` written by a `/fp:fast` clang-cl build would have been accepted by a `/fp:precise`
+> one, and the arithmetic difference reported to the user as a CPU fault.
+>
+> The cost is that clang-based tooling can no longer preprocess the tree. That is deliberate, and it is the
+> state the entry's own remedy asks for: the golden values have never been generated or validated under
+> clang, and the way to lift the restriction is to do that work and then relax the arm, not to leave the hole
+> open. Verified across six toolchain/model combinations — only MSVC with `/fp:strict` is accepted, and a
+> `static_assert(VALUES_FP_MODEL == 1)` holds under it.
 
 ### H2. Machine-specific `D:\Programming\include` in both `IncludePath`s; six vendored headers invisible to the project — **Low** — *carried forward (old H8)*
 
@@ -386,7 +456,7 @@ target platform cannot express.
 These six files are copies of the author's general-purpose library. Defects here are latent for PITC unless
 noted — but they are live for any other client, and `CPU.h` includes two of them into every translation unit.
 
-### I1. The pre-AVX2 `_mm_abs_pd` fallback expands to an AVX-512VL instruction — **Medium** — *carried forward (old I1)*
+### I1. The pre-AVX2 `_mm_abs_pd` fallback expands to an AVX-512VL instruction — **Medium** — *carried forward (old I1)* — *Fixed*
 
 `SIMD management.h:25`, inside `#if !defined(__FMA__) && !defined(__AVX2__)` — active precisely in units
 compiled *below* AVX2 — defines `_mm_abs_pd` as `(fl64x2&)_mm_and_epi64(...)`, and `_mm_and_epi64` is
@@ -395,28 +465,94 @@ five PITC units preprocess this header. The two kernel units that use the macros
 `#undef` (`CPU_jobs_SSE.cpp:30`, `CPU_jobs_AVX.cpp:37`), but a future caller in `CPU.cpp` or
 `CPU_jobs_standard.cpp` would embed an EVEX `vpandq` in baseline code. The guard belongs upstream.
 
-### I2. `#ifndef` guards cannot detect intrinsic functions, so the FMA fallback macros always win — **Medium** — *carried forward (old I2)*
+> **Fixed** upstream, where the entry says the guard belongs. `_mm_abs_pd` is now
+> `_mm_and_pd(_mm_castsi128_pd(_mm_set1_epi64x(...)), input)` — SSE2 throughout, and the same mask and the
+> same result as the two unit-local definitions the kernels use, so nothing the kernels compute changes. The
+> cast intrinsic replaces the `(fl64x2&)` reference cast in passing, which is old I5's hazard (now I17) in
+> this one definition; the two unit-local copies the entry names still carry the reference cast and are still
+> I17's subject.
+>
+> `_mm256_abs_pd` is now defined only under `#if defined(__AVX__)`. Its body was already VEX-encoded, so it
+> had the same shape of defect as the 128-bit macro one width up: a header block active precisely below AVX2
+> offered `vandpd` and `vpbroadcastq` to a unit compiled at the SSE2 baseline. `/arch:AVX` defines `__AVX__`
+> without `__AVX2__` and still reaches the block legitimately, which is the case the macro exists for; an
+> SSE2 unit now gets nothing rather than something it cannot execute.
+>
+> The two `#undef`s in `CPU_jobs_SSE.cpp` and `CPU_jobs_AVX.cpp` stay. They are no longer load-bearing
+> against an EVEX opcode, but they remain the only thing that stops a bare `#define` in a shared header
+> silently deciding which spelling the kernels are built from, and `CLAUDE.md` requires them.
+>
+> Verified by compiling the header at `-msse2`: the emitted body of `_mm_abs_pd` is `movapd`/`andpd`, with
+> zero VEX- or EVEX-encoded instructions in the object. The original does not compile at that baseline at all
+> under a compiler that enforces its target — `_mm_and_epi64` is simply not declared — which is the defect in
+> its clearest form, MSVC having accepted it and emitted the instruction anyway.
+
+### I2. `#ifndef` guards cannot detect intrinsic functions, so the FMA fallback macros always win — **Medium** — *carried forward (old I2)* — *Fixed*
 
 `SIMD management.h:29–47`: `_mm_fmadd_ps` and friends are *functions* declared by `<immintrin.h>`, never
 macros, so every `#ifndef` is true and the fallbacks are defined wherever the enclosing below-AVX2 block is
 active. Code in a baseline unit calling `_mm_fmadd_ps` expecting the single-rounded contract silently gets
 the two-rounding split form. PITC calls none of them today.
 
-### I3. `CLASS_TIMER::dGrandTotal` accumulates the running total, not the elapsed increment — **Medium** — *carried forward (old I3)*
+> **Fixed** by removing the macros rather than by repairing their guards, there being no guard that would
+> work: the condition an `#ifndef` would have to test is whether a *function* has been declared, which the
+> preprocessor cannot see. Any spelling that keeps the intrinsics' own names keeps the substitution invisible
+> at the call site, which is the defect.
+>
+> The five macros are replaced by six `simd::` functions — `fmadd_ps`, `fmsub_ps` and `fnmadd_ps`, each
+> overloaded on `fl32x4` and `fl32x8` — beside the `simd::fmadd_ps` the header already carried, which is the
+> pattern this header had itself established for exactly this problem and then not followed. Each selects the
+> true intrinsic under `#if defined(__FMA__) || defined(__AVX2__)` and the split form otherwise, so a unit
+> that can execute `VFMADD` gets one rounding and a unit that cannot gets two — but the caller asked for
+> `simd::fmadd_ps`, and `_mm_fmadd_ps` continues to mean `_mm_fmadd_ps` everywhere. The 256-bit overloads
+> are guarded on `__AVX__` for I1's reason one width up: their fallbacks are `vmulps`/`vaddps`, which an SSE2
+> unit cannot execute either.
+>
+> PITC calls none of them, before or after, so nothing it computes changes. Compiled clean at `-msse2`,
+> `-mavx` and `-mavx2 -mfma`, with each function instantiated at both widths.
+
+### I3. `CLASS_TIMER::dGrandTotal` accumulates the running total, not the elapsed increment — **Medium** — *carried forward (old I3)* — *Fixed*
 
 `class_timers.h:60`: `Update()` executes `dGrandTotal += (dTotal += dElapsed)`, so `dGrandTotal` grows
 quadratically with update count (1+2+…+n seconds after n one-second updates). `CLASS_TIMERS` repeats the
 pattern (:170, :186). Latent for PITC — `wmain` calls `timer.Update()` once and reads only `siFrequency` and
 `siCurrentTics`.
 
-### I4. `CLASS_TIMERS::Update` double-counts elapsed time; `UpdateAll` never advances `siPrevTics` — **Medium** — *carried forward (old I4)*
+> **Fixed** in all three: each of `CLASS_TIMER::Update`, `CLASS_TIMERS::Update` and `CLASS_TIMERS::UpdateAll`
+> now assigns `dElapsed` once and then adds *it* to each of the two totals, rather than nesting the
+> assignments so that the grand total receives the running one. `dTotal` is unchanged in meaning; what
+> changes is that `dGrandTotal` becomes what its name and its exemption from `Reset` say it is — the time the
+> timer has run across resets of `dTotal`.
+>
+> Measured against a deterministic counter: after ten one-second updates `dGrandTotal` is 10.0 where it was
+> 55.0, and three updates followed by a `Reset` and two more leave `dTotal` at 2.0 with `dGrandTotal` at 5.0,
+> where the old form gave 9.0. Nothing in PITC reads either member, so the program's behaviour is unchanged.
+
+### I4. `CLASS_TIMERS::Update` double-counts elapsed time; `UpdateAll` never advances `siPrevTics` — **Medium** — *carried forward (old I4)* — *Fixed*
 
 `class_timers.h:169–170` runs the identical `dElapsed` computation twice back to back, so scaled totals
 advance at twice real time; `UpdateAll` (:175–190) has the same doubled pair, assigns `siCurrentTics` twice,
 and never writes `siPrevTics`, so its `siElapsedTics` measures from zero — roughly the machine's QPC epoch —
 on every call. PITC never instantiates `CLASS_TIMERS`.
 
-### I5. `CLASS_TIMER::Reinitialise` leaves six members uninitialised, and the `dScale` clamp discards the acceleration — **Medium** — *carried forward (old I6)*
+> **Fixed**, both halves. `CLASS_TIMERS::Update` performs the `dElapsed` computation once; the discarded
+> first copy is gone, and with it the doubling of every scaled total the class reports.
+>
+> `UpdateAll` takes its counter reading into a local rather than into `timer[0].siCurrentTics`, which is a
+> slot's own state and was therefore destroyed before slot 0 could record it as its previous reading; each
+> slot then does `siPrevTics = siCurrentTics` before taking the new value, which is what `Update` had always
+> done and what this function never did. The duplicated `siCurrentTics` assignment — two spellings of one
+> value — is gone with it, as is the doubled `dElapsed`.
+>
+> `ReinitialiseAll` now calls `Reinitialise(index)` instead of holding a second copy of its body, that
+> duplication being how the two came to seed a slot differently in the first place.
+>
+> Measured against a deterministic counter, across two slots updated by both routes: `dElapsed` is the time
+> since that slot's own previous update rather than since the epoch, `dTotal` advances at real time rather
+> than twice it, and two slots created together agree on their total elapsed time to the tic — where the old
+> code had them 718 seconds apart after seven seconds of test.
+
+### I5. `CLASS_TIMER::Reinitialise` leaves six members uninitialised, and the `dScale` clamp discards the acceleration — **Medium** — *carried forward (old I6)* — *Fixed*
 
 `class_timers.h:46–53` never assigns `dGrandTotal`, `dScaleAccel`, `_dScaleAccelTemp`, `siPrevTics`,
 `siElapsedTics` or `siPauseTics`, so a non-static `CLASS_TIMER` reads indeterminate values in its first
@@ -425,12 +561,41 @@ on every call. PITC never instantiates `CLASS_TIMERS`.
 result, so the acceleration is added and then unconditionally discarded. PITC's one instance is a
 zero-initialised global that never uses scaling.
 
-### I6. `GetTotalTimeUnscaled` reports QPC-epoch uptime: `siTotalTics` is seeded with `siOriginTics` instead of 0 — **Medium** — *new; same family as I3/I4*
+> **Fixed**, both halves, and in `CLASS_TIMERS::Reinitialise` as well as `CLASS_TIMER::Reinitialise` — the
+> slot form left the same six members unassigned, `salloc`'s bit pattern being all that stood behind them.
+> Each function now states every member of its own object: `dGrandTotal`, `dScaleAccel`, `_dScaleAccelTemp`,
+> `siPrevTics`, `siElapsedTics` and `siPauseTics` beside the ones that were already there. `siPrevTics` is
+> seeded from the origin reading so that a first `Update` measures from construction, and the rest are zero.
+>
+> The clamp is now two statements — `dScale += dScaleAccel;` then
+> `dScale = (dScale < 0.0 ? max(...) : min(...));` — which is the arithmetic the single expression was
+> written to perform. Spelt as `(dScale += dScaleAccel) = clamp(dScale…)` C++17 evaluates the right operand
+> first, so the clamp read the *unaccelerated* `dScale` and the store then overwrote the compound assignment's
+> result: the acceleration was added and discarded on every update, and `Pause`, `UnPause` and `Reset`'s time
+> scaling did nothing at all. The same spelling in `CLASS_TIMERS::Update` and `UpdateAll` is corrected with
+> it.
+>
+> Measured: with `dScaleConst` 2.0 and an acceleration of +0.5 per update, `dElapsed` for successive
+> one-second updates is now 1.5, then 2.0, then 2.0 — ramping to the ceiling and holding there — where the
+> old form returned 1.0 every time. PITC's one instance is the zero-initialised global the entry describes
+> and uses no scaling, so nothing it reports changes.
+
+### I6. `GetTotalTimeUnscaled` reports QPC-epoch uptime: `siTotalTics` is seeded with `siOriginTics` instead of 0 — **Medium** — *new; same family as I3/I4* — *Fixed*
 
 `class_timers.h:51`: `Reinitialise` seeds `siTotalTics` with the raw counter reading while its
 floating-point twin `dTotal` is seeded 0.0, so `siTotalTics` permanently equals `siCurrentTics` and
 `GetTotalTimeUnscaled` (:105) returns time since boot epoch, disagreeing with `GetTotalTimeScaled` by the
 machine's uptime. Latent for PITC.
+
+> **Fixed** in both `Reinitialise` functions: `siStartTics` and `siCurrentTics` keep the origin reading,
+> because they are timestamps and an origin is what they mean, while `siTotalTics` is seeded 0 beside
+> `siElapsedTics` and `siPauseTics` — it is a duration, and `dTotal`, its floating-point twin, was already
+> seeded 0.0 two lines away.
+>
+> Measured: after ten one-second updates `GetTotalTimeUnscaled` returns 10.0 against `GetTotalTimeScaled`'s
+> 10.0, the two agreeing at unit scale as they should. The old form returned 110.0 for the same run, the
+> extra 100 seconds being the fake counter's epoch — on a real machine it would be the uptime, and would grow
+> with every day since boot.
 
 ### I7. `malloc` is overloaded in the global namespace — **Low** — *carried forward (old I7)*
 

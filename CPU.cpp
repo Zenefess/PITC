@@ -139,7 +139,12 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    cfg.tics        = timer.siFrequency * 900; // 15 minute duration
    cfg.procSync    = 0x012;
    cfg.procUnits   = 0x03;
+   // Both class sizes, because 'M' no longer clears either of them: only 'B' and the presets reset the
+   // memory configuration, so this is the one place a run with no 'M' option at all is given its zero, and
+   // naming one entry here would leave the other holding whatever the object's initialiser last set
+   // (ISSUES.MD F1)
    cfg.allocMem[0] = 0;
+   cfg.allocMem[1] = 0;
    /// Defaults ///
 
    if(argc > 1) {
@@ -155,7 +160,12 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             cfg.tics        = timer.siFrequency * 60;
             cfg.SMTLoad     = 3;
             cfg.memConfig   = 1;
+            // 'B' is one of the two things documented as resetting the memory configuration, so it clears
+            // the second class's size as well as setting the first's: memConfig 1 leaves allocMem[1] unread,
+            // but an 'Ms' given afterwards selects memConfig 2 and would otherwise be composed with a size
+            // an earlier 'Ms' had left behind (ISSUES.MD F1)
             cfg.allocMem[0] = 8388608;
+            cfg.allocMem[1] = 0;
             cfg.procSync    = 0x092;
             cfg.procUnits   = (cfg.sys.cpuAVX512 ? 0x091 : cfg.sys.cpuAVX2 ? 0x089 : 0x085);
             break;
@@ -222,8 +232,15 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             break;
          case L'm': // Set amount of memory (in MB) to utilise during test
          case L'M':
-            cfg.memConfig   = 0;
-            cfg.allocMem[0] = 0;
+            // No reset here. Every 'M' argument used to open by clearing memConfig and allocMem[0] while
+            // leaving allocMem[1] untouched, so the two per-class sizes composed in one order only: 'Mn8 Ms8'
+            // ended as { 0, 8MB } and the per-class record check below refused the run with -18 and "Only 0
+            // bytes of memory per thread", while 'Ms8 Mn8' and the single-argument 'Mn8s8' both ran. Giving
+            // both is precisely how the help text spells the two-class case, and clearing allocMem[1] here
+            // as well would only have made the two orders agree by refusing both of them. Only 'B' and the
+            // presets are documented as resetting the memory configuration, and each sub-option below
+            // assigns memConfig together with the size it names, so the last option to set a property still
+            // wins (ISSUES.MD F1)
             for(j = 1; argv[i][j] && argv[i][j] != L' '; ++j) {
                si64 megabytes;
 
@@ -551,7 +568,11 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                return -25;
             }
             cfg.memConfig   = 1;
+            // Both class sizes, for the reason 'B' clears both: a preset is the other thing documented as
+            // resetting the memory configuration, and an 'Ms' after it must not inherit an 'Ms' before it
+            // (ISSUES.MD F1)
             cfg.allocMem[0] = 8388608;
+            cfg.allocMem[1] = 0;
             cfg.procUnits   = (cfg.sys.cpuAVX512 ? 0x011 : cfg.sys.cpuAVX2 ? 0x09 : 0x05);
             switch(argv[i][1]) {
             case L'1': // Constant stress; one thread per physical core. 10 minute duration

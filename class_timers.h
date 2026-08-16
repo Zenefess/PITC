@@ -45,19 +45,41 @@ al64 struct CLASS_TIMER {
 
    void Reinitialise(void) {
       QueryPerformanceCounter((LARGE_INTEGER *)&siOriginTics);
-      dScale = dScaleConst = 1.0;
-      siTotalUpdates = siUpdatesSinceLastReset = 0;
       QueryPerformanceFrequency((LARGE_INTEGER *)&siFrequency);
-      siTotalTics = siStartTics = siCurrentTics = siOriginTics;
-      dTotal = dElapsed = 0.0;
+      // dGrandTotal, dScaleAccel, _dScaleAccelTemp, siPrevTics, siElapsedTics and siPauseTics were left
+      // unassigned, so any CLASS_TIMER that is not a zero-initialised global -- an automatic or a heap one --
+      // read indeterminate storage in its first Update, 'dScale += dScaleAccel' over garbage above all, and
+      // carried the result into every reading it went on to report (ISSUES.MD I5)
+      dGrandTotal    = dTotal = dElapsed = 0.0;
+      dScale         = dScaleConst = 1.0;
+      dScaleAccel    = _dScaleAccelTemp = 0.0;
+      siStartTics    = siCurrentTics = siPrevTics = siOriginTics;
+      // Zero, not the counter reading. siTotalTics is a duration, and its floating-point twin dTotal is
+      // seeded 0.0 two lines above; seeded with the raw origin instead it stayed permanently equal to
+      // siCurrentTics, so GetTotalTimeUnscaled reported time since the QPC epoch and disagreed with
+      // GetTotalTimeScaled by the whole of the machine's uptime (ISSUES.MD I6)
+      siTotalTics    = siElapsedTics = siPauseTics = 0;
+      siTotalUpdates = siUpdatesSinceLastReset = 0;
    };
 
    inline void Update(void) {
       siPrevTics = siCurrentTics;
       QueryPerformanceCounter((LARGE_INTEGER *)&siCurrentTics);
       siTotalTics += (siElapsedTics = siCurrentTics - siPrevTics);
-      (dScale += dScaleAccel) = (dScale < 0.0 ? max(dScale, dScaleConst) : min(dScale, dScaleConst));
-      dGrandTotal += (dTotal += (dElapsed = (fl64(siElapsedTics) * dScale) / fl64(siFrequency)));
+      // The acceleration is applied and then clamped. Spelt as '(dScale += dScaleAccel) = clamp(dScale...)'
+      // it was neither: C++17 sequences an assignment's right operand before its left, so the clamp was
+      // computed from the *unaccelerated* dScale and then stored over the result of the compound assignment.
+      // The acceleration was added and unconditionally discarded on every update, which is the whole of what
+      // Pause, UnPause and Reset's time scaling do (ISSUES.MD I5)
+      dScale += dScaleAccel;
+      dScale  = (dScale < 0.0 ? max(dScale, dScaleConst) : min(dScale, dScaleConst));
+      // Each total accumulates the increment. 'dGrandTotal += (dTotal += dElapsed)' added the *running total*
+      // to the grand total instead, so it grew quadratically with the update count -- 1+2+...+n seconds after
+      // n one-second updates -- where its purpose is to measure the time the timer has run across the resets
+      // of dTotal that Reset performs (ISSUES.MD I3)
+      dElapsed     = (fl64(siElapsedTics) * dScale) / fl64(siFrequency);
+      dTotal      += dElapsed;
+      dGrandTotal += dElapsed;
       siUpdatesSinceLastReset++;
       siTotalUpdates++;
    };
@@ -125,32 +147,27 @@ al16 struct CLASS_TIMERS {
    CLASS_TIMERS(void) { ReinitialiseAll(); }
    CLASS_TIMERS(cptrptr globalPointer) { ReinitialiseAll(); if(globalPointer) *globalPointer = this; }
 
+   // The same six members CLASS_TIMER::Reinitialise left unassigned (I5), and the same seeding of siTotalTics
+   // with the raw counter reading that made GetTotalTimeUnscaled report the machine's uptime (I6)
    void Reinitialise(cui8 index) {
       TIMER_VARIABLES &slot = timer[index];
 
       QueryPerformanceCounter((LARGE_INTEGER *)&slot.siOriginTics);
-      slot.dScale = slot.dScaleConst = 1.0;
-      slot.siTotalUpdates = slot.siUpdatesSinceLastReset = 0;
 
       if(!slot.siFrequency) QueryPerformanceFrequency((LARGE_INTEGER *)&slot.siFrequency);
 
-      slot.siTotalTics = slot.siStartTics = slot.siCurrentTics = slot.siOriginTics;
-      slot.dTotal = slot.dElapsed = 0.0;
+      slot.dGrandTotal    = slot.dTotal = slot.dElapsed = 0.0;
+      slot.dScale         = slot.dScaleConst = 1.0;
+      slot.dScaleAccel    = slot._dScaleAccelTemp = 0.0;
+      slot.siStartTics    = slot.siCurrentTics = slot.siPrevTics = slot.siOriginTics;
+      slot.siTotalTics    = slot.siElapsedTics = slot.siPauseTics = 0;
+      slot.siTotalUpdates = slot.siUpdatesSinceLastReset = 0;
    };
 
+   // This held a second copy of the body above, which is how the one function came to seed a slot differently
+   // from the other; it defers to the single definition instead
    void ReinitialiseAll(void) {
-      for(ui32 index = 0; index < uiTimerCount; ++index) {
-         TIMER_VARIABLES &slot = timer[index];
-
-         QueryPerformanceCounter((LARGE_INTEGER *)&slot.siOriginTics);
-         slot.dScale = slot.dScaleConst = 1.0;
-         slot.siTotalUpdates = slot.siUpdatesSinceLastReset = 0;
-
-         if(!slot.siFrequency) QueryPerformanceFrequency((LARGE_INTEGER *)&slot.siFrequency);
-
-         slot.siTotalTics = slot.siStartTics = slot.siCurrentTics = slot.siOriginTics;
-         slot.dTotal = slot.dElapsed = 0.0;
-      }
+      for(ui32 index = 0; index < uiTimerCount; ++index) Reinitialise(cui8(index));
    };
 
    cui32 Create(void) {
@@ -165,27 +182,45 @@ al16 struct CLASS_TIMERS {
       slot.siPrevTics = slot.siCurrentTics;
       QueryPerformanceCounter((LARGE_INTEGER *)&slot.siCurrentTics);
       slot.siTotalTics += (slot.siElapsedTics = slot.siCurrentTics - slot.siPrevTics);
-      (slot.dScale += slot.dScaleAccel) = (slot.dScale < 0.0 ? max(slot.dScale, slot.dScaleConst) : min(slot.dScale, slot.dScaleConst));
-      slot.dTotal += (slot.dElapsed = (fl64(slot.siElapsedTics) * slot.dScale) / fl64(slot.siFrequency));
-      slot.dGrandTotal += (slot.dTotal += (slot.dElapsed = (fl64(slot.siElapsedTics) * slot.dScale) / fl64(slot.siFrequency)));
+      // Applied, then clamped -- the C++17 sequencing of the single-expression form discarded the
+      // acceleration it had just added (I5, and the same spelling as CLASS_TIMER::Update above)
+      slot.dScale += slot.dScaleAccel;
+      slot.dScale  = (slot.dScale < 0.0 ? max(slot.dScale, slot.dScaleConst) : min(slot.dScale, slot.dScaleConst));
+      // The elapsed time is computed once. The identical computation stood here twice, back to back, the
+      // first result folded into dTotal and then the second folded into it again, so every scaled total this
+      // class reported advanced at twice real time (ISSUES.MD I4). Each total takes the increment rather than
+      // the running sum, for the reason CLASS_TIMER::Update gives (I3)
+      slot.dElapsed     = (fl64(slot.siElapsedTics) * slot.dScale) / fl64(slot.siFrequency);
+      slot.dTotal      += slot.dElapsed;
+      slot.dGrandTotal += slot.dElapsed;
       slot.siUpdatesSinceLastReset++;
       slot.siTotalUpdates++;
    };
 
    inline void UpdateAll(void) {
-      QueryPerformanceCounter((LARGE_INTEGER *)&(timer[0].siCurrentTics));
-      csi64 curTics = timer[0].siCurrentTics;
+      si64 curTics;
+
+      // Into a local. The reading was taken into timer[0].siCurrentTics, which is a slot's own state: by the
+      // time slot 0 came to record its previous reading, the previous reading had already been overwritten
+      QueryPerformanceCounter((LARGE_INTEGER *)&curTics);
 
       for(ui32 i = 0; i < uiTimerCount; i++) {
-         timer[i].siCurrentTics = timer[0].siCurrentTics;
-         timer[i].siCurrentTics = curTics;
-         timer[i].siTotalTics += (timer[i].siElapsedTics = timer[i].siCurrentTics - timer[i].siPrevTics);
-         (timer[i].dScale += timer[i].dScaleAccel) =
-            (timer[i].dScale < 0.0 ? max(timer[i].dScale, timer[i].dScaleConst) : min(timer[i].dScale, timer[i].dScaleConst));
-         timer[i].dTotal += (timer[i].dElapsed = (fl64(timer[i].siElapsedTics) * timer[i].dScale) / fl64(timer[i].siFrequency));
-         timer[i].dGrandTotal += (timer[i].dTotal += (timer[i].dElapsed = (fl64(timer[i].siElapsedTics) * timer[i].dScale) / fl64(timer[i].siFrequency)));
-         timer[i].siUpdatesSinceLastReset++;
-         timer[i].siTotalUpdates++;
+         TIMER_VARIABLES &slot = timer[i];
+
+         // siPrevTics was never written anywhere in this function, so siElapsedTics measured from whatever
+         // the member last held -- zero for a slot this class had initialised, which is the QPC epoch and so
+         // roughly the machine's uptime -- on every call rather than since the previous update. The reading
+         // was also assigned twice, from two spellings of the one value (ISSUES.MD I4)
+         slot.siPrevTics    = slot.siCurrentTics;
+         slot.siCurrentTics = curTics;
+         slot.siTotalTics  += (slot.siElapsedTics = slot.siCurrentTics - slot.siPrevTics);
+         slot.dScale       += slot.dScaleAccel;
+         slot.dScale        = (slot.dScale < 0.0 ? max(slot.dScale, slot.dScaleConst) : min(slot.dScale, slot.dScaleConst));
+         slot.dElapsed      = (fl64(slot.siElapsedTics) * slot.dScale) / fl64(slot.siFrequency);
+         slot.dTotal       += slot.dElapsed;
+         slot.dGrandTotal  += slot.dElapsed;
+         slot.siUpdatesSinceLastReset++;
+         slot.siTotalUpdates++;
       }
    };
 
