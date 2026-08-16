@@ -773,6 +773,15 @@ parse index **absolutely**, `ui32(stopChar - str) - 1`, and `j` in `wmain` is a 
 the old `j += ui8(stopChar - &argv[i][j] - 1)` moved the index backwards on a value field longer than 255
 characters, and the option loop then could not terminate.
 
+**`ParseDecimal` reads through an invariant `LC_NUMERIC`**, a `_locale_t` of its own created for the call and
+freed at the end of it, and `_wcstod_l` rather than `wcstod`. The separator `wcstod` accepts is the one
+`LC_NUMERIC` names, and `wmain` installed the machine's regional locale before parsing, so on a comma-decimal
+system — most of Europe and Latin America — every spelling the help text documents was cut short at its `.`:
+`Tct5.0` parsed as 5, the option loop's `++j` landed on the `.`, and the `T` option's `default` arm rejected
+the whole command line with `-25`. The documented grammar did not work at all on those machines, and
+`Tt12,5` worked there and nowhere else (ISSUES.MD F2). `ParseWholeNumber` needs nothing of the kind —
+`wcstoll` in base 10 reads digits no locale redefines.
+
 `CoreMapChar` and `ParseCoreMap` read the `Uc` and `Ut` maps. Three properties are load-bearing:
 
 - **Every index comes from the topology, never from the character's position in the argument.** `Ut`
@@ -858,6 +867,19 @@ are still
 hard-coded outside the tables — `wstrUnitsCPU`, `wstrSyncCPU` and `wstrPass` in `CPU.h` (the last is flagged
 `///--- Modify for translation ---///`). `wstrKernelName` in `CPU.h` is also outside the tables, but
 deliberately: its entries are C++ identifiers naming the job kernels, and are not translated.
+
+**The program's whole locale policy is two lines at the top of `wmain`, and `LC_NUMERIC` is not one of the
+categories the machine gets to choose.** `setlocale(LC_CTYPE, "")` installs the regional locale for character
+classification and for the wide-to-byte conversion the CRT performs when `stdout` is redirected, which is
+what it was ever wanted for; `setlocale(LC_NUMERIC, "C")` states the invariant every `%f` in the program
+depends on. It was one `setlocale(LC_ALL, "")`, so on a comma-decimal system the banner's "Maximum duration",
+the range a malformed decimal option is reported against (`wstrMessage[36]`) and every value `Failed()`
+prints were written `1,234567` — into the file `O[name]` saves as much as to the console — where this
+program's own documentation and any consumer of that file expect `1.234567` (ISSUES.MD F3). **A new `%f`
+therefore needs no locale plumbing of its own, and `LC_ALL` must not come back**: the categories it would
+restore beyond `LC_CTYPE` have no reader here, and the one it would hand back to the machine is the one that
+decides what a decimal point looks like. The results file's *encoding* does not depend on any of this — its
+8-bit path converts through `WideCharToMultiByte` under the code page the `O` option named.
 
 **Every write to `stdout` is wide, and a new one must be too.** Both languages give a stream an orientation
 at its first use and forbid byte I/O on a wide-oriented one; five writes were `printf` — `GenerateValues`'

@@ -51,8 +51,8 @@ audited and survived adversarial review with **no new findings** — section D o
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **0** | **1** | **18** | **38** | **57** |
 
-**A1, A2, B1, B2, C1, C2, C3, E1, F1, F4, G1, H1, H3 and I1–I6 are fixed** — see the `Fixed` note on each
-entry. The counts in the table above are as first audited and have not been decremented.
+**A1, A2, B1, B2, C1, C2, C3, E1, F1, F2, F3, F4, G1, H1, H3 and I1–I6 are fixed** — see the `Fixed` note on
+each entry. The counts in the table above are as first audited and have not been decremented.
 
 No Critical finding remains: the false-pass and false-fail families of the previous audit are gone, and the
 one High entry was a start-up crash on a narrow class of old hardware rather than a wrong verdict. The Medium
@@ -347,7 +347,7 @@ the memory configuration, so dropping the reset is the spelling that matches the
 > ran. `Mc8`, `Mt1024`, `B Mt1024`, `Ms4 -1` and a bare preset are unchanged. `Mn8` alone on a two-class
 > machine is still `-18`, which is the outcome `en-GB.h:56` documents for a class left without memory.
 
-### F2. `ParseDecimal` is locale-dependent: every documented decimal spelling is rejected on comma-decimal locales — **Medium** — *needs confirmation on a real Windows system*
+### F2. `ParseDecimal` is locale-dependent: every documented decimal spelling is rejected on comma-decimal locales — **Medium** — *Fixed*
 
 `wmain` installs the user's regional locale (`setlocale(LC_ALL, "")`, `CPU.cpp:115`) before parsing, and
 `ParseDecimal` reads its value with a bare `wcstod` (`CPU.h:1050`), whose decimal-point character follows
@@ -359,13 +359,72 @@ grammar does not work at all on those machines, and `Tt12,5` parses there while 
 command line means different things per machine. `ParseWholeNumber` (`wcstoll`) is unaffected.
 **Fix:** parse with an invariant locale — `_create_locale(LC_NUMERIC, "C")` + `_wcstod_l`.
 
-### F3. Numeric output is locale-formatted, so results files are written with locale decimal separators — **Low**
+> **Fixed** as the entry prescribes. `ParseDecimal` creates a `_locale_t` over `LC_NUMERIC` `"C"` and reads
+> through `_wcstod_l`, so the separator the parse accepts is `.` whatever the machine is set to, and
+> `Tct5.0`, `Tfd1.0t12.5[100]2400` and `d10.0` mean on every machine what the help text says they mean.
+> `Tt12,5` is now refused everywhere rather than accepted in one hemisphere and refused in the other: the
+> comma ends the value, the option loop's `++j` lands on it, and the `T` option's `default` arm rejects the
+> argument with `-25` — which is the diagnostic a comma-decimal machine used to give the *documented*
+> spelling. The reader is otherwise untouched: the first character is still required to be a digit or a sign,
+> `stopChar` is still compared against it, and the value is still range-checked against the `OPT_*` bound
+> before it is assigned, so nothing about the `-24` guarantees moves.
+>
+> The locale object is created and freed inside the call rather than held at namespace scope. `ParseDecimal`
+> is reached once per `Td` or `Tt` given, so there is nothing to economise against, and a per-call object
+> needs neither a global — which H9 would put in `CPU.cpp`, for a value only a static function in a header
+> reads — nor a process-lifetime allocation that nothing frees. A `_create_locale` that returns null falls
+> back to the bare `wcstod` rather than failing a valid command line, and that fallback is not a way back to
+> the defect: F3 below leaves `LC_NUMERIC` invariant program-wide, so the two spellings read the same
+> separator. Each half is nonetheless worth having alone — the locale object pins the parse against a future
+> `setlocale`, and the narrowed global pins every conversion no `_l` call reaches.
+>
+> `ParseWholeNumber` is unchanged, as the entry says: `wcstoll` in base 10 reads the digits `LC_NUMERIC` does
+> not redefine, and no locale gives C a grouping separator on input.
+>
+> Confirmation on a real Windows system is still owed, as the audit's preamble says of every entry resting on
+> CRT behaviour rather than on execution — the claim and the fix are both derived from the documented
+> `LC_NUMERIC` dependency of `wcstod` and `%f`. What can be checked without one is that the fix cannot depend
+> on the locale it removes: neither `_create_locale(LC_NUMERIC, "C")` nor the startup default has a reader
+> that the machine's regional settings can reach.
+
+### F3. Numeric output is locale-formatted, so results files are written with locale decimal separators — **Low** — *Fixed*
 
 The complement of F2: the same `setlocale` call governs every `%f` conversion the program performs — the
 banner's duration (`wstrInterface[5]`), and the observed/expected doubles `Failed()` prints
 (`CPU.cpp:72–88`). On a comma-decimal system a saved results file and every failure report print `1,234567`
 where the documentation and any parsing consumer expect `1.234567`. **Fix:** format through the same
 invariant locale as F2, or confine `setlocale` to the console code page it was installed for.
+
+> **Fixed** by the second spelling the entry offers, which is the one that reaches conversions no call site
+> names. `wmain` installs the machine's regional locale for `LC_CTYPE` alone and states
+> `setlocale(LC_NUMERIC, "C")` beside it, so every `%f` this program performs writes `1.234567` on every
+> machine: the banner's "Maximum duration" — which goes into the file `O[name]` saves as much as to the
+> console — the `%.1f` range a malformed decimal option is reported against (`wstrMessage[36]`, which the
+> entry's list misses), and the `%1.9f` observed and expected values of all four floating-point cases of
+> `Failed()`.
+>
+> The first spelling — an `_l` conversion at each site — was not taken, and the reason is the shape of the
+> defect rather than the number of sites. The `%f` conversions of those three places reach the CRT through
+> seven calls; an `_l` variant at each pins the seven and leaves the eighth to be remembered, and the
+> call that formats the banner is one of the two regions built with the legacy two-argument `swprintf`, whose
+> locale-taking counterpart is the double-underscored `__swprintf_l` — `_swprintf_l` is the conforming form,
+> and takes the count these calls do not pass. That is a plumbing change through a deprecated spelling to
+> reach an invariant the category itself states in one line, and it would pin only what exists today; the
+> narrowed `setlocale` makes the invariant the default for whatever is added next, which is what a defect of
+> *omission* asks for.
+>
+> `LC_CTYPE` is what the call was wanted for and is kept exactly as it was: it is the category the CRT
+> converts a wide write through when `stdout` is a console or is redirected to a file or a pipe. It no longer
+> governs the results file's own encoding — the 8-bit path has converted through `WideCharToMultiByte` under
+> the code page the `O` option named since the previous audit's F6 — so nothing but the console's rendering
+> depends on it, and that rendering is unchanged. The other three categories `LC_ALL` was setting have no
+> reader in the program at all: nothing here calls `strcoll`, `strftime` or `localeconv`.
+>
+> The second call is a no-op against the C startup default, and is written anyway. It puts the program's
+> whole locale policy in two adjacent lines at the top of `wmain`, and it is what makes a category added to
+> `LC_ALL` by a later CRT unable to acquire a separator with it. `ParseDecimal` pins its own read regardless
+> (F2), so the two halves of "a decimal spelling means the same thing on every machine" hold independently,
+> in and out.
 
 ### F4. Byte and wide output are mixed on one stream — **Low** — *benign under the MSVC CRT* — *Fixed*
 
@@ -888,8 +947,8 @@ layer — no check of the *cross-unit* ladder equivalence — is recorded as B1.
 | Command line | Machine | Behaviour |
 |---|---|---|
 | ~~any, including none~~ | ~~x64 CPU without POPCNT (Core 2, early Athlon 64 X2)~~ | ~~Illegal-instruction crash before any output~~ — **fixed** (G1) |
-| `Mn8 Ms8` | any hybrid or two-class machine | Refused `-18` "Only 0 bytes of memory per thread"; `Ms8 Mn8` runs (F1) |
-| `Ia Tct5.0 Ue` (the documented smoke test) | Windows set to a comma-decimal locale | Refused `-25` "Unrecognised '.' option" (F2) |
-| `Ia Sr Tft60[15000]15000 Ua` | 16+ virtual cores | "60-second" run takes ~7.5 minutes; threads 3+ graded on one job cycle (E1) |
+| ~~`Mn8 Ms8`~~ | ~~any hybrid or two-class machine~~ | ~~Refused `-18` "Only 0 bytes of memory per thread"; `Ms8 Mn8` runs~~ — **fixed** (F1) |
+| ~~`Ia Tct5.0 Ue` (the documented smoke test)~~ | ~~Windows set to a comma-decimal locale~~ | ~~Refused `-25` "Unrecognised '.' option"~~ — **fixed** (F2) |
+| ~~`Ia Sr Tft60[15000]15000 Ua`~~ | ~~16+ virtual cores~~ | ~~"60-second" run takes ~7.5 minutes; threads 3+ graded on one job cycle~~ — **fixed** (E1) |
 | ~~`-1 Mc999999 O[results.txt]`~~ | ~~any, with an existing `results.txt`~~ | ~~Exits `-17` having silently truncated the previous results file~~ — **fixed** (C1) |
 | `-8` | any | Runs the *unsynchronised* staggered preset the help text calls synchronised (K1) |
