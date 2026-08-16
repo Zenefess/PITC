@@ -639,19 +639,19 @@ ceils likewise while the const overload floors; `salloc` performs stores wider t
 asked for; the `DATA_TRACKING` accounting block does not compile if enabled; `mfree`'s arity/terminator
 convention is fragile. Flagged so an upstream sync does not import a caller.
 
-### I13. Assorted defects in `typedefs.h` and `vector structures.h` — **Low** — *carried forward (old I13)*
+### I13. Assorted defects in `typedefs.h` and `vector structures.h` — **Low** — *carried forward (old I13)* — *Fixed*
 
 All bullets remain at current lines: `al1` is `__declspec(align(2))` (`typedefs.h:36`), the lowercase object
 macro `vol` (:44) leaks into every unit, eleven derived `fl80` aliases reference a base alias that does not
 exist, and several unions in `vector structures.h` declare member arrays narrower than their siblings
 (`AVX8Ds64.ymm[1]`, `AVX64Ds8.vector[9]` read past the declared member).
 
-### I14. Inline changelog blocks remain in two headers — **Low** — *carried forward (old I14)*
+### I14. Inline changelog blocks remain in two headers — **Low** — *carried forward (old I14)* — *Fixed*
 
 `typedefs.h:20–29` (self-annotated "&lt;- Move to CHANGELOG.md") and `vector structures.h:5–7`; GCS c1
 forbids history in prologs and the CHANGELOG.md it should migrate to still does not exist (L1).
 
-### I15. `SIMD management.h` is not self-contained — **Low**
+### I15. `SIMD management.h` is not self-contained — **Low** — *Fixed*
 
 Its only include is `<immintrin.h>` (:11), yet its function signature uses `fl32x4` (:14) and its macros use
 `fl64x2`/`fl64x4`/`si128` (:25–27) — aliases from `typedefs.h`. It compiles in PITC only because
