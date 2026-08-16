@@ -1,6 +1,6 @@
 /************************************************************
  * File: SIMD management.h              Created: 2025/09/18 *
- *                                Last modified: 2025/09/27 *
+ *                                Last modified: 2026/08/16 *
  *                                                          *
  * Desc:                                                    *
  *                                                          *
@@ -9,6 +9,7 @@
 #pragma once
 
 #include <immintrin.h>
+#include "typedefs.h"
 
 ///== Fused multiply-add, single-rounded where the ISA carries it
 // These were five #ifndef-guarded macros over the intrinsics' own names. _mm_fmadd_ps and its family are
