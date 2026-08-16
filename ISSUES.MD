@@ -51,8 +51,11 @@ audited and survived adversarial review with **no new findings** — section D o
 | L — Project process | 0 | 0 | 0 | 5 | 5 |
 | **Total** | **0** | **1** | **18** | **38** | **57** |
 
+**G1 is fixed** — see the `Fixed` note on that entry. The counts in the table above are as first audited and
+have not been decremented.
+
 No Critical finding remains: the false-pass and false-fail families of the previous audit are gone, and the
-one High entry is a start-up crash on a narrow class of old hardware rather than a wrong verdict. The Medium
+one High entry was a start-up crash on a narrow class of old hardware rather than a wrong verdict. The Medium
 weight sits in the vendored headers (latent for PITC, live for any other client of those files) and in a
 handful of reachable configuration defects; the Low tail is documentation and hygiene.
 
@@ -215,7 +218,7 @@ break under any other runtime.
 
 ## G. Topology and scaling
 
-### G1. `POPCNT` executes unconditionally in the SSE2-baseline path, crashing pre-Nehalem x64 CPUs at startup — **High** — *rests on winnt.h's macro definition; confirm against a real build*
+### G1. `POPCNT` executes unconditionally in the SSE2-baseline path, crashing pre-Nehalem x64 CPUs at startup — **High** — *Fixed*
 
 `WalkTopology` counts a core's virtual cores with `PopulationCount64` (`CPU.h:735`), and the thread-count
 loop does the same (`CPU.cpp:725–726`). On x64 MSVC `PopulationCount64` is winnt.h's macro for `__popcnt64`,
@@ -228,6 +231,33 @@ specifically about not executing an unsupported instruction on "a Core 2 or an e
 test began". This reintroduces the same failure class one call earlier. **Fix:** a branchless software
 popcount (the 0x5555/0x3333/0x0F0F fold) beside `LowestSetBit64`/`HighestSetBit64`, which are already
 deliberately intrinsic-free; three call sites, none hot.
+
+> **Fixed** as the entry prescribes. `SetBitCount64` (`CPU.h:663–684`) is the SWAR fold, placed with
+> `LowestSetBit64` and `HighestSetBit64` in the `//--- Processor topology ---//` group and carrying the
+> reason it is intrinsic-free in its doc comment, so the next reader does not "simplify" it back into
+> `__popcnt64`. The three call sites — `WalkTopology`'s virtual-core count (`CPU.h:758`) and the two
+> thread-count accumulations in `wmain` (`CPU.cpp:725–726`) — now call it, and the name
+> `PopulationCount64` appears nowhere in the tree outside that comment and this entry. No `#undef` of the
+> SDK's macro accompanies it: whether it is a macro or a `FORCEINLINE` differs by SDK version, and
+> undefining a name other Windows headers may use to fence off three call sites of our own is the larger
+> risk of the two.
+>
+> The entry's caveat — that its claim rests on winnt.h's declaration and was not confirmed against a real
+> build — is retired rather than resolved, because the fix does not depend on which form the SDK uses. Both
+> forms reach `__popcnt64`, and that intrinsic is documented to emit `POPCNT` with no `/arch` gate, so the
+> only way to be certain the baseline unit stays baseline is not to route through it at all.
+>
+> Verified off-target, the arithmetic being platform-independent: the fold was transcribed verbatim into a
+> harness and agreed with `__builtin_popcountll` on 20,262,274 masks — every single-bit mask, every
+> low-run mask, the empty and full masks, every 16-bit pattern in each of the four 16-bit lanes, and 20
+> million SplitMix64 draws — with zero mismatches. The codegen premise was checked the same way: compiled
+> at `-march=x86-64` the fold emits no `POPCNT`, and at `-march=nehalem` and `-march=x86-64-v3` an
+> idiom-recognising compiler substitutes one, which is the behaviour the intrinsic cannot offer. MSVC does
+> not recognise the idiom at all, and `CPU.cpp` carries the global `StreamingSIMDExtensions2` setting and
+> no `Optimization` override in either configuration — the four per-file overrides are the job units' — so
+> no substitution arises on the shipped build path either. The copies of the function in those four units
+> are never called: `WalkTopology` and `wmain` are both in `CPU.obj`, and an AVX2 or AVX-512 target carries
+> `POPCNT` regardless.
 
 ## H. Build configuration
 
@@ -549,7 +579,7 @@ layer — no check of the *cross-unit* ladder equivalence — is recorded as B1.
 
 | Command line | Machine | Behaviour |
 |---|---|---|
-| any, including none | x64 CPU without POPCNT (Core 2, early Athlon 64 X2) | Illegal-instruction crash before any output (G1) |
+| ~~any, including none~~ | ~~x64 CPU without POPCNT (Core 2, early Athlon 64 X2)~~ | ~~Illegal-instruction crash before any output~~ — **fixed** (G1) |
 | `Mn8 Ms8` | any hybrid or two-class machine | Refused `-18` "Only 0 bytes of memory per thread"; `Ms8 Mn8` runs (F1) |
 | `Ia Tct5.0 Ue` (the documented smoke test) | Windows set to a comma-decimal locale | Refused `-25` "Unrecognised '.' option" (F2) |
 | `Ia Sr Tft60[15000]15000 Ua` | 16+ virtual cores | "60-second" run takes ~7.5 minutes; threads 3+ graded on one job cycle (E1) |
