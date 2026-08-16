@@ -14,6 +14,7 @@
 #include <atomic>   // atomic_signal_fence, the compiler barrier the completion-bitmap polls read through
 #include <stdlib.h> // rand_s, which is declared only for a translation unit that defined _CRT_RAND_S above
 #include <string.h> // memcmp, for the byte-exact comparisons in each unit's ValidateFamily*
+#include <locale.h> // _create_locale and _free_locale, the invariant LC_NUMERIC ParseDecimal reads through
 #include <windows.h>
 #include <process.h>
 #include "memory management.h"
@@ -1129,6 +1130,10 @@ static cbool ParseWholeNumber(cwchptrc str, ui32 &j, csi64 low, csi64 high, si64
    return true;
 }
 
+// _locale_t is itself a pointer typedef, so the constant form of it is spelt here rather than as a raw
+// 'const _locale_t' at the declaration below, the way cSLPIEXptrc spells the topology walk's record (GCS t2)
+typedef _locale_t const localeptrc;
+
 /// Reads a decimal value from an option argument and range-checks it
 /// @param str Argument being parsed
 /// @param j Index of the option's letter; left on the last character of the value when one was read
@@ -1143,7 +1148,20 @@ static cbool ParseDecimal(cwchptrc str, ui32 &j, cfl64 low, cfl64 high, fl64 &va
    // As above, and it additionally keeps the "inf" and "nan" spellings wcstod accepts out of a tic count
    if(*first != L'-' && *first != L'+' && (*first < L'0' || *first > L'9')) return false;
 
-   cfl64 result = wcstod(first, &stopChar);
+   // The value is read through an invariant LC_NUMERIC rather than through whichever one the machine is set
+   // to. wcstod takes its decimal separator from that category, and wmain installed the user's regional
+   // locale before parsing, so on a comma-decimal system -- most of Europe and Latin America -- the read
+   // stopped at the '.' of every spelling the help text documents: 'Tct5.0' yielded 5, the option loop's ++j
+   // landed on the '.', and the 'T' option's default arm rejected the whole command line with -25. The
+   // documented option grammar did not work at all on those machines, while 'Tt12,5' worked on them and
+   // nowhere else -- one command line meaning two different runs (ISSUES.MD F2). wmain now installs the
+   // regional locale for LC_CTYPE alone and states LC_NUMERIC invariant, so the fallback below reads the same
+   // separator this locale object does; the object is what pins the read whatever the global locale of a
+   // later build becomes, which is the half of the guarantee a setlocale elsewhere cannot undo
+   localeptrc numeric = _create_locale(LC_NUMERIC, "C");
+   cfl64      result  = (numeric ? _wcstod_l(first, &stopChar, numeric) : wcstod(first, &stopChar));
+
+   if(numeric) _free_locale(numeric);
 
    if(stopChar == first || !(result >= low) || !(result <= high)) return false;
 

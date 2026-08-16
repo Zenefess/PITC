@@ -112,7 +112,20 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    ui32  j;
    ui8   outUTF = 0;
 
-   setlocale(LC_ALL, "");
+   // The machine's regional locale is installed for LC_CTYPE alone -- character classification, and the
+   // wide-to-byte conversion the CRT performs for a redirected stdout, which is what it was wanted for.
+   // LC_ALL installed it for LC_NUMERIC as well, and every %f conversion this program performs takes its
+   // decimal separator from that category: on a comma-decimal system the banner's "Maximum duration"
+   // (wstrInterface[5]), the range a malformed decimal option is reported against (wstrMessage[36]) and
+   // every value Failed() prints were written "1,234567" -- into the file 'O[name]' saves as much as to the
+   // console, where this program's own documentation and any consumer of that file expect "1.234567"
+   // (ISSUES.MD F3). The second call states the invariant rather than leaving it to the C startup default,
+   // so that the one place this program has a locale policy says what that policy is, and so that a category
+   // added to LC_ALL by a later CRT cannot quietly acquire a separator with it. ParseDecimal pins its own
+   // read through a locale object of its own regardless (F2): together the two make a decimal spelling mean
+   // the same thing on every machine, in and out
+   setlocale(LC_CTYPE, "");
+   setlocale(LC_NUMERIC, "C");
 
    // The topology is read before anything else: nothing below can be sized, selected or pinned without it,
    // and a machine that cannot be described is one this build must not claim to have tested. The walk itself
@@ -1210,8 +1223,8 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          // index c, which asks a 2c-byte buffer to hold 3c bytes -- and asks it while it is still reading the
          // wide string it is overwriting (ISSUES.MD C7). A separate allocation is the only spelling of this
          // that cannot overlap its own source.
-         // It converted through wcstombs, which uses the locale setlocale(LC_ALL, "") installed -- on most
-         // Windows installations the system ANSI code page. The '8' option therefore wrote ANSI bytes behind
+         // It converted through wcstombs, which uses the LC_CTYPE locale wmain installs -- on most Windows
+         // installations the system ANSI code page. The '8' option therefore wrote ANSI bytes behind
          // a UTF-8 byte-order mark, and every non-ASCII character in the file was mojibake to anything that
          // believed the mark (ISSUES.MD F6). WideCharToMultiByte names the encoding the option asked for,
          // reports the exact byte count that encoding needs, and reports a character it cannot represent as a
