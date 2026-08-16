@@ -167,11 +167,11 @@ al32 struct RESULTS_ARRAYS { // 96 bytes
    ~RESULTS_ARRAYS(void) { mfree(p, iter); }
 };
 
-// Owner of the report buffer wmain builds its banner, results table and benchmark score in -- the third
-// run-length allocation, and the one the C13 pair left behind. Its size is derived from the processor group
+// Owner of the report buffer wmain builds its banner, results table and benchmark score in -- the allocation
+// that outlives its block and that the C13 pair left behind. Its size is derived from the processor group
 // count and the thread count, so it cannot be a fixed array; it is a local of wmain rather than a global, so
-// it cannot be freed by either of the destructors above; and seven further returns stand between its
-// allocation and the end of the function, so freeing it where it is used would mean seven frees and a leak
+// it cannot be freed by either of the destructors above; and eight error returns stand between its
+// allocation and the end of the function, so freeing it where it is used would mean nine frees and a leak
 // the next time an error return is added between them. An owning object frees it on every one of those paths
 // and on any path added later, which is the whole of why the arena belongs to RESULTS_ARRAYS rather than to
 // wmain. GCS rule p2 requires a matching free for every aligned allocation; this is that free, and mdealloc

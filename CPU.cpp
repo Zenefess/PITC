@@ -550,7 +550,10 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
 
             outFile = CreateFileW(valuesTemp, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
             if(outFile == INVALID_HANDLE_VALUE) {
-               wprintf(wstrMessage[6]);
+               // The message names the file that could not be created, which is the temporary rather than
+               // "cpu.values" -- and naming the wrong one would misdirect the very case the share mode above
+               // exists to produce, where a second 'W' is refused this file while "cpu.values" is untouched
+               wprintf(wstrMessage[6], valuesTemp);
                return -5;
             }
 
@@ -956,8 +959,8 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
 
    al64 declare1d64z(wchar, wstrOutput, outChars);
 
-   // The buffer had no matching free on any path out of this function -- not on the seven returns below and
-   // not on the successful one, so a run of any length ended by handing back up to a mebibyte for the process
+   // The buffer had no matching free on any path out of this function -- not on the eight error returns below
+   // and not on the successful one, so a run of any length ended by handing back up to a mebibyte for the process
    // teardown to reclaim, against GCS rule p2 and against the rule the arena and the benchmark counters were
    // moved into ~RESULTS_ARRAYS to keep (ISSUES.MD C3, C13). The owner below frees it as its scope ends, by
    // whichever return that happens to be, and freeing null is a no-op so it stands above the check as safely

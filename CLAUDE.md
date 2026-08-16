@@ -50,7 +50,11 @@ defined and `CPU_jobs_AVX512.cpp` unless `__AVX512F__` is, the complement of H1'
 `/arch:AVX512` defines `__AVX2__` as well, so a lower bound alone accepts a raised per-file setting — and
 `wmain` gates these kernels on `cfg.sys.cpuAVX2`, which dispatches them to every CPU reporting plain AVX2,
 where the EVEX encoding the compiler would then use around the intrinsics is an illegal instruction
-(ISSUES.MD H3). The AVX-512 unit needs no such upper bound; MSVC has no `/arch` above `/arch:AVX512`.
+(ISSUES.MD H3). **The AVX-512 unit keeps its lower bound alone**, and the reason is the shape of the hazard
+rather than the absence of a higher `/arch`: what H3 names is a unit compiled *above* the ISA that `wmain`'s
+gate tests before dispatching it, and the AVX-512 kernels are gated on `cfg.sys.cpuAVX512`, the widest set
+this program tests for. A later toolset's `/arch:AVX10.1` defines `__AVX512F__` as well, so the AVX2 unit's
+new guard refuses that setting too.
 `CPU_jobs_SSE.cpp` has no such guard because MSVC has no `/arch` for SSE4.1: that unit compiles at the
 baseline by construction, and its one SSE4.1 instruction is gated on `cfg.sys.cpuSSE4_1` at run time instead.
 `Optimization=Custom` is likewise unconditional; `Debug|x64` sets no `Optimization` of its own, so it emits no
@@ -176,8 +180,8 @@ pre-flight rejections in `wmain` — an unsupported vector unit, more than one `
 of zero or less, a zero pulse on-time, an `I` string naming no processing unit, an `I` string naming more
 than one of FPU/SSE4.1/AVX2/AVX-512, a memory request the machine cannot satisfy (`-17`, shared by the
 pre-flight size check, a failed `malloc64`, a failed report buffer and — since ISSUES.MD C2 — a failed
-`resArray.iter` under `B`; every run-length allocation in the program now answers with it), and a per-thread
-slice too small to hold the eight records a
+`resArray.iter` under `B`; those four are every allocation that outlives the block making it), and a
+per-thread slice too small to hold the eight records a
 slice is rounded to (`-18`, which is also where a core class given no memory at all arrives — `Mn` and `Ms`
 each name one class). `-19` is the one runtime failure that aborts a run: a worker thread that could not be
 created or resumed, in either the test or the `W` path. `-20` is a `cpu.values` header that could not be
@@ -676,16 +680,18 @@ one command line frees `resArray.iter` before allocating it again, and **the res
 checked**: `B` refuses with `-17` on a null, where it used to spawn the threads and let every one of them
 write its record count through a null pointer as it ended (ISSUES.MD C2).
 
-**The report buffer is the third run-length allocation, and it is owned rather than freed at the point of
-use.** `wstrOutput` is a local of `wmain` sized from the group and thread counts, so neither destructor above
-can reach it; `REPORT_BUFFER` (`CPU.h`) is the two-line owner that does — one `wchptrc` and a destructor that
-`mfree1`s it — and `wmain` declares a `cREPORT_BUFFER` over the pointer immediately below the `declare1d64z`
-that allocates it, above the null check, so a failed allocation destructs on the same path as a successful
-one. It had no free at all before (ISSUES.MD C3), and seven error returns stand between the allocation and
-the end of the function, which is exactly the arrangement C13 rejected for the arena. **Nothing reads the
-owner**: every write still goes through `wstrOutput` itself, and a new error return between the two needs no
-free of its own. A fourth run-length allocation should follow the same rule — an owner, not a free per
-return.
+**The report buffer is the third allocation that outlives its block, and it is owned rather than freed at the
+point of use.** `wstrOutput` is a local of `wmain` sized from the group and thread counts, so neither
+destructor above can reach it; `REPORT_BUFFER` (`CPU.h`) is the two-line owner that does — one `wchptrc` and a
+destructor that `mfree1`s it — and `wmain` declares a `cREPORT_BUFFER` over the pointer immediately below the
+`declare1d64z` that allocates it, above the null check, so a failed allocation destructs on the same path as a
+successful one. It had no free at all before (ISSUES.MD C3), and **eight** error returns stand between the
+allocation and the end of the function, which is exactly the arrangement C13 rejected for the arena.
+**Nothing reads the owner**: every write still goes through `wstrOutput` itself, and a new error return
+between the two needs no free of its own. An allocation whose lifetime ends inside one block does not need
+this — `strNarrow` in the results writer is freed on both paths of its own block, and its failure is reported
+as `-10` with the write it belongs to, not as `-17` — but a fourth allocation that outlives its block should
+get an owner rather than a free per return.
 
 Of the five pointers handed to each thread, `p0`–`p3` are four views of the *same* arena address at different
 element strides (only `p4` is advanced past them, and only for the `ALU_` combinations). The seeding pass must

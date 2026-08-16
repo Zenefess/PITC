@@ -254,7 +254,7 @@ reason. Reclaimed by process exit, so hygiene rather than a runtime defect.
 > **Fixed** the way C13 was, rather than with a free before each return. `REPORT_BUFFER` (`CPU.h`) is a
 > two-line owner — one `wchptrc` member and a destructor that `mfree1`s it — and `wmain` declares a
 > `cREPORT_BUFFER` over `wstrOutput` immediately below the `declare1d64z` that allocates it. The buffer is
-> then freed on all eight paths out of the function — the seven error returns below the allocation and the
+> then freed on all nine paths out of the function — the eight error returns below the allocation and the
 > `return 0` — and on any return added between them later; a free at each of those points is the arrangement
 > C13 rejected for the arena, for the reason it gives.
 >
@@ -479,8 +479,15 @@ the existing guard.
 > **Fixed** as proposed: `#if defined(__AVX512F__)` and an `#error` naming the file and this entry now sit
 > below the `!defined(__AVX2__)` guard, so the unit states both ends of its range. A raised per-file setting
 > is a build failure rather than an illegal instruction on every CPU without AVX-512, which is what
-> `cfg.sys.cpuAVX2` dispatches these kernels to. `CPU_jobs_AVX512.cpp` is left with its lower bound alone —
-> MSVC has no `/arch` above `/arch:AVX512` for a build to be raised to, so there is no upper bound to state.
+> `cfg.sys.cpuAVX2` dispatches these kernels to. `CPU_jobs_AVX512.cpp` is left with its lower bound alone,
+> for the shape of the hazard rather than for the absence of a higher `/arch`: the defect is a unit compiled
+> above the ISA `wmain`'s gate tests before dispatching it, and those kernels are gated on
+> `cfg.sys.cpuAVX512`, the widest set this program tests for. `/arch:AVX10.1`, which later v143 toolsets
+> carry, defines `__AVX512F__` as well and is therefore refused by the AVX2 unit's new guard.
+>
+> The same upper-bound argument does apply to `CPU_jobs_SSE.cpp`, which states neither bound: raised to
+> `/arch:AVX2` it would carry VEX encodings into kernels `wmain` dispatches on `cfg.sys.cpuSSE4_1`. That is
+> outside this entry, which names the AVX2 unit and its fix; it is recorded here so it is not lost.
 
 ### H4. `WholeProgramOptimization` is still present (set `false`) in two places `CLAUDE.md` says it is gone from — **Low**
 

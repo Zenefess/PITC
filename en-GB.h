@@ -16,7 +16,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n-2  : Insufficient input entries found in file"
  "\n-3  : Insufficient output entries found in file                                 1 : Correct values successfully saved to file"
  "\n-4  : Computational errors detected while generating correct values"
- "\n-5  : Unable to create file for correct values                                  2 : Instructions displayed to console"
+ "\n-5  : Unable to create or replace the file for correct values                   2 : Instructions displayed to console"
  "\n-6  : Failed to write all correct input values to file"
  "\n-7  : Failed to write all correct output values to file"
  "\n-8  : Invalid filename for results file"
@@ -99,7 +99,7 @@ cwchptrc wstrMessage_English[43] = {
    L"\n\nInsufficient input entries in \"cpu.values\" file.\n\n",
    L"\n\nInsufficient output entries in \"cpu.values\" file.\n\n",
    L"\n\nComputational error(s) detected. Results not written.\n\n",
-   L"\n\nCannot create \"cpu.values\" file.\n\n",
+   L"\n\nCannot create the \"%s\" file.\n\n",
    L"\n\nFailed to write all input entries to \"cpu.values\" file.\n\n",
    L"\n\nFailed to write all output entries to \"cpu.values\" file.\n\n",
    L"\nNo valid filename for the results file in the argument \"%s\"; expected 'O[name]'.\n\n",
