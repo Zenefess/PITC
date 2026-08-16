@@ -13,7 +13,7 @@ msbuild CPU.vcxproj /p:Configuration=Release /p:Platform=x64    ->  x64\PITC.exe
 msbuild CPU.vcxproj /p:Configuration=Debug   /p:Platform=x64    ->  x64\Debug\PITC.exe  (AddressSanitizer)
 ```
 
- x64 is the only platform the project offers, and the sources say so themselves: `CPU_build.h` fails the build for any other architecture, for a compiler other than MSVC, and for any floating-point model other than `/fp:strict`. The last is not a style preference — the golden values are a chain of divides and square roots, so a build that rounds differently produces different correct answers, and `cpu.values` records the model it was written under.
+ x64 is the only platform the project offers: `CPU_build.h` fails the build for any other architecture, for a compiler other than MSVC, and for any floating-point model other than `/fp:strict`. The golden values are a chain of divides and square roots, so a build that rounds differently produces different correct answers, and `cpu.values` records the model it was written under.
 
  There is no CI, no automated test suite and no lint or format tooling in the repository; the functional smoke test is the program itself.
 
