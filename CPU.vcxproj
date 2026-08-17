@@ -108,7 +108,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="CPU_jobs_AVX.cpp">
-      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
       <Optimization>Custom</Optimization>
     </ClCompile>
     <ClCompile Include="CPU_jobs_AVX512.cpp">

@@ -59,7 +59,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      Utilises the ALU and largest vector unit of all (virtual) cores in the system, and 8MB memory per thread for 60 seconds."
  "\n Ix : Set instruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av"
  "\n      Caches: 1==Level 1, 2==Level 2, 3==Level 3                                                |  The highest cache level given is used"
- "\n      Processing: A==ALU, F==FPU, S==SSE4.1, V==AVX2, X==AVX512                                 |  F, S, V and X are mutually exclusive"
+ "\n      Processing: A==ALU, F==FPU, S==SSE2, V==AVX, X==AVX512                                    |  F, S, V and X are mutually exclusive"
  "\n         At least one processing unit is required; a cache level names no unit of its own and is optional"
  "\n         A cache level sizes the memory per thread to it: the blocks of every selected thread sharing one instance of that level"
  "\n         fill it, and together overflow the level below. An 'M' option overrides the derived sizes, and a level this system does"
@@ -125,8 +125,8 @@ cwchptrc wstrMessage_English[46] = {
    L"\nNo valid filename for the results file in the argument \"%s\"; expected 'O[name]'.\n\n",
    L"\n\nCannot create \"%s\" file.\n\n",
    L"\n\nFailed to write results to \"%s\" file.\n\n",
-   L"\nSystem processor cores do not support the SSE4.1 instruction set.\n",
-   L"\nSystem processor cores do not support the AVX2 instruction set.\n",
+   L"\nSystem processor cores do not support the SSE2 instruction set.\n",
+   L"\nSystem processor cores do not support the AVX instruction set.\n",
    L"\nSystem processor cores do not support the AVX512F instruction set.\n",
    L"\nOnly one of the 'S' options P, R and S can be active; they are mutually exclusive.\n",
    L"\nTest duration must be greater than zero.\n",

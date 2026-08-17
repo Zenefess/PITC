@@ -63,16 +63,47 @@ and the struct has no destructor — contrary to GCS p2 and the repo's own destr
 
 ## C. Job kernels
 
-### C1. The "SSE4.1" unit exercises no SSE4.1 arithmetic, and the "AVX2" unit no AVX2 arithmetic — **Medium** — *carried forward (old J3)*
+### C1. The "SSE4.1" unit exercises no SSE4.1 arithmetic, and the "AVX2" unit no AVX2 arithmetic — **Medium** — *carried forward (old J3)* — **RESOLVED**
 
 `JobSSE`/`JobALU_SSE`/`JobMemSSE`/`JobMemALU_SSE` (`CPU_jobs_SSE.cpp:48–247`) use only
 `_mm_set1_pd/div/sqrt/add/sub/mul/and/set1_epi64x` — all SSE2. The unit's sole SSE4.1 instruction is `PTEST`
 in `ResultsMatch` (:261) and the completion poll — the comparison, not the computation — yet an SSE4.1-less
 CPU is refused the whole unit with `-11`. Likewise the AVX2 unit's kernels use only `_mm256_*_pd` forms that
 are AVX1; the AVX2-ness is the compiler's encoding, not the arithmetic under test. A user running `Is` or
-`Iv` to exercise the instruction class named on the tin is testing less than the name says. Renaming or
-extending the kernels both change the golden values, so this stays a documentation-versus-substance defect
-until a `cpu.values` version bump is scheduled anyway.
+`Iv` to exercise the instruction class named on the tin is testing less than the name says.
+
+**Resolved** by lowering the requirement to the substance rather than raising the substance to the
+requirement, which is what leaves `cpu.values` untouched: no kernel's arithmetic changed, so
+`KernelFingerprint` — which hashes the lanes the golden ladder produced, not the route it took or the names
+of the kernels that produced them — is unchanged, and a file generated before this change is still read by a
+build made after it.
+
+Three instructions carried the whole of the discrepancy, and each is replaced by the same predicate at the
+unit's own instruction set. `ResultsMatch` in `CPU_jobs_SSE.cpp` and the `AllFalse` in `ThreadsRunningSSE`
+were `PTEST`; both now go through one `AllBitsZero128` fold — `PCMPEQD` against a zeroed vector read back
+through `PMOVMSKB`, all sixteen mask bits set exactly when all 128 bits are zero, which is neither more nor
+less than `PTEST` examined. `ResultsMatch` in `CPU_jobs_AVX.cpp` formed its difference with `VPXOR` on `ymm`
+operands, the one AVX2 instruction in that unit, and now forms it with `VXORPD`; `VPTEST` on `ymm` operands
+is AVX1, so the test itself needed no change. The AVX-512 unit is untouched.
+
+With the instructions gone the gates follow: `cfg.sys.cpuSSE4_1` is `cpuSSE2` and `cpuAVX2` is `cpuAVX`, read
+from `PF_XMMI64_INSTRUCTIONS_AVAILABLE` and `PF_AVX_INSTRUCTIONS_AVAILABLE`; `CPU_jobs_AVX.cpp` builds at
+`/arch:AVX` and its guard gained an `__AVX2__` upper arm, because H3's hazard — a unit compiled above the ISA
+`wmain` tests for before dispatching it — now applies to the Sandy Bridge, Ivy Bridge and Bulldozer parts
+this unit reaches. The kernels, job cycles, validators and seeding pass of that unit are spelt `*AVX` rather
+than `*AVX2`, so `wstrKernelName` and the `-22` messages name what the unit is. The help text, `README.md`
+and `wstrMessage[12]`/`[13]` say `SSE2` and `AVX`.
+
+Two consequences worth stating. `RunGoldenLadder`'s middle branch is now entered on AVX1, so a pre-Haswell
+AVX machine walks the 256-bit ladder where it walked the 128-bit one — the element-wise equivalence
+`ValidateLadderAVX` proves is exactly what makes the two interchangeable, and `W` proves it there before
+writing anything. And the `-11` check for `Is` can no longer fire on any machine this build runs on, SSE2
+being part of the x64 architecture `CPU_build.h` requires; it is kept for symmetry with the other two units
+and because `ThreadsRunningScalar` is selected by the same flag.
+
+What C1 named as a *substance* gap is closed only in the sense that the name now matches the arithmetic. The
+kernels still exercise no instruction above SSE2 and AVX1, so exercising SSE4.1 or AVX2 arithmetic
+specifically remains future work — and it remains work that would change the golden values.
 
 ## D. Documentation and localisation
 

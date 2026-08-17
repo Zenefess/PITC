@@ -43,7 +43,7 @@ Command-line options
  Ix : Set instruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av
  
       Caches: 1==Level 1, 2==Level 2, 3==Level 3                                                |  The highest cache level given is used
-      Processing: A==ALU, F==FPU, S==SSE4.1, V==AVX2, X==AVX512                                 |  F, S, V and X are mutually exclusive
+      Processing: A==ALU, F==FPU, S==SSE2, V==AVX, X==AVX512                                    |  F, S, V and X are mutually exclusive
          At least one processing unit is required; a cache level names no unit of its own and is optional
          A cache level sizes the memory per thread to it: the blocks of every selected thread sharing one instance of that level
          fill it, and together overflow the level below. An 'M' option overrides the derived sizes, and a level this system does

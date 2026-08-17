@@ -48,11 +48,11 @@ cwchptrcptr wstrInterface    = wstrInterface_English;
 // differently from the eighteen that are (ISSUES.MD K8)
 al64 cui8 (*JOB_CYCLE[2][32])(cui64 coreNum, csi64 offset, vchptrc threadByte) = {
  { JobCycleALU,       JobCycleALU,           JobCycleFPU,       JobCycleALU_FPU,       JobCycleSSE,       JobCycleALU_SSE,       JobCycleSSE,       JobCycleALU_SSE,
-   JobCycleAVX2,      JobCycleALU_AVX2,      JobCycleAVX2,      JobCycleALU_AVX2,      JobCycleAVX2,      JobCycleALU_AVX2,      JobCycleAVX2,      JobCycleALU_AVX2,
+   JobCycleAVX,       JobCycleALU_AVX,       JobCycleAVX,       JobCycleALU_AVX,       JobCycleAVX,       JobCycleALU_AVX,       JobCycleAVX,       JobCycleALU_AVX,
    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,
    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512,    JobCycleAVX512,    JobCycleALU_AVX512, },
  { JobCycleMemALU,    JobCycleMemALU,        JobCycleMemFPU,    JobCycleMemALU_FPU,    JobCycleMemSSE,    JobCycleMemALU_SSE,    JobCycleMemSSE,    JobCycleMemALU_SSE,
-   JobCycleMemAVX2,   JobCycleMemALU_AVX2,   JobCycleMemAVX2,   JobCycleMemALU_AVX2,   JobCycleMemAVX2,   JobCycleMemALU_AVX2,   JobCycleMemAVX2,   JobCycleMemALU_AVX2,
+   JobCycleMemAVX,    JobCycleMemALU_AVX,    JobCycleMemAVX,    JobCycleMemALU_AVX,    JobCycleMemAVX,    JobCycleMemALU_AVX,    JobCycleMemAVX,    JobCycleMemALU_AVX,
    JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512,
    JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512, JobCycleMemAVX512, JobCycleMemALU_AVX512 }
 };
@@ -71,13 +71,13 @@ void Failed(cui64 coreNum, vchptrc threadByte, cui8 unit) {
    // value[3] immediately before calling, and value[1] is the *working* plane, which in memory-backed mode
    // does not hold results at all: its first 40 bytes are the arena pointers p0~p4, which the RESULTS union
    // overlays on the avx512 member. Cases 0~3 read value[1], so an AVX-512 failure printed eight pointers
-   // reinterpreted as doubles, and the AVX2, SSE and FPU cases printed whatever a register-resident run had
+   // reinterpreted as doubles, and the AVX, SSE and FPU cases printed whatever a register-resident run had
    // last left in those lanes -- zero, under any 'M', 'B' or preset run. Only the ALU case, which already
    // read value[3], reported the value the CPU actually produced (ISSUES.MD A8)
    wprintf(wstrInterface[11], coreNum);
    // Each vector case binds the two planes' lanes to a pair of local views before formatting them. Spelt
    // out, one 'value[2][coreNum].avx512.m512d_f64[k]' per lane, the AVX-512 case ran to 184 columns against
-   // the 180 GCS e2 makes a hard cap, and the AVX2 and SSE cases to 172 and 173 against the 150 it asks for
+   // the 180 GCS e2 makes a hard cap, and the AVX and SSE cases to 172 and 173 against the 150 it asks for
    // (ISSUES.MD K8). The views are per case rather than one pair before the switch, so that each names the
    // member of RESULTS its own unit writes: nothing here has to know the lane offsets that Evaluate and the
    // results table derive from the union's widest-unit-first ordering
@@ -158,18 +158,27 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
 
    if(topology) return topology;
 
-   cfg.sys.cpuSSE4_1  = IsProcessorFeaturePresent(PF_SSE4_1_INSTRUCTIONS_AVAILABLE);
-   cfg.sys.cpuAVX2    = IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE);
-   cfg.sys.cpuAVX512  = IsProcessorFeaturePresent(PF_AVX512F_INSTRUCTIONS_AVAILABLE);
+   // Each flag names the set the unit gated on it actually executes. They used to name a higher one apiece:
+   // the SSE kernels are SSE2 throughout and the AVX kernels AVX1 throughout, and only the comparison in each
+   // reached above that -- PTEST in one, VPXOR ymm in the other -- so the requirement being tested for here
+   // was the verdict's rather than the arithmetic's, and a Penryn or a Sandy Bridge was refused a unit it
+   // could have run in full (ISSUES.MD C1). PF_XMMI64_INSTRUCTIONS_AVAILABLE is SSE2, which every x64 CPU
+   // carries and CPU_build.h refuses to build for anything else -- it is asked so that the answer is the
+   // machine's rather than an assumption, and so that ThreadsRunningScalar keeps a selector
+   cfg.sys.cpuSSE2   = IsProcessorFeaturePresent(PF_XMMI64_INSTRUCTIONS_AVAILABLE);
+   cfg.sys.cpuAVX    = IsProcessorFeaturePresent(PF_AVX_INSTRUCTIONS_AVAILABLE);
+   cfg.sys.cpuAVX512 = IsProcessorFeaturePresent(PF_AVX512F_INSTRUCTIONS_AVAILABLE);
 
-   // Set vector-dependent functions to use largest instruction width available. The SSE poll is not the
+   // Set vector-dependent functions to use largest instruction width available. The SSE poll was once not the
    // baseline it was being used as: AllFalse of two ui128 is _mm_testz_si128, an SSE4.1 instruction, so
    // selecting it on nothing but the absence of AVX2 faulted with an illegal instruction on a CPU carrying
    // SSE2 and no more -- before any test began, and before the pre-flight check at the end of the parse
-   // could name the missing instruction set. An ALU-only run does not ask for SSE4.1 and never reaches that
-   // check at all, so nothing else in the program stood between such a CPU and the fault (ISSUES.MD D4)
-   static bool (&ThreadsRunning)(void) = cfg.sys.cpuAVX512 ? ThreadsRunningAVX512 : cfg.sys.cpuAVX2  ? ThreadsRunningAVX
-                                       : cfg.sys.cpuSSE4_1 ? ThreadsRunningSSE    : ThreadsRunningScalar;
+   // could name the missing instruction set. An ALU-only run does not ask for a vector unit and never reaches
+   // that check at all, so nothing else in the program stood between such a CPU and the fault (ISSUES.MD D4).
+   // The poll folds its zero test at SSE2 now, so the condition below is the flag it always should have been
+   // rather than a stand-in for one (C1)
+   static bool (&ThreadsRunning)(void) = cfg.sys.cpuAVX512 ? ThreadsRunningAVX512 : cfg.sys.cpuAVX ? ThreadsRunningAVX
+                                       : cfg.sys.cpuSSE2   ? ThreadsRunningSSE    : ThreadsRunningScalar;
 
    /// Defaults ///
    cfg.tics        = timer.siFrequency * 900; // 15 minute duration
@@ -221,7 +230,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             // means here. An 'M' after 'B' sets the flag again and keeps its size (ISSUES.MD A1)
             cfg.memExplicit = 0;
             cfg.procSync    = 0x092;
-            cfg.procUnits   = (cfg.sys.cpuAVX512 ? 0x011 : cfg.sys.cpuAVX2 ? 0x09 : 0x05);
+            cfg.procUnits   = (cfg.sys.cpuAVX512 ? 0x011 : cfg.sys.cpuAVX ? 0x09 : 0x05);
             break;
          case L'i': // Set instruction usage options
          case L'I':
@@ -249,7 +258,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
                case L'S':
                   cfg.procUnits |= 0x04;
                   break;
-               case L'v': // Execute AVX2 codepath
+               case L'v': // Execute AVX codepath
                case L'V':
                   cfg.procUnits |= 0x08;
                   break;
@@ -673,7 +682,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             // A preset's 8MB is a default rather than a request, exactly as 'B's is, so '-1 I3a' derives its
             // block sizes from the level-3 window and '-1 Mc8' keeps the 8MB it was given (ISSUES.MD A1)
             cfg.memExplicit = 0;
-            cfg.procUnits   = (cfg.sys.cpuAVX512 ? 0x011 : cfg.sys.cpuAVX2 ? 0x09 : 0x05);
+            cfg.procUnits   = (cfg.sys.cpuAVX512 ? 0x011 : cfg.sys.cpuAVX ? 0x09 : 0x05);
             switch(argv[i][1]) {
             case L'1': // Constant stress; one thread per physical core. 10 minute duration
                cfg.procSync = 0x012;
@@ -759,17 +768,21 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    }
 
    // Requested processing unit checks. Both dispatch and arena sizing reduce a unit selection to the ALU bit
-   // and the widest other unit, so a selection naming two of FPU/SSE4.1/AVX2/AVX-512 would seed sub-arrays
+   // and the widest other unit, so a selection naming two of FPU/SSE2/AVX/AVX-512 would seed sub-arrays
    // that overlap inside the arena, and a selection naming none would size the arena in bytes instead of
    // records, dispatch an ALU test that was never requested, and print an empty results table
-   cui8 procUnitBits = ui8(cfg.procUnits & 0x01F); // ALU, FPU, SSE4.1, AVX2 and AVX-512
-   cui8 vectorBits   = ui8(cfg.procUnits & 0x01E); // FPU, SSE4.1, AVX2 and AVX-512 are mutually exclusive
+   cui8 procUnitBits = ui8(cfg.procUnits & 0x01F); // ALU, FPU, SSE2, AVX and AVX-512
+   cui8 vectorBits   = ui8(cfg.procUnits & 0x01E); // FPU, SSE2, AVX and AVX-512 are mutually exclusive
    if(!procUnitBits)                 { wprintf(wstrMessage[18]); return -15; }
    if(vectorBits & (vectorBits - 1)) { wprintf(wstrMessage[19]); return -16; }
 
-   // Requested vector unit checks
-   if(cfg.procUnits & 0x04  && !cfg.sys.cpuSSE4_1) { wprintf(wstrMessage[12]); return -11; }
-   if(cfg.procUnits & 0x08  && !cfg.sys.cpuAVX2)   { wprintf(wstrMessage[13]); return -11; }
+   // Requested vector unit checks. The first can no longer fire on a machine this build runs on at all: SSE2
+   // is part of the x64 architecture, and CPU_build.h refuses to compile for anything else. It stays because
+   // cfg.sys.cpuSSE2 is what IsProcessorFeaturePresent answered rather than what the architecture promises,
+   // and because the three vector units are gated alike -- 'Is' asking for SSE2 is the same kind of statement
+   // as 'Iv' asking for AVX, and the day a check like it is needed it should not have to be reinvented (C1)
+   if(cfg.procUnits & 0x04  && !cfg.sys.cpuSSE2)   { wprintf(wstrMessage[12]); return -11; }
+   if(cfg.procUnits & 0x08  && !cfg.sys.cpuAVX)    { wprintf(wstrMessage[13]); return -11; }
    if(cfg.procUnits & 0x010 && !cfg.sys.cpuAVX512) { wprintf(wstrMessage[14]); return -11; }
 
    // Requested synchronisation & timing checks. Each rejects a configuration that would idle the threads,
@@ -1021,7 +1034,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
 
       // resArray.avx512, .avx, .sse and .fpu are four views of one address with different element strides, so
       // seeding two of them would leave each overwriting the other's records. wmain has already rejected any
-      // selection naming more than one of FPU/SSE4.1/AVX2/AVX-512, so at most one of p0~p3 is written below.
+      // selection naming more than one of FPU/SSE2/AVX/AVX-512, so at most one of p0~p3 is written below.
       // bos is the running record offset into the arena: it counts across both thread classes, because
       // restarting it at the first class-1 thread would hand each of them a slice a class-0 thread already has
       for(k = 0, m = 0, bos = 0; m < 2; ++m)
@@ -1034,10 +1047,10 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             // Filling a slice is a store of the unit's own width repeated -- 'p0[os] = value[0][k].avx512'
             // is a 512-bit move -- so each unit's pass is a call into the translation unit built for that
             // unit, and this file emits none of them (ISSUES.MD H4). At most two of the five run: wmain has
-            // rejected any selection naming more than one of FPU/SSE4.1/AVX2/AVX-512 by here, and the ALU
+            // rejected any selection naming more than one of FPU/SSE2/AVX/AVX-512 by here, and the ALU
             // sub-array p4 addresses is the only one of the five that is not a view of the same records
             if(cfg.procUnits & 0x010) SeedRecordsAVX512(value[1][k].p0, resArray.records[m], value[0][k].avx512);
-            if(cfg.procUnits & 0x08)  SeedRecordsAVX2  (value[1][k].p1, resArray.records[m], value[0][k].avx);
+            if(cfg.procUnits & 0x08)  SeedRecordsAVX   (value[1][k].p1, resArray.records[m], value[0][k].avx);
             if(cfg.procUnits & 0x04)  SeedRecordsSSE   (value[1][k].p2, resArray.records[m], value[0][k].sse);
             if(cfg.procUnits & 0x02)  SeedRecordsFPU   (value[1][k].p3, resArray.records[m], value[0][k].fpu);
             if(cfg.procUnits & 0x01)  SeedRecordsALU   (value[1][k].p4, resArray.records[m], value[0][k].alu);
@@ -1048,7 +1061,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    // values printed in hexadecimal -- is a little under 300 characters. wstrOutput was a fixed 32 768 wide
    // characters however many threads were running, which the table passes at about 150 (ISSUES.MD C7); the
    // 64-virtual-core ceiling is what kept that unreachable, so lifting it is what makes the sizing necessary.
-   // At most two unit rows can be selected at once -- the ALU bit plus one of FPU/SSE/AVX2/AVX-512 -- so a
+   // At most two unit rows can be selected at once -- the ALU bit plus one of FPU/SSE/AVX/AVX-512 -- so a
    // kibicharacter per thread is a little over half as much again as the widest pair of rows can need. The
    // thread bitmap above it is one row per processor group rather than per thread, and 96 characters covers
    // a row of 64 cores and its indent, so the two terms between them bound everything written below
@@ -1226,7 +1239,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       c += swprintf(&wstrOutput[c], L".");
       for(i = 0; i < threadCount[2]; ++i) {
          // The expected and observed lanes of this row, bound once. Spelt out per lane, the AVX-512 row ran
-         // to 224 columns and the AVX2 row to 209, against the 180 GCS e2 makes a hard cap (ISSUES.MD K8).
+         // to 224 columns and the AVX row to 209, against the 180 GCS e2 makes a hard cap (ISSUES.MD K8).
          // Both are the union's ui64 view: this table prints bit patterns, which is the same question the
          // job cycles ask of them, and RESULTS orders that view widest unit first
          cui64ptrc expect = value[2][i].raw;
@@ -1264,7 +1277,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
       // dispatch table selects, plus the ALU's own lane where the ALU bit is set. The weight was
       // '(procUnits & 0x1F) >> 1', an arithmetic accident of the bit-field that yields a vector width only
       // for the three combinations 'B' itself installs -- 'Iasv' weighted by 6, a width no unit has, while
-      // the run executed the AVX2 kernel JOB_CYCLE had selected. It described what was requested, where the
+      // the run executed the AVX kernel JOB_CYCLE had selected. It described what was requested, where the
       // score has to describe what was dispatched (ISSUES.MD E12)
       csi64 unitLanes = si64(cfg.procUnits & 0x010 ? 8 : cfg.procUnits & 0x08 ? 4 : cfg.procUnits & 0x04 ? 2 : cfg.procUnits & 0x02 ? 1 : 0) +
                         si64(cfg.procUnits & 0x01 ? 1 : 0);
