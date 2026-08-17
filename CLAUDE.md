@@ -948,6 +948,16 @@ primitives (`memory management.h`); `UNLOOPx*`, `AllTrue`/`AllFalse`, `RoundUpTo
 `max512` constants (`common functions.h`); and the `QueryPerformanceCounter`-based `CLASS_TIMER` used for all
 tic arithmetic (`class_timers.h`).
 
+`class_timers.h`'s other class, `CLASS_TIMERS`, is the destructor-owned-pointer pattern once more, and PITC
+never instantiates it: its in-class initialiser `salloc`s a 2 KB timer table, so `~CLASS_TIMERS` `mfree1`s it
+per GCS p2, exactly as `REPORT_BUFFER` owns the report buffer (ISSUES.MD B2). **Its two `= delete`d copy
+operations are part of that free, not decoration** — an owning destructor beside an implicit copy constructor
+hands two objects one address and frees it twice, which for a header other clients build against would be a
+worse defect than the leak it replaced. Copy assignment is deleted redundantly (`timer` is
+`TIMER_VARIABLES *const`, so it was already implicitly deleted) so that relaxing that constness cannot
+reintroduce it in silence, and the deletions name the file-scope `cCLASS_TIMERS` alias for the r2/t2 reason
+`cREPORT_BUFFER` and `cRESULTS` exist. `CLASS_TIMER` owns nothing and correctly has no destructor.
+
 ## Coding standard
 
 `CONTRIBUTING.md` mandates **Guild Coding Standard v1.1.4**, specified in full in `GDC_GCS_v1_1_4.md`. All

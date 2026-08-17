@@ -55,11 +55,38 @@ noted — but they are live for any other client, and `CPU.h` includes two of th
 every expansion is a compile error on every compiler, unlike its `defpa`/`refpa` companions. No PITC file
 uses it.
 
-### B2. `CLASS_TIMERS` never frees its `salloc`'d timer table — **Low**
+### B2. `CLASS_TIMERS` never frees its `salloc`'d timer table — **Low** — **RESOLVED**
 
 `class_timers.h:121`: the 2 KB `TIMER_VARIABLES[MAX_TIMERS]` block is allocated by an in-class initialiser
 and the struct has no destructor — contrary to GCS p2 and the repo's own destructor-owned-pointer pattern
 (`GLOBAL_CFG`, `RESULTS_ARRAYS`). PITC never instantiates `CLASS_TIMERS`.
+
+**Resolved** by `~CLASS_TIMERS(void) { mfree1(timer); }`, which is the same two-line owner `REPORT_BUFFER`
+already is in `CPU.h`. `mdealloc` ignores a null pointer, so an object whose `salloc` failed destructs on
+exactly the path a successful one does — the property `GLOBAL_CFG`, `RESULTS_ARRAYS` and `REPORT_BUFFER` all
+rest on. `CLASS_TIMER`, the single-timer sibling above it, owns nothing and correctly still has no
+destructor.
+
+The destructor could not be added alone. A class that releases an owned pointer and leaves the *implicit*
+copy constructor in place hands two objects one address and frees it twice, so the one-line fix would have
+traded a leak for heap corruption — and this header's defects are, as the section head says, live for clients
+other than PITC. Both copy operations are therefore `= delete`d beside the destructor. Copy assignment was
+already implicitly deleted, `timer` being `TIMER_VARIABLES *const`, and is stated anyway so that relaxing
+that constness cannot reintroduce it silently; a user-declared destructor suppresses both move operations, so
+all four special members are accounted for. Nothing usable is withdrawn: before the destructor existed a copy
+duplicated a pointer to one table and leaked both objects' claim on it. The deletions name `cCLASS_TIMERS`,
+a new file-scope `typedef const CLASS_TIMERS` above a forward declaration of the struct, because GCS r2/t2
+put the qualifier in the typedef and t3 forbids mixing that with a raw `const CLASS_TIMERS &` at the
+parameter — the same `c<TYPE>` idiom as `cREPORT_BUFFER` and `cRESULTS`.
+
+Verified by compiling the struct's real text against the real `typedefs.h` under clang (`-fms-extensions
+-fdeclspec`, an allocator shim standing in for `memory management.h`, whose MSVC vector-union initialisers
+clang cannot parse): the 2 KB figure and `alignof(CLASS_TIMERS) == 16` both hold across the new forward
+declaration, and the four suppressions and `CLASS_TIMER`'s continued trivial destructibility and copyability
+are `static_assert`ed. Under g++ with AddressSanitizer the same text exercising `Create`, `Update`, `UpdateAll`
+and both constructors reports no leak and no double free, where `HEAD`'s copy of the header reports
+"4096 byte(s) leaked in 2 allocation(s)" for the same two objects. The target toolchain (MSVC v143) was not
+available, so this is evidence about the C++, not about the shipped build.
 
 ## C. Job kernels
 
