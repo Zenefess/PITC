@@ -5,7 +5,7 @@
  * Created: 2025-01-23
  * Last Modified: 2026-08-16
  * Description: AVX-512 job kernels, with their job cycles, family and ladder cross-checks, arena seeding, completion poll and comparison.
- * To Do: 1) Make ThreadsRunningAVX512 genuinely 512-bit: AllFalse(cui512&, cui512&) issues two AVX2 vptests (ISSUES.MD I10)
+ * To Do: 1) Make ThreadsRunningAVX512 genuinely 512-bit: AllFalse(cui512&, cui512&) issues two 256-bit vptests (ISSUES.MD I10)
  *        2) Add /// API documentation with @param tags to the four kernels and four job cycles defined here (GCS d1)
  * Dependencies: typedefs.h, CPU_build.h, CPU_job_cycles.h
  * ISA: Scalar | AVX2 | AVX-512

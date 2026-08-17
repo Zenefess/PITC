@@ -4,10 +4,9 @@
  * Owner: David William Bull
  * Created: 2025-01-23
  * Last Modified: 2026-08-16
- * Description: SSE job kernels, with their job cycles, family and ladder cross-checks, arena seeding, completion poll and comparison.
- * To Do: 1) Give the kernels real SSE4.1 arithmetic when a "cpu.values" version bump is scheduled; only PTEST needs it today (J1)
- *        2) Raise with the standard's owners that r17's ISA vocabulary has no SSE4.1 token; this unit's gate is cfg.sys.cpuSSE4_1
- *        3) Add /// API documentation with @param tags to the four kernels and four job cycles defined here (GCS d1)
+ * Description: SSE2 job kernels, with their job cycles, family and ladder cross-checks, arena seeding, completion poll and comparison.
+ * To Do: 1) Raise with the standard's owners that r17's ISA vocabulary has no SSE2 token; nothing here is above that set (C1)
+ *        2) Add /// API documentation with @param tags to the four kernels and four job cycles defined here (GCS d1)
  * Dependencies: typedefs.h, CPU_build.h, CPU_job_cycles.h
  * ISA: Scalar | SSE4.2
  * Thread-safety: MT-safe
@@ -20,20 +19,29 @@
 
 // This unit carries the SSE job cycles, the SSE family cross-check, the SSE arena seeding and the SSE
 // completion-bitmap poll as well as the kernels, so that no 128-bit comparison or move is emitted from
-// CPU.cpp, which compiles at the StreamingSIMDExtensions2 baseline (ISSUES.MD H4). It is the one unit whose
-// own instruction set CPU.vcxproj cannot name: MSVC offers /arch:AVX2 and /arch:AVX512 but nothing for
-// SSE4.1, which is why _mm_testz_si128 below carries a run-time gate (cfg.sys.cpuSSE4_1) rather than a
-// build-time one, and why this unit states no lower bound -- there is no macro a correct build would set.
+// CPU.cpp, which compiles at the StreamingSIMDExtensions2 baseline (ISSUES.MD H4).
 
-// What CPU.vcxproj can do is raise this unit *above* its own set, and that is what the guard below refuses.
+// Nothing in this unit is above SSE2, and that is now a property of the whole file rather than of its
+// arithmetic alone. Its kernels were always SSE2 -- set1_pd, div_pd, sqrt_pd, add_pd, sub_pd, mul_pd, and_pd,
+// set1_epi64x and nothing else -- while ResultsMatch and ThreadsRunningSSE reached for PTEST, so an SSE4.1-
+// less CPU was refused a unit it could have run in full: the requirement was the comparison's, never the
+// computation's (ISSUES.MD C1). Both now test a vector against zero with PCMPEQD and PMOVMSKB, so the run-time
+// gate that stood in front of this unit is the x64 baseline itself and no per-file /arch setting is needed --
+// the global StreamingSIMDExtensions2 already names this unit's set exactly, and CPU_build.h's x64 guard is
+// what makes SSE2 something the target cannot lack. That is why no lower bound is stated below.
+
+// What CPU.vcxproj can still do is raise this unit *above* SSE2, and that is what the guard below refuses.
 // A per-file /arch:AVX, /arch:AVX2 or /arch:AVX512 leaves every intrinsic here compiling and every answer
-// right, while the compiler-generated code around them takes VEX or EVEX encoding -- and wmain gates these
-// kernels on cfg.sys.cpuSSE4_1, so it dispatches them to every CPU reporting SSE4.1, on which a VEX opcode
-// is an illegal instruction. The Penryn, Nehalem and Westmere parts that carry SSE4.1 and no AVX are exactly
-// the hardware this unit exists to serve. The _mm_abs_pd definition below rests on the same bound from the
-// other side: SIMD management.h states its own only for a unit compiling below AVX2, and this one says here
-// that it always does. It is the AVX2 unit's upper bound and the scalar unit's, spelt for the set between
-// them (ISSUES.MD H3, H1)
+// right, while the compiler-generated code around them takes VEX or EVEX encoding -- and wmain dispatches
+// these kernels to every CPU carrying SSE2, on which a VEX opcode is an illegal instruction. Every x64 part
+// older than Sandy Bridge and Bulldozer is hardware this unit exists to serve. The _mm_abs_pd definition
+// below rests on the same bound from the other side: SIMD management.h states its own only for a unit
+// compiling below AVX2, and this one says here that it always does. It is the AVX unit's upper bound and the
+// scalar unit's, spelt for the set between them (ISSUES.MD H3, H1)
+// RULE-DEV:a2,a3,a6,a12 GCS section 12 makes AVX2+FMA3+BMI2 the [MUST] CPU baseline and calls SSE-only
+// variants unsupported. This unit is SSE2 and is dispatched to every x64 CPU. See the same marker in
+// CPU_jobs_AVX.cpp: a CPU integrity tester cannot have a hardware baseline above the hardware it is asked
+// to test, and the deviation is program-wide rather than this unit's (ISSUES.MD C1)
 #if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
    #error "CPU_jobs_SSE.cpp must compile at the SSE2 baseline. See CPU.vcxproj and ISSUES.MD H3."
 #endif
@@ -45,11 +53,11 @@
 #endif
 
 // The include above reaches SIMD management.h, through common functions.h, and that header defines _mm_abs_pd
-// itself whenever the unit compiles below AVX2 -- which this one always does, MSVC offering no /arch for
-// SSE4.1. Its spelling is _mm_and_epi64, an AVX-512VL instruction (ISSUES.MD I1), so taking it here would put
-// an EVEX opcode in the middle of the kernels this program dispatches to CPUs that have SSE and nothing more.
+// itself whenever the unit compiles below AVX2 -- which this one always does, the guard above having refused
+// every setting that would raise it. Its spelling was _mm_and_epi64, an AVX-512VL instruction (ISSUES.MD I1),
+// so taking it here would have put an EVEX opcode in the middle of kernels dispatched to CPUs with SSE2 only.
 // The definition below is the one this unit has always used, and the #undef is what keeps it that way:
-// _mm_abs_pd is a bare #define there, so an #ifndef alone would silently inherit the AVX-512 form
+// _mm_abs_pd is a bare #define there, so an #ifndef alone would silently inherit whichever form arrived first
 #undef  _mm_abs_pd
 #define _mm_abs_pd(input) _mm_and_pd(_mm_castsi128_pd(_mm_set1_epi64x(0x07FFFFFFFFFFFFFFF)), (input))
 
@@ -269,10 +277,30 @@ void JobMemALU_SSE(fl64x2ptrc x, si64ptrc y) {
    x[3] = _mm_mul_pd(x[3], acc[3]);
 }
 
+//-- Zero test, at the baseline --//
+// The one question both readers below ask of a 128-bit vector, and the only thing either of them ever wanted
+// SSE4.1 for. PTEST answers it in one instruction; PCMPEQD against a zeroed vector followed by PMOVMSKB
+// answers it in three, and both are SSE2. The mask carries one bit per byte of the comparison result, so all
+// sixteen are set exactly when all four 32-bit lanes matched zero -- which is exactly when all 128 bits are
+// zero. Nothing is examined that PTEST examined, and nothing is left unexamined that it did not: the two are
+// the same predicate at two instruction sets (ISSUES.MD C1).
+//
+// _mm_movemask_epi8 returns an int, and 0x0FFFF is the whole of its range here; the comparison is written
+// against that literal rather than assigned to a named integer, so no bare int is declared (GCS r1)
+
+/// @brief  Test all 128 bits of a vector against zero
+/// @param  value: Vector to test
+/// @return true if every one of the 128 bits is zero
+static inline cbool AllBitsZero128(cui128 value) {
+   return _mm_movemask_epi8(_mm_cmpeq_epi32(value, _mm_setzero_si128())) == 0x0FFFF;
+}
+//-- Zero test, at the baseline --//
+
 //-- Bit-exact result comparison --//
 // XOR the two operands and test the difference against zero, over the integer domain: a golden value is a bit
 // pattern, and every other spelling of "equal" this codebase has reached for compared something less than
-// every bit. CPU_job_cycles.h carries the whole of that reasoning (ISSUES.MD A11)
+// every bit. CPU_job_cycles.h carries the whole of that reasoning (ISSUES.MD A11). Only the test itself has
+// changed -- _mm_testz_si128 for the SSE2 fold above -- and the question it asks has not (C1)
 
 /// @brief  Compare a 128-bit (SSE) result against its golden value
 /// @param  result:   Value produced by the job kernel
@@ -281,17 +309,22 @@ void JobMemALU_SSE(fl64x2ptrc x, si64ptrc y) {
 static inline cbool ResultsMatch(cfl64x2 result, cfl64x2 expected) {
    csi128 delta = _mm_xor_si128(_mm_castpd_si128(result), _mm_castpd_si128(expected));
 
-   return _mm_testz_si128(delta, delta);
+   return AllBitsZero128(delta);
 }
 
 //--- Thread completion bitmap ---//
 // The 128-bit view of the map: two ui64 per step, so the four steps below cover all 64 bytes of it. See the
-// note in CPU.h for why the address comes from ThreadBitsView and why this is not the baseline poll
+// note in CPU.h for why the address comes from ThreadBitsView.
+//
+// AllFalse(cui128, cui128) in "common functions.h" is _mm_testz_si128, and calling it here was the second of
+// this unit's two PTEST sites -- the one that faulted before any test began, and before the pre-flight check
+// that names a missing instruction set could be reached (ISSUES.MD D4). The fold above answers the same
+// question at SSE2, so this poll is now executable wherever the kernels beside it are (C1)
 bool ThreadsRunningSSE(void) {
    cui64ptrc bits = (cui64ptrc)ThreadBitsView();
 
-   return !(AllFalse(_mm_loadu_si128((cui128ptr)&bits[0]), max128) && AllFalse(_mm_loadu_si128((cui128ptr)&bits[2]), max128) &&
-            AllFalse(_mm_loadu_si128((cui128ptr)&bits[4]), max128) && AllFalse(_mm_loadu_si128((cui128ptr)&bits[6]), max128));
+   return !(AllBitsZero128(_mm_loadu_si128((cui128ptr)&bits[0])) && AllBitsZero128(_mm_loadu_si128((cui128ptr)&bits[2])) &&
+            AllBitsZero128(_mm_loadu_si128((cui128ptr)&bits[4])) && AllBitsZero128(_mm_loadu_si128((cui128ptr)&bits[6])));
 }
 //--- Thread completion bitmap ---//
 

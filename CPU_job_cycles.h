@@ -37,13 +37,14 @@
 //   JobCycleMem<UNIT>(coreNum, offset, threadByte)   Memory-backed: records offset ~ offset+3
 //
 // Failed's third argument must name the unit whose value[3] member the wrapper has just written -- 0=AVX-512,
-// 1=AVX2, 2=SSE, 3=FPU, 4=ALU -- because that argument selects both the format the mismatch is printed in and
+// 1=AVX, 2=SSE, 3=FPU, 4=ALU -- because that argument selects both the format the mismatch is printed in and
 // the lanes it is read from (ISSUES.MD A12)
 
 //-- Bit-exact result comparison --//
 // A job's output must be bit-identical to its golden value, so every exponent and mantissa bit has to be
 // examined. _mm_testc_si128 is a subset test -- a bit that should be 0 turning 1 satisfies it -- and
-// _mm256_testc_pd inspects only the sign bit of each lane. Neither is an equality test; XOR-then-testz is.
+// _mm256_testc_pd inspects only the sign bit of each lane. Neither is an equality test; XOR-then-test-for-zero
+// is.
 //
 // _mm512_mask_cmpneq_pd_mask, which the AVX-512 cycles used, is not one either: it is a *floating-point*
 // predicate, so it answers a question about numeric values where every other unit asks about bit patterns.
@@ -55,7 +56,15 @@
 // the two fl64, and the ALU cycles compare si64 with !=, which already examines every bit.
 // Every one of the five asks its question in the integer domain. The FPU cycles were the last to be brought
 // to it: they compared fl64 with !=, the same numeric predicate, in the same two directions (ISSUES.MD A11,
-// A2)
+// A2).
+//
+// How each of the three vector overloads spells "the difference is zero" is a property of its unit's own
+// instruction set, and two of the three were spelt above it. The SSE overload used PTEST, the only SSE4.1
+// instruction that unit ever carried, and now folds PCMPEQD with PMOVMSKB; the AVX overload formed its
+// difference with VPXOR on ymm operands, the only AVX2 instruction that unit ever carried, and now forms it
+// with VXORPD. Neither examines a bit more or fewer than before -- both are bitwise operations over all the
+// bits of the vector -- and the AVX-512 overload's _mm512_test_epi64_mask is unchanged. What changed is that
+// each unit's verdict is now executable wherever that unit's arithmetic is (ISSUES.MD C1)
 
 extern cui8 JobCycleALU          (cui64 coreNum, csi64 offset, vchptrc threadByte);
 extern cui8 JobCycleFPU          (cui64 coreNum, csi64 offset, vchptrc threadByte);
@@ -69,10 +78,10 @@ extern cui8 JobCycleALU_SSE      (cui64 coreNum, csi64 offset, vchptrc threadByt
 extern cui8 JobCycleMemSSE       (cui64 coreNum, csi64 offset, vchptrc threadByte);
 extern cui8 JobCycleMemALU_SSE   (cui64 coreNum, csi64 offset, vchptrc threadByte);
 
-extern cui8 JobCycleAVX2         (cui64 coreNum, csi64 offset, vchptrc threadByte);
-extern cui8 JobCycleALU_AVX2     (cui64 coreNum, csi64 offset, vchptrc threadByte);
-extern cui8 JobCycleMemAVX2      (cui64 coreNum, csi64 offset, vchptrc threadByte);
-extern cui8 JobCycleMemALU_AVX2  (cui64 coreNum, csi64 offset, vchptrc threadByte);
+extern cui8 JobCycleAVX          (cui64 coreNum, csi64 offset, vchptrc threadByte);
+extern cui8 JobCycleALU_AVX      (cui64 coreNum, csi64 offset, vchptrc threadByte);
+extern cui8 JobCycleMemAVX       (cui64 coreNum, csi64 offset, vchptrc threadByte);
+extern cui8 JobCycleMemALU_AVX   (cui64 coreNum, csi64 offset, vchptrc threadByte);
 
 extern cui8 JobCycleAVX512       (cui64 coreNum, csi64 offset, vchptrc threadByte);
 extern cui8 JobCycleALU_AVX512   (cui64 coreNum, csi64 offset, vchptrc threadByte);
@@ -82,7 +91,7 @@ extern cui8 JobCycleMemALU_AVX512(cui64 coreNum, csi64 offset, vchptrc threadByt
 // Job cycle functions array. [0][]==Without memory, [1][]==With memory
 // ComputationPulse indexes this with (procUnits & 0x1F), so every one of the 32 combinations must carry an
 // entry: a shorter table is read past its end and calls through whatever follows it. Only the ALU bit and
-// the widest selected unit alter the dispatch, which makes 24~31 (AVX2 with AVX-512) AVX-512 entries and
+// the widest selected unit alter the dispatch, which makes 24~31 (AVX with AVX-512) AVX-512 entries and
 // matches the arena-sizing switch in wmain, whose own cases already span the whole 0~31 domain.
 // Defined in CPU.cpp, with every other object this program holds at namespace scope (ISSUES.MD H9).
 // The name is UPPER_SNAKE where the eighteen above are PascalCase because GCS r12 spells a table at

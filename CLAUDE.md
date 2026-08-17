@@ -34,34 +34,39 @@ Two build settings look like mistakes but are deliberate — **do not "fix" them
   arithmetic loops with no observable side effects; letting the optimiser at them collapses or reorders the
   very work being measured. The four `CPU_jobs_*.cpp` files override this with `Optimization=Custom`.
 - The global `EnableEnhancedInstructionSet` is `StreamingSIMDExtensions2`, and each ISA translation unit
-  raises it individually (`CPU_jobs_AVX.cpp` → AVX2, `CPU_jobs_AVX512.cpp` → AVX-512). This is what keeps
-  AVX-512 opcodes out of the baseline code path on CPUs that cannot execute them. `CPU_jobs_standard.cpp`
-  must never carry such an override — it holds the scalar ALU/FPU path that has to run on any x64 CPU — and
-  now `#error`s if one is applied (ISSUES.MD H1).
+  raises it individually (`CPU_jobs_AVX.cpp` → `AdvancedVectorExtensions`, `CPU_jobs_AVX512.cpp` →
+  `AdvancedVectorExtensions512`). This is what keeps AVX-512 opcodes out of the baseline code path on CPUs
+  that cannot execute them. `CPU_jobs_standard.cpp` must never carry such an override — it holds the scalar
+  ALU/FPU path that has to run on any x64 CPU — and now `#error`s if one is applied (ISSUES.MD H1).
+  **`CPU_jobs_SSE.cpp` carries no override either, and that is not an omission**: the global setting already
+  names its instruction set exactly, because since C1 nothing in that unit is above SSE2.
 
-**No per-file setting carries a `Condition`.** Both x64 configurations apply all six of them, so `Debug|x64`
-compiles the AVX2 unit with `/arch:AVX2` and the AVX-512 unit with `/arch:AVX512` exactly as `Release|x64`
+**No per-file setting carries a `Condition`.** Both x64 configurations apply all five of them, so `Debug|x64`
+compiles the AVX unit with `/arch:AVX` and the AVX-512 unit with `/arch:AVX512` exactly as `Release|x64`
 does. They were `Condition="…=='Release|x64'"`, which left both vector units compiling at the SSE2 baseline in
 the debug build: MSVC accepts an intrinsic whatever `/arch` says, so the answers were right, but the code
 around them could not be VEX-encoded and paid an AVX-to-SSE transition at every boundary (ISSUES.MD H3). The
-requirement is now enforced from the sources as well — `CPU_jobs_AVX.cpp` `#error`s unless `__AVX2__` is
+requirement is now enforced from the sources as well — `CPU_jobs_AVX.cpp` `#error`s unless `__AVX__` is
 defined and `CPU_jobs_AVX512.cpp` unless `__AVX512F__` is, the complement of H1's guard on the baseline unit.
-**The AVX2 unit's guard is two-sided**: it also `#error`s *if* `__AVX512F__` is defined, because
-`/arch:AVX512` defines `__AVX2__` as well, so a lower bound alone accepts a raised per-file setting — and
-`wmain` gates these kernels on `cfg.sys.cpuAVX2`, which dispatches them to every CPU reporting plain AVX2,
-where the EVEX encoding the compiler would then use around the intrinsics is an illegal instruction
-(ISSUES.MD H3). **The AVX-512 unit keeps its lower bound alone**, and the reason is the shape of the hazard
+**The AVX unit's guard is two-sided**: it also `#error`s *if* `__AVX2__` or `__AVX512F__` is defined, because
+`/arch:AVX2` and `/arch:AVX512` define `__AVX__` as well, so a lower bound alone accepts a raised per-file
+setting — and `wmain` gates these kernels on `cfg.sys.cpuAVX`, which dispatches them to every CPU reporting
+plain AVX, where the VEX.256 integer or EVEX encoding the compiler would then use around the intrinsics is an
+illegal instruction (ISSUES.MD H3). That upper bound was `__AVX512F__` alone while this was an AVX2 unit; the
+`__AVX2__` arm was added with C1, and the Sandy Bridge, Ivy Bridge and Bulldozer parts that carry AVX and no
+AVX2 are what it protects.
+**The AVX-512 unit keeps its lower bound alone**, and the reason is the shape of the hazard
 rather than the absence of a higher `/arch`: what H3 names is a unit compiled *above* the ISA that `wmain`'s
 gate tests before dispatching it, and the AVX-512 kernels are gated on `cfg.sys.cpuAVX512`, the widest set
-this program tests for. A later toolset's `/arch:AVX10.1` defines `__AVX512F__` as well, so the AVX2 unit's
-new guard refuses that setting too.
-**`CPU_jobs_SSE.cpp` states the upper bound and no lower one**, and that asymmetry is the point: MSVC has no
-`/arch` for SSE4.1, so no macro exists that a correct build of it would set — its one SSE4.1 instruction is
-gated on `cfg.sys.cpuSSE4_1` at run time instead of at build time. What *can* be done to it is the same thing
-H3 names for the AVX2 unit: a per-file `/arch:AVX`, `/arch:AVX2` or `/arch:AVX512` leaves every intrinsic
+this program tests for. A later toolset's `/arch:AVX10.1` defines `__AVX512F__` as well, so the AVX unit's
+guard refuses that setting too.
+**`CPU_jobs_SSE.cpp` states the upper bound and no lower one**, and that asymmetry is the point: SSE2 *is* the
+x64 baseline, which `CPU_build.h` refuses to build for anything but, so a correct build of that unit sets no
+macro a guard could test — there is nothing below it to guard against. What *can* be done to it is the same
+thing H3 names for the AVX unit: a per-file `/arch:AVX`, `/arch:AVX2` or `/arch:AVX512` leaves every intrinsic
 compiling and every answer right while the code around them takes VEX or EVEX encoding, and `wmain`
-dispatches these kernels to every CPU reporting SSE4.1 — the Penryn, Nehalem and Westmere parts that carry
-SSE4.1 and no AVX are the hardware this unit exists to serve. So it `#error`s if `__AVX__`, `__AVX2__` or
+dispatches these kernels to every CPU carrying SSE2 — every x64 part older than Sandy Bridge and Bulldozer is
+hardware this unit exists to serve. So it `#error`s if `__AVX__`, `__AVX2__` or
 `__AVX512F__` is defined — the scalar unit's H1 guard, the same three macros, one instruction set up; for
 both units the upper test admits exactly one configuration, which is why neither states a lower one. The
 unit-local
@@ -71,7 +76,7 @@ falsify.
 `Optimization=Custom` is likewise unconditional; `Debug|x64` sets no `Optimization` of its own, so it emits no
 `/O` switch either way and the change is one of spelling rather than of code.
 
-The **`_mm_abs_pd` and `_mm256_abs_pd` macros in the SSE and AVX2 units are `#undef`ined before being
+The **`_mm_abs_pd` and `_mm256_abs_pd` macros in the SSE and AVX units are `#undef`ined before being
 defined**, and must stay that way. Those units include `CPU.h`, which reaches `SIMD management.h`, and that
 header defines `_mm_abs_pd` itself for any unit compiled below AVX2. It used to spell it `_mm_and_epi64`, an
 AVX-512VL instruction, so the SSE kernels would have carried an EVEX opcode into every CPU this program
@@ -79,7 +84,10 @@ dispatches them to; the header's definition is now `_mm_and_pd` over `_mm_castsi
 computes the same mask, and its `_mm256_abs_pd` is defined only under `__AVX__` (ISSUES.MD I1). The `#undef`s
 are therefore no longer load-bearing against an EVEX opcode — but they stay, because both are bare `#define`s
 that an `#ifndef` would inherit silently, and the definitions the kernels are built from should be the ones
-in the file the kernels are in. **`SIMD management.h` states no fused multiply-add macros at all now**: the
+in the file the kernels are in. Note that the AVX unit's `#undef` is now load-bearing in the ordinary sense
+as well: at `/arch:AVX` the header's block is active (`!defined(__FMA__) && !defined(__AVX2__)`) and `__AVX__`
+is defined, so `_mm256_abs_pd` really is defined twice. The two spellings are the same two VEX instructions
+over the same mask, so which one wins changes no result. **`SIMD management.h` states no fused multiply-add macros at all now**: the
 five `#ifndef`-guarded ones over `_mm_fmadd_ps` and its family could never be false — those are functions, not
 macros — so they replaced the intrinsic with a two-rounding split form wherever a unit compiled below AVX2,
 under the intrinsic's own name. They are `simd::fmadd_ps`/`fmsub_ps`/`fnmadd_ps` overloads on `fl32x4` and
@@ -146,24 +154,24 @@ requires each memory-array and combined variant to reproduce its register-reside
 byte** — `memcmp`, never an arithmetic comparison, for the reason the bit-exactness note at the end of this
 file gives. Each `JobMem*` kernel is handed four records carrying the same seed and all four must come back
 equal, so the record indexing is checked alongside the arithmetic. `ValidateKernelFamilies` is a dispatcher:
-the checks themselves are four `ValidateFamily*` functions, one per `CPU_jobs_*.cpp`, because the AVX2 and
+the checks themselves are four `ValidateFamily*` functions, one per `CPU_jobs_*.cpp`, because the AVX and
 AVX-512 halves move values of those widths and may not be compiled at the baseline (ISSUES.MD H4). Each
 returns the `wstrKernelName` index of the first kernel that disagreed, and each derives its own ALU reference
 rather than being handed one, so it is a complete statement of its own family. **Add a `Job*` family and it
 must be added to its unit's `ValidateFamily*`, to `wstrKernelName`, and to `JOB_CYCLE`.**
 
 **That half holds each unit to itself; a second half holds the units to each other.** `ValidateFamily*`
-derives its reference from its own unit's register kernel, so nothing in it can see that `JobSSE`, `JobAVX2`
+derives its reference from its own unit's register kernel, so nothing in it can see that `JobSSE`, `JobAVX`
 and `JobAVX512` must also compute `JobFPU` *element-wise* — the property `RunGoldenLadder` rests on, and the
 whole of why a `cpu.values` written on one vector width verifies on another. Edit one unit's FP arithmetic
 consistently across that unit's family and `W` used to pass and write the file; every machine of a different
 width then computed a different `KernelFingerprint` and rejected it with `-21` "generated by a different
 build", so the portability silently ended, no check named the kernel that ended it, and the diagnostic blamed
 the file (ISSUES.MD B1). `ValidateKernelFamilies` therefore ends by running `LADDER_PROBE_LANES` (8) seeds
-through `JobFPU` one lane at a time and handing that reference to `ValidateLadderSSE`, `ValidateLadderAVX2`
+through `JobFPU` one lane at a time and handing that reference to `ValidateLadderSSE`, `ValidateLadderAVX`
 and `ValidateLadderAVX512` — one per unit, for the H4 reason again, each loading the same eight lanes into
 vectors of its own width and `memcmp`ing all eight back against the scalar result. SSE is always checked,
-AVX2 and AVX-512 exactly where `RunGoldenLadder` would use them. Each returns its `wstrKernelName` index as
+AVX and AVX-512 exactly where `RunGoldenLadder` would use them. Each returns its `wstrKernelName` index as
 `KERNEL_NAME_LADDER` and the two entries above it — spelt from the constant rather than as the literals 14–16
 the family checks use, so that inserting a *family* entry and moving the constant carries the ladder returns
 with it. That boundary is how `wmain` tells the two disagreements apart: below it it prints
@@ -191,7 +199,7 @@ Exit codes are meaningful and documented in `en-GB.h` (`wstrInstructions_English
 `0` = stability test completed, `1` = values file written, `2` = instructions displayed. `-11` … `-18` are the
 pre-flight rejections in `wmain` — an unsupported vector unit, more than one `S` pulse shape, a test duration
 of zero or less, a zero pulse on-time, an `I` string naming no processing unit, an `I` string naming more
-than one of FPU/SSE4.1/AVX2/AVX-512, a memory request the machine cannot satisfy (`-17`, shared by the
+than one of FPU/SSE2/AVX/AVX-512, a memory request the machine cannot satisfy (`-17`, shared by the
 pre-flight size check, a failed `malloc64`, a failed report buffer and — since ISSUES.MD C2 — a failed
 `resArray.iter` under `B`; those four are every allocation that outlives the block making it), and a
 per-thread slice too small to hold the eight records a
@@ -288,22 +296,22 @@ role:
 
 `value[3]` is where a failure is *reported from*, and both readers depend on the wrapper having written it:
 `Evaluate` grades the results table by comparing it against `value[2]`, and `Failed()` prints it as the
-observed value. `Failed()` used to print `value[1]` for the AVX-512, AVX2, SSE and FPU units instead, which
+observed value. `Failed()` used to print `value[1]` for the AVX-512, AVX, SSE and FPU units instead, which
 is the working plane — and in memory-backed mode the working plane holds no results at all, its first 40
 bytes being the arena pointers the `RESULTS` union overlays on the `avx512` member, so the one place an
 AVX-512 fault is surfaced printed eight pointers formatted as doubles (ISSUES.MD A8). Nothing but a
 `JobCycle*` wrapper should write `value[3]` during a run.
 
 `RESULTS` (`CPU.h`) is a 128-byte union whose 16 `ui64` lanes are ordered **widest unit first**:
-`raw[0..7]` = AVX-512, `raw[8..11]` = AVX2, `raw[12..13]` = SSE, `raw[14]` = FPU, `raw[15]` = ALU.
+`raw[0..7]` = AVX-512, `raw[8..11]` = AVX, `raw[12..13]` = SSE, `raw[14]` = FPU, `raw[15]` = ALU.
 `Evaluate(thread, unit)` derives its lane window arithmetically from that ordering
-(`unit`: 0=AVX512, 1=AVX2, 2=SSE, 3=FPU, 4=ALU, -1=all) — the layout and the function must change together.
+(`unit`: 0=AVX512, 1=AVX, 2=SSE, 3=FPU, 4=ALU, -1=all) — the layout and the function must change together.
 
 `GenerateValues` (`CPU.h`) fills that table under `W`, and carries two invariants a careless edit will break.
 It splits the 512 entries across `vCoreCount` threads as `[t*q, (t+1)*q)` with the last thread absorbing
 `512 % vCoreCount`, so the ranges must keep tiling `[0, 512)` exactly — a gap leaves seeds in the "expected
-output" block and every healthy core then reports `!Fail!`. And its three ISA ladders (AVX-512, AVX2, SSE)
-each have to transform all 16 lanes **exactly once**: `JobSSE`, `JobAVX2` and `JobAVX512` compute the same
+output" block and every healthy core then reports `!Fail!`. And its three ISA ladders (AVX-512, AVX, SSE)
+each have to transform all 16 lanes **exactly once**: `JobSSE`, `JobAVX` and `JobAVX512` compute the same
 function element-wise, so one pass per lane is what makes the golden block the same whichever ladder built
 it. The generation half, the self-check half and the header's kernel fingerprint all call one shared
 `RunGoldenLadder` (`CPU.h`) rather than repeating the ladder, because a disagreement between the generation
@@ -362,6 +370,20 @@ whole program: `CPU.obj` contains no `ymm` or `zmm` operand and no `ptest`. **An
 compares a value wider than 64 bits belongs in the unit for its width, not in `CPU.h`, `CPU.cpp` or
 `CPU_methods.h`.**
 
+**Each unit requires exactly the instruction set it executes, and since ISSUES.MD C1 that is a smaller set
+than two of them used to ask for.** The SSE unit is SSE2 throughout — `set1_pd`, `div_pd`, `sqrt_pd`,
+`add_pd`, `sub_pd`, `mul_pd`, `and_pd`, `set1_epi64x` — and the AVX unit is AVX1 throughout, every one of its
+kernels being `_mm256_*_pd` forms. Neither was ever otherwise; what asked for more was the *comparison* in
+each, `PTEST` in one and `VPXOR` on `ymm` operands in the other, so an SSE4.1-less or AVX2-less CPU was
+refused a unit whose arithmetic it could run in full. Both are now spelt at their unit's own set, the flags
+are `cfg.sys.cpuSSE2` and `cfg.sys.cpuAVX`, `CPU_jobs_AVX.cpp` builds at `/arch:AVX`, and the option letters
+`Is` and `Iv` mean SSE2 and AVX in the help text, in `README.md` and in `wstrMessage[12]`/`[13]`. Nothing in
+`cpu.values` moved with any of it: no kernel's arithmetic changed, and `KernelFingerprint` hashes the lanes
+the ladder produced rather than the kernels' names or the route through them, so a file written before the
+change is read by a build made after it. **Giving a kernel arithmetic above its unit's set is still possible
+and would still be worth doing — but it changes the golden values, and it means raising the flag, the
+`/arch` setting and the two `#error` bounds with it.**
+
 Every kernel is `for(i < 16) { UNLOOPx4( ...4 chained ops... ) }` — the `UNLOOPx4` macro is manual unrolling,
 and the arithmetic is deliberately chosen to be latency-bound and irreducible (chained `sqrt`/divide for FP,
 multiply/shift/xor/divide for integer). The `ALU_` variants interleave integer and FP ops to load both pipes
@@ -387,7 +409,7 @@ Three properties of that arithmetic are load-bearing, and all three are easy to 
   tool reported `.Pass.` (ISSUES.MD J7). Removing it, or moving the fold inside the loop where a root
   follows it, restores the defect.
 
-`RunGoldenLadder` depends on `JobSSE`, `JobAVX2` and `JobAVX512` computing `JobFPU` element-wise, bit for
+`RunGoldenLadder` depends on `JobSSE`, `JobAVX` and `JobAVX512` computing `JobFPU` element-wise, bit for
 bit — that is what lets a `cpu.values` written on one vector width verify on another, and it is what the
 `ValidateLadder*` half of `ValidateKernelFamilies` tests directly (ISSUES.MD B1). Any change to the FP
 arithmetic must be made in all four units identically, and `W`'s `ValidateKernelFamilies` is what proves the
@@ -404,7 +426,7 @@ difference in the things: r12 spells a table at namespace scope `UPPER_SNAKE`, r
 `PascalCase`. It was `JobCycle`, which read as a nineteenth wrapper (ISSUES.MD K8) — so anything here that is
 indexed rather than called takes the same spelling, and a new *wrapper* keeps `PascalCase`.
 **`Failed()`'s third argument must name the unit whose `value[3]` member the wrapper just wrote**
-(0=AVX-512, 1=AVX2, 2=SSE, 3=FPU, 4=ALU), because that argument is what selects the format the mismatch is
+(0=AVX-512, 1=AVX, 2=SSE, 3=FPU, 4=ALU), because that argument is what selects the format the mismatch is
 printed in and the lanes it is read from. `JobCycleMemFPU` passed 4 for all four of its records, so an FPU
 fault printed two unrelated ALU integers with `%lld` (ISSUES.MD A12) — the combined `JobCycle*ALU_*`
 wrappers, which call `Failed()` twice with different units, are the shape to copy.
@@ -412,12 +434,12 @@ These are indexed by a **function-pointer table** — `JOB_CYCLE[hasMemory][proc
 thread in `ComputationPulse`, so the hot loop has no branching on configuration.
 
 The table's shape encodes a real rule: **only the ALU bit and the widest enabled vector unit matter.** Index 6
-(FPU+SSE) maps to the same `JobCycleSSE` as index 4; indices 8–15 all map to AVX2 variants; 16–31 to AVX-512.
+(FPU+SSE) maps to the same `JobCycleSSE` as index 4; indices 8–15 all map to AVX variants; 16–31 to AVX-512.
 The FPU path is only reached when no vector unit is selected.
 
 The table's 32 entries cover the whole `procUnits & 0x1F` index domain, and must keep covering it: the index
 is not range-checked in `ComputationPulse`, so a short table is an indirect call through whatever follows it
-(ISSUES.MD A9). `wmain` separately rejects an `I` string that names two of FPU/SSE4.1/AVX2/AVX-512, which is
+(ISSUES.MD A9). `wmain` separately rejects an `I` string that names two of FPU/SSE2/AVX/AVX-512, which is
 what makes 24–31 unreachable in practice — but the entries stay, because that validation is the only thing
 standing between a hand-built `I` string and a wild jump.
 
@@ -537,16 +559,20 @@ race against a worker already clearing a different bit of the same byte, which h
 can execute, `ThreadsRunningAVX512/AVX/SSE/Scalar`. All four are declared in `CPU.h`, but only the scalar one
 is defined there: each vector poll reads the map with instructions of its own width, so it lives in the
 `CPU_jobs_*.cpp` unit built for that width (ISSUES.MD H4). All four read the *same* 64 bytes: a `ui64`
-array means a 512-bit view spans 8 elements, a 256-bit view 4 and a 128-bit view 2, so the AVX2 poll steps
+array means a 512-bit view spans 8 elements, a 256-bit view 4 and a 128-bit view 2, so the AVX poll steps
 `[0], [4]` and the SSE poll `[0], [2], [4], [6]`. Stepping one element per vector re-read bits already
 examined and left the tail of the map unchecked (ISSUES.MD D3). `MAX_THREADS_WORDS`, not `MAX_THREADS_BYTES`,
 sizes the allocation, because `declare1d64z` counts elements.
 
-**The SSE poll is not the baseline**, and the selection must keep testing `cfg.sys.cpuSSE4_1` for it:
-`AllFalse` of two `ui128` is `_mm_testz_si128`, an SSE4.1 instruction, so binding it on nothing but the
+**The SSE poll was once not the baseline it was used as**, and the selection still tests a flag for it —
+`cfg.sys.cpuSSE2` now, `cfg.sys.cpuSSE4_1` then. `AllFalse` of two `ui128` is `_mm_testz_si128`, an SSE4.1
+instruction, so binding it on nothing but the
 absence of AVX2 executed an illegal instruction on a CPU carrying SSE2 and no more — before any test began,
 and before the pre-flight check that names a missing instruction set, which an ALU-only run never reaches at
-all (ISSUES.MD D4). `ThreadsRunningScalar` is that baseline, and is the only one of the four that reads the
+all (ISSUES.MD D4). That poll no longer calls `AllFalse` at all: it folds its own zero test with `PCMPEQD`
+and `PMOVMSKB`, which is SSE2, so the hazard D4 names is gone with the instruction rather than avoided by the
+selection (C1). The flag stays because it is the machine's answer rather than the architecture's promise, and
+because it is what selects the fallback below. `ThreadsRunningScalar` is that baseline, and is the only one of the four that reads the
 map through the `vui64` declaration: no `_mm*_load` intrinsic takes a volatile pointer, so the three vector
 polls take their address from `ThreadBitsView`, whose `std::atomic_signal_fence` is inlined into the wait
 loop with the load and stops the map being read once and cached for the rest of the run (D9). Casting the
@@ -670,7 +696,7 @@ working over a RAM arena — this is what exercises load/store units and the cac
 that used to sit in the arena block, moved into a function of its own because the cache sizing pass needs the
 same numbers before the arena block is reached, and a derived block size *is* a record count scaled by the
 record size. It yields two numbers:
-`recSize`, the per-record byte cost of the selected units (8 for ALU-only, 40 for ALU+AVX2, 72 for
+`recSize`, the per-record byte cost of the selected units (8 for ALU-only, 40 for ALU+AVX, 72 for
 ALU+AVX-512, …), and `vecUnits`, the same record's *vector* portion counted in the 8-byte units
 `resArray.alu` is indexed by. Whenever the ALU bit is set the two satisfy `recSize == (vecUnits + 1) * 8`,
 and that identity is what makes the ALU sub-array — placed *after* the vector sub-array by advancing
@@ -746,7 +772,7 @@ get an owner rather than a free per return.
 Of the five pointers handed to each thread, `p0`–`p3` are four views of the *same* arena address at different
 element strides (only `p4` is advanced past them, and only for the `ALU_` combinations). The seeding pass must
 therefore write no more than one of them, which is why `wmain` rejects a unit selection naming more than one
-of FPU/SSE4.1/AVX2/AVX-512 (ISSUES.MD C1).
+of FPU/SSE2/AVX/AVX-512 (ISSUES.MD C1).
 
 The pass itself is one `SeedRecords<UNIT>` call per selected unit rather than a loop in `wmain`, because
 filling a slice is a store of the unit's own width repeated — `p0[os] = value[0][k].avx512` is a 512-bit move
@@ -812,7 +838,7 @@ through `SetBitCount64` rather than through an intrinsic no `/arch` setting gate
 the decoder ring for most of the code:
 
 ```
-procUnits  bit 0 ALU   1 FPU   2 SSE4.1   3 AVX2   4 AVX512   5 L1$   6 L2$   7 L3$
+procUnits  bit 0 ALU   1 FPU   2 SSE2     3 AVX    4 AVX512   5 L1$   6 L2$   7 L3$
 procSync   bit 0 R-R   1 Par   2 Stag     3 T-Sync 4 Constant 5 Fixed pulse  6 Sweep  7 Benchmark
 ```
 
@@ -949,9 +975,12 @@ manual. The rules that bite most often when editing here:
   `Last Modified`, `Description`, `To Do`, `Dependencies`, `ISA`, `Thread-safety`, `Reviewers` and `License`
   in that order and no other field. `Description` is one line; `To Do` is `1)`, `2)`, `3)` with continuations
   aligned under the value; `License` is `MIT` followed by **two** spaces and `Copyright:`. `ISA` takes tokens
-  from `{Scalar, SSE4.2, AVX2, AVX-512}` and nothing else — which is why `CPU_jobs_SSE.cpp` is spelt
-  `Scalar | SSE4.2` although its one gated instruction is SSE4.1: that is the narrowest token the vocabulary
-  offers, and the file's `To Do` records the gap. **A new file needs the prolog before it needs anything else.**
+  from `{Scalar, SSE4.2, AVX2, AVX-512}` and nothing else — a vocabulary that names neither of the two sets
+  this program's lower vector units are actually built at. `CPU_jobs_SSE.cpp` is spelt `Scalar | SSE4.2`
+  although nothing in it is above SSE2, and `CPU_jobs_AVX.cpp` is spelt `Scalar | AVX2` although nothing in
+  it is above AVX1: in each case that is the narrowest token the vocabulary offers, and each file's `To Do`
+  records the gap. Both overstate, and neither may be "corrected" to a token the standard does not carry —
+  the fix is upstream, in the vocabulary. **A new file needs the prolog before it needs anything else.**
 - **`Version:` is the product version, not a per-file one.** All eleven read `v1.0.2`, so a release moves them
   together with `README.md:1`, `en-GB.h`'s banner and `CLAUDE.md` — the hand-maintained sites ISSUES.MD K3
   counts, now fourteen rather than three. Do not start versioning PITC-proper files individually.
@@ -959,7 +988,16 @@ manual. The rules that bite most often when editing here:
   `typedefs.h` and `vector structures.h` are gone (ISSUES.MD I14), and r17's field list has no slot for one.
   The root `CHANGELOG.md` that c2 requires still does not exist (L1), so the history those blocks held is not
   in this repository at all, and a new entry has nowhere to go until that file is created.
-- Mark intentional deviations `// RULE-DEV:<rule-id> <why>` (en3).
+- Mark intentional deviations `// RULE-DEV:<rule-id> <why>` (en3). Three exist: two `C4996` markers in
+  `CPU.cpp` for the two-argument `swprintf`, and an `a2,a3,a6,a12` marker at the head of `CPU_jobs_AVX.cpp`
+  with a back-reference from `CPU_jobs_SSE.cpp`. That second one is program-wide rather than local:
+  **GCS section 12 makes AVX2+FMA3+BMI2 the `[MUST]` CPU baseline**, requires `/arch:AVX2` with a
+  `static_assert(__AVX2__)`, calls SSE-only variants unsupported and confines pre-AVX2 SIMD to unlinked
+  Museum snapshots. PITC contradicts all four by design — a scalar unit, an SSE2 unit, a
+  `StreamingSIMDExtensions2` global — because a CPU integrity tester cannot have a hardware baseline above
+  the hardware it is asked to test. ISSUES.MD C1 deepened it by one step for the AVX unit and is what the
+  marker cites. **Do not "fix" the deviation by raising a baseline; extend the marker if a unit is lowered
+  further.**
 - Performance rules that shape this codebase specifically: explicit alignment-aware allocators with matching
   frees (p2); SIMD preferred with a scalar baseline retained, compile-time specialisation plus run-time CPUID
   dispatch, thread status exposed via atomics (p3); run-time dispatch only one step above the AVX2 baseline,
@@ -1014,6 +1052,11 @@ Verify against current source before relying on any of these:
 - **`MAX_THREADS` is a real ceiling, at 512.** Enumeration and affinity are now group-aware end to end
   (ISSUES.MD G3), so the 64-virtual-core limit is gone, but the thread-indexed tables are still fixed at 512
   entries and a core beyond that is refused with a warning rather than tested.
+- **`Is` requires SSE2 and `Iv` requires AVX1** (ISSUES.MD C1), which is what those units execute rather than
+  the SSE4.1 and AVX2 they used to be gated on. The whole program therefore runs on any x64 CPU: SSE2 is part
+  of the architecture, so no run can be refused a vector unit it could execute. The names on the tin are now
+  honest, but they are honest about a *smaller* claim — `Iv` still does not exercise one AVX2 instruction, and
+  `Is` still does not exercise one above SSE2. Extending either would change `cpu.values`.
 - **A `U` core map is the whole of the selection**, and a core it does not name is not utilised (ISSUES.MD
   F2). That is a change from the parser it replaced, whose characters could only modify the full map the
   enumeration produced; a short map therefore selects fewer cores than it used to, and a map of all-disabled
@@ -1040,12 +1083,19 @@ Verify against current source before relying on any of these:
   same hazard in `SIMD management.h` — `_mm_abs_pd`, `_mm256_abs_pd` and the fused multiply-add macros — has
   been guarded upstream (I1, I2), so that header is no longer a route by which a baseline unit can be handed
   an instruction it cannot execute. `memory management.h` still is.
+- **`common functions.h`'s `AllTrue`/`AllFalse` `ui128` overloads are `PTEST`**, and since ISSUES.MD C1 no
+  PITC unit calls them: `ThreadsRunningSSE` was the last, and it folds its own zero test at SSE2 now. They
+  are the same latent hazard as the two above and are now the sharper one, because the unit that would reach
+  for them is the one dispatched to every x64 CPU — a call to `AllFalse(cui128, cui128)` from
+  `CPU_jobs_SSE.cpp` or `CPU.cpp` puts an SSE4.1 opcode on a Core 2. They are `inline` and unused, so nothing
+  is emitted; the `cui256` overloads are `VPTEST` on `ymm`, which is AVX1, and the AVX unit calls them
+  legitimately. **Use the unit-local `AllBitsZero128` in `CPU_jobs_SSE.cpp`, never `AllFalse`.**
 
 ### Result comparison must stay bit-exact
 
 Each of the three vector units defines one `ResultsMatch` overload — `fl64x2` in `CPU_jobs_SSE.cpp`, `fl64x4`
 in `CPU_jobs_AVX.cpp`, `fl64x8` in `CPU_jobs_AVX512.cpp`, each beside the job cycles that call it (ISSUES.MD
-H4) — that XORs the computed and expected vectors and tests the difference against zero. **Every** SSE, AVX2 and AVX-512 job
+H4) — that XORs the computed and expected vectors and tests the difference against zero. **Every** SSE, AVX and AVX-512 job
 cycle goes through them. `CPU_jobs_standard.cpp` carries a fourth, scalar overload for the FPU cycles, and
 the ALU cycles compare `si64` with `!=`, which already examines every bit — so all five units now
 answer the same question: are these two bit patterns identical?
@@ -1059,7 +1109,21 @@ for `+0.0` against `-0.0`, reintroducing the defect it was meant to remove. Both
 Do not substitute `_mm_testc_si128` or `_mm256_testc_pd` here, and do not reach for `AllTrue` in
 `common functions.h`: `PTEST`'s `CF` is a *subset* test (a bit that should be 0 turning 1 passes), and
 `VTESTPD` examines only each lane's sign bit — every job output is positive, so it can never fail. Both
-spellings were live in the shipped code and made the SSE and AVX2 verdicts partly or wholly blind.
+spellings were live in the shipped code and made the SSE and AVX verdicts partly or wholly blind.
+
+**Each overload spells the test at its own unit's instruction set, and two of the three were spelt above it**
+until ISSUES.MD C1. The `fl64x2` overload used `_mm_testz_si128` — `PTEST`, the only SSE4.1 instruction that
+unit ever carried — and now goes through a unit-local `AllBitsZero128`, which is `PCMPEQD` against a zeroed
+vector read back through `PMOVMSKB`: all sixteen mask bits set exactly when all four 32-bit lanes of the
+difference are zero, which is exactly when all 128 bits are. `ThreadsRunningSSE` calls the same fold, which
+is what removed the second `PTEST` and the D4 hazard with it. The `fl64x4` overload formed its difference
+with `_mm256_xor_si256` — `VPXOR` on `ymm` operands, AVX2, and the only AVX2 instruction in that unit — and
+now forms it with `_mm256_xor_pd`; `_mm256_testz_si256` is `VPTEST` on `ymm` operands, which is **AVX1**, so
+the test itself was already at the right set. Neither change examines a bit more or fewer than before: both
+`VPXOR` and `VXORPD` are bitwise operations over the whole vector, with no floating-point behaviour and no
+dependence on the rounding mode `/fp:strict` pins. **A new comparison must be executable on every CPU its own
+unit is dispatched to**, which is what the two per-file `#error` guards and the `cfg.sys.cpu*` flags now
+describe consistently.
 Do not substitute a floating-point predicate either. The AVX-512 cycles used
 `_mm512_mask_cmpneq_pd_mask`, which asks a question about *numeric values* rather than bit patterns and so
 errs in both directions: `+0.0` and `-0.0` satisfy it as equal, hiding a sign-bit flip in a zero lane,

@@ -4,8 +4,8 @@
  * Owner: David William Bull
  * Created: 2025-01-23
  * Last Modified: 2026-08-16
- * Description: AVX2 job kernels, with their job cycles, family and ladder cross-checks, arena seeding, completion poll and comparison.
- * To Do: 1) Give the kernels AVX2-only arithmetic when a "cpu.values" version bump is scheduled; today only the encoding is AVX2 (J1)
+ * Description: AVX job kernels, with their job cycles, family and ladder cross-checks, arena seeding, completion poll and comparison.
+ * To Do: 1) Raise with the standard's owners that r17's ISA vocabulary has no AVX token; nothing here is above that set (C1)
  *        2) Add /// API documentation with @param tags to the four kernels and four job cycles defined here (GCS d1)
  * Dependencies: typedefs.h, CPU_build.h, CPU_job_cycles.h
  * ISA: Scalar | AVX2
@@ -17,29 +17,39 @@
 #include "typedefs.h"
 #include "CPU_build.h"
 
-// This unit must be compiled with /arch:AVX2, in every configuration. MSVC accepts an AVX2 intrinsic whatever
+// This unit must be compiled with /arch:AVX, in every configuration. MSVC accepts an AVX intrinsic whatever
 // /arch is set to, so a unit compiled at the SSE2 baseline still produces the right answer -- but it will not
 // use VEX encoding for the code around the intrinsics, which costs an AVX-to-SSE transition penalty on every
 // boundary, and it leaves the compiler allocating registers for an instruction set it has been told the
 // target does not have. Both per-file overrides in CPU.vcxproj used to carry Condition="…=='Release|x64'",
 // which is exactly the Debug build this rejects (ISSUES.MD H3). The complementary guard -- that the scalar
 // unit is never raised -- is in CPU_jobs_standard.cpp (H1)
-#if !defined(__AVX2__)
-   #error "CPU_jobs_AVX.cpp must be compiled with /arch:AVX2. See CPU.vcxproj and ISSUES.MD H3."
+// RULE-DEV:a2,a3,a6,a12 GCS section 12 makes AVX2+FMA3+BMI2 the [MUST] CPU baseline, requires /arch:AVX2 with
+// a static_assert(__AVX2__), and confines pre-AVX2 SIMD to unlinked Museum snapshots. This unit is built at
+// /arch:AVX and asserts the complement of that macro. PITC is a CPU integrity tester: the CPU it is asked to
+// test is the whole of its input, so a baseline that excludes hardware excludes the very thing under test --
+// which is why the program already carries a scalar unit, an SSE2 unit and a StreamingSIMDExtensions2 global
+// that section 12 equally forbids. Lowering this unit from AVX2 to AVX widens the set of CPUs whose integrity
+// can be tested and narrows nothing; the deviation is the program's purpose rather than an oversight, and it
+// predates this change (ISSUES.MD C1)
+#if !defined(__AVX__)
+   #error "CPU_jobs_AVX.cpp must be compiled with /arch:AVX. See CPU.vcxproj and ISSUES.MD H3."
 #endif
 
-// ...and with /arch:AVX2 rather than with anything above it, which is the half of the bound that was missing.
-// /arch:AVX512 defines __AVX2__ as well, so raising this one file's per-file setting satisfies the guard above
-// while the compiler-generated code around these intrinsics becomes EVEX-encoded -- and wmain gates this
-// unit's kernels on cfg.sys.cpuAVX2, so it dispatches them to every CPU reporting plain AVX2, where an EVEX
-// opcode is an illegal instruction. A lower bound alone cannot catch that: the arithmetic would still be
-// right and every intrinsic below would still compile. The scalar unit's guard is two-sided for exactly this
-// reason, and this is its counterpart at the other end of the range (ISSUES.MD H3, H1)
-#if defined(__AVX512F__)
-   #error "CPU_jobs_AVX.cpp must be compiled with /arch:AVX2, not above it. See CPU.vcxproj and ISSUES.MD H3."
+// ...and with /arch:AVX rather than with anything above it, which is the half of the bound that H3 names.
+// /arch:AVX2 and /arch:AVX512 both define __AVX__ as well, so raising this one file's per-file setting
+// satisfies the guard above while the compiler-generated code around these intrinsics becomes VEX.256-integer
+// or EVEX-encoded -- and wmain gates this unit's kernels on cfg.sys.cpuAVX, so it dispatches them to every CPU
+// reporting plain AVX, where a VPXOR ymm or an EVEX opcode is an illegal instruction. A lower bound alone
+// cannot catch that: the arithmetic would still be right and every intrinsic below would still compile. The
+// upper bound was __AVX512F__ alone, which was sufficient while this unit was itself an AVX2 unit; the
+// Sandy Bridge, Ivy Bridge and Bulldozer parts that carry AVX and no AVX2 are the hardware it now also serves,
+// and they are what the added __AVX2__ arm refuses a build for (ISSUES.MD H3, C1)
+#if defined(__AVX2__) || defined(__AVX512F__)
+   #error "CPU_jobs_AVX.cpp must be compiled with /arch:AVX, not above it. See CPU.vcxproj and ISSUES.MD H3."
 #endif
 
-// The AVX2 job cycles, family cross-check, arena seeding and completion-bitmap poll live here rather than in
+// The AVX job cycles, family cross-check, arena seeding and completion-bitmap poll live here rather than in
 // CPU.cpp, beside the kernels of their own width, so that no 256-bit instruction is emitted from a file
 // compiled at the StreamingSIMDExtensions2 baseline (ISSUES.MD H4)
 #include "CPU_job_cycles.h"
@@ -48,10 +58,20 @@
 #define UNLOOPx4(code) code code code code
 #endif
 
-// SIMD management.h, reached through the include above, defines _mm256_abs_pd as well -- but only for a unit
-// compiled below AVX2, which the #error above has already refused. The #undef is here for the same reason as
-// the one in CPU_jobs_SSE.cpp: the definition this unit's kernels are written against is this one, and it is
-// a bare #define over there, so an #ifndef alone would inherit whichever spelling arrived first
+// SIMD management.h, reached through the include above, defines _mm256_abs_pd as well -- for a unit compiled
+// below AVX2 but at or above AVX, which is now exactly this unit: while it was an AVX2 unit the #error above
+// had already refused every configuration that reaches that block, and the #undef was defensive. It is
+// load-bearing again. The header's spelling and this one are the same two VEX instructions and the same mask,
+// so the definition that wins changes no result -- but _mm256_abs_pd is a bare #define over there, which an
+// #ifndef would inherit silently, and the definition these kernels are built from should be the one in the
+// file the kernels are in. CPU_jobs_SSE.cpp keeps its own _mm_abs_pd for the same reason (ISSUES.MD I1, C1).
+//
+// _mm256_set1_epi64x is the one intrinsic here whose obvious lowering is above this unit's set -- a register
+// broadcast is VPBROADCASTQ, which is AVX2, and SIMD management.h's own note names it as such. It is safe for
+// two independent reasons and should not be replaced on the strength of that name alone: Intel classifies the
+// intrinsic itself under AVX, and the argument is a compile-time constant, so MSVC materialises the mask from
+// .rdata rather than broadcasting a register. Whichever route it takes, /arch:AVX is what bounds it, and the
+// guard above is what makes /arch:AVX the only setting this file compiles under
 #undef  _mm256_abs_pd
 #define _mm256_abs_pd(input) _mm256_and_pd((fl64x4&)_mm256_set1_epi64x(0x07FFFFFFFFFFFFFFF), (input))
 
@@ -69,8 +89,8 @@
 // is folded into the value once, at the end. Measured over 5,000,000 seeds it stays inside 2^11 and never
 // reaches zero or infinity, and it adds no instruction the kernels did not already issue
 
-// SIMD AVX2 operations only
-void JobAVX2(fl64x4 &x) {
+// SIMD AVX operations only
+void JobAVX(fl64x4 &x) {
    fl64x4 acc = _mm256_set1_pd(1.0);
 
    for(ui8 i = 0; i < 16; ++i) {
@@ -93,8 +113,8 @@ void JobAVX2(fl64x4 &x) {
    x = _mm256_mul_pd(x, acc);
 }
 
-// ALU + SIMD AVX2 operations only
-void JobALU_AVX2(fl64x4 &x, si64 &y) {
+// ALU + SIMD AVX operations only
+void JobALU_AVX(fl64x4 &x, si64 &y) {
    ui64  &v   = (ui64&)y;
    fl64x4 acc = _mm256_set1_pd(1.0);
 
@@ -122,8 +142,8 @@ void JobALU_AVX2(fl64x4 &x, si64 &y) {
    x = _mm256_mul_pd(x, acc);
 }
 
-// Memory-loaded SIMD AVX2 operations only
-void JobMemAVX2(fl64x4ptrc x) {
+// Memory-loaded SIMD AVX operations only
+void JobMemAVX(fl64x4ptrc x) {
    fl64x4 acc[4] = { _mm256_set1_pd(1.0), _mm256_set1_pd(1.0), _mm256_set1_pd(1.0), _mm256_set1_pd(1.0) };
 
    for(ui8 i = 0; i < 16; ++i) {
@@ -188,8 +208,8 @@ void JobMemAVX2(fl64x4ptrc x) {
    x[3] = _mm256_mul_pd(x[3], acc[3]);
 }
 
-// Memory-loaded ALU + SIMD AVX2 operations only
-void JobMemALU_AVX2(fl64x4ptrc x, si64ptrc y) {
+// Memory-loaded ALU + SIMD AVX operations only
+void JobMemALU_AVX(fl64x4ptrc x, si64ptrc y) {
    ui64ptrc v      = (ui64ptr)y;
    fl64x4   acc[4] = { _mm256_set1_pd(1.0), _mm256_set1_pd(1.0), _mm256_set1_pd(1.0), _mm256_set1_pd(1.0) };
 
@@ -272,24 +292,33 @@ void JobMemALU_AVX2(fl64x4ptrc x, si64ptrc y) {
 }
 
 //-- Bit-exact result comparison --//
-// XOR the two operands and test the difference against zero, over the integer domain: a golden value is a bit
-// pattern, and every other spelling of "equal" this codebase has reached for compared something less than
-// every bit -- _mm256_testc_pd, which this replaced, examines each lane's sign bit and nothing else, and
-// every job output is positive. CPU_job_cycles.h carries the whole of that reasoning (ISSUES.MD A11)
+// XOR the two operands and test the difference against zero: a golden value is a bit pattern, and every other
+// spelling of "equal" this codebase has reached for compared something less than every bit -- _mm256_testc_pd,
+// which this replaced, examines each lane's sign bit and nothing else, and every job output is positive.
+// CPU_job_cycles.h carries the whole of that reasoning (ISSUES.MD A11).
+//
+// The XOR is VXORPD rather than VPXOR. Both are a bitwise exclusive-or of all 256 bits, with no floating-point
+// behaviour of any kind and no dependence on the rounding mode /fp:strict pins -- but VPXOR on ymm operands is
+// AVX2, and it was the one instruction in this unit that was, which is the whole of why an AVX-without-AVX2
+// CPU was refused kernels written entirely in AVX1 arithmetic (ISSUES.MD C1). VPTEST on ymm operands is AVX1,
+// so the test itself needed no change; only the difference had to be formed in the domain the ISA allows
+// (a domain-crossing bypass on some microarchitectures is the whole of the cost, once per job cycle)
 
-/// @brief  Compare a 256-bit (AVX2) result against its golden value
+/// @brief  Compare a 256-bit (AVX) result against its golden value
 /// @param  result:   Value produced by the job kernel
 /// @param  expected: Reference value loaded from "cpu.values"
 /// @return true if every bit of both operands is identical
 static inline cbool ResultsMatch(cfl64x4 result, cfl64x4 expected) {
-   csi256 delta = _mm256_xor_si256(_mm256_castpd_si256(result), _mm256_castpd_si256(expected));
+   csi256 delta = _mm256_castpd_si256(_mm256_xor_pd(result, expected));
 
    return _mm256_testz_si256(delta, delta);
 }
 
 //--- Thread completion bitmap ---//
 // The 256-bit view of the map: four ui64 per step, so the two steps below cover all 64 bytes of it. Stepping
-// one element per vector re-read bits already examined and left bytes 48~63 unchecked (ISSUES.MD D3)
+// one element per vector re-read bits already examined and left bytes 48~63 unchecked (ISSUES.MD D3).
+// AllFalse(cui256, cui256) is _mm256_testz_si256 and the loads are _mm256_loadu_si256, both of which are AVX1,
+// so this poll asks its question at the same instruction set as the kernels beside it (C1)
 bool ThreadsRunningAVX(void) {
    cui64ptrc bits = (cui64ptrc)ThreadBitsView();
 
@@ -299,56 +328,56 @@ bool ThreadsRunningAVX(void) {
 
 //--- Job kernel cross-check ---//
 
-// The AVX2 family. ValidateKernelFamilies (CPU.h) reaches this only on a CPU reporting AVX2, exactly as
+// The AVX family. ValidateKernelFamilies (CPU.h) reaches this only on a CPU reporting AVX, exactly as
 // RunGoldenLadder gates the ladder itself
-cui8 ValidateFamilyAVX2(cRESULTS &seed) {
-   fl64x4 refAVX2, memAVX2[4], regAVX2;
-   si64   refALU,  memALU[4],  regALU;
+cui8 ValidateFamilyAVX(cRESULTS &seed) {
+   fl64x4 refAVX, memAVX[4], regAVX;
+   si64   refALU, memALU[4], regALU;
    ui8    k;
 
-   refALU  = seed.alu;   JobALU(refALU);
-   refAVX2 = seed.avx;   JobAVX2(refAVX2);
+   refALU = seed.alu;   JobALU(refALU);
+   refAVX = seed.avx;   JobAVX(refAVX);
 
-   regAVX2 = seed.avx;   regALU = seed.alu;   JobALU_AVX2(regAVX2, regALU);
-   if(memcmp(&regAVX2, &refAVX2, sizeof(fl64x4)) || regALU != refALU) return 8;
+   regAVX = seed.avx;   regALU = seed.alu;   JobALU_AVX(regAVX, regALU);
+   if(memcmp(&regAVX, &refAVX, sizeof(fl64x4)) || regALU != refALU) return 8;
 
-   for(k = 0; k < 4; ++k) memAVX2[k] = seed.avx;
-   JobMemAVX2(memAVX2);
-   for(k = 0; k < 4; ++k) if(memcmp(&memAVX2[k], &refAVX2, sizeof(fl64x4))) return 9;
+   for(k = 0; k < 4; ++k) memAVX[k] = seed.avx;
+   JobMemAVX(memAVX);
+   for(k = 0; k < 4; ++k) if(memcmp(&memAVX[k], &refAVX, sizeof(fl64x4))) return 9;
 
-   for(k = 0; k < 4; ++k) { memAVX2[k] = seed.avx;   memALU[k] = seed.alu; }
-   JobMemALU_AVX2(memAVX2, memALU);
-   for(k = 0; k < 4; ++k) if(memcmp(&memAVX2[k], &refAVX2, sizeof(fl64x4)) || memALU[k] != refALU) return 10;
+   for(k = 0; k < 4; ++k) { memAVX[k] = seed.avx;   memALU[k] = seed.alu; }
+   JobMemALU_AVX(memAVX, memALU);
+   for(k = 0; k < 4; ++k) if(memcmp(&memAVX[k], &refAVX, sizeof(fl64x4)) || memALU[k] != refALU) return 10;
 
    return 0;
 }
 
-// The AVX2 half of the golden ladder's cross-width equivalence: JobAVX2 against JobFPU, lane for lane. The
+// The AVX half of the golden ladder's cross-width equivalence: JobAVX against JobFPU, lane for lane. The
 // loads are unaligned because the probe is a scalar array of the caller's, and the comparison is one memcmp
 // over the whole set because a fl64x4 array is its lanes in memory order (ISSUES.MD B1)
-cui8 ValidateLadderAVX2(cfl64ptrc probe, cfl64ptrc reference) {
+cui8 ValidateLadderAVX(cfl64ptrc probe, cfl64ptrc reference) {
    fl64x4 lane[LADDER_PROBE_LANES / 4];
    ui8    k;
 
    for(k = 0; k < LADDER_PROBE_LANES / 4; ++k) lane[k] = _mm256_loadu_pd(&probe[k * 4]);
-   for(k = 0; k < LADDER_PROBE_LANES / 4; ++k) JobAVX2(lane[k]);
+   for(k = 0; k < LADDER_PROBE_LANES / 4; ++k) JobAVX(lane[k]);
 
-   return memcmp(lane, reference, sizeof(fl64) * LADDER_PROBE_LANES) ? ui8(KERNEL_NAME_LADDER + 1) : 0; // JobAVX2
+   return memcmp(lane, reference, sizeof(fl64) * LADDER_PROBE_LANES) ? ui8(KERNEL_NAME_LADDER + 1) : 0; // JobAVX
 }
 //--- Job kernel cross-check ---//
 
 //--- Arena seeding ---//
 
-void SeedRecordsAVX2(fl64x4ptrc records, cui64 count, cfl64x4 &seed) {
+void SeedRecordsAVX(fl64x4ptrc records, cui64 count, cfl64x4 &seed) {
    for(ui64 i = 0; i < count; ++i) records[i] = seed;
 }
 //--- Arena seeding ---//
 
 //--- Job cycles ---//
 
-cui8 JobCycleAVX2(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+cui8 JobCycleAVX(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    value[1][coreNum].avx = value[0][coreNum].avx;
-   JobAVX2(value[1][coreNum].avx);
+   JobAVX(value[1][coreNum].avx);
    if(!ResultsMatch(value[1][coreNum].avx, value[2][coreNum].avx)) {
       value[3][coreNum].avx = value[1][coreNum].avx;
       Failed(coreNum, threadByte, 1);
@@ -357,12 +386,12 @@ cui8 JobCycleAVX2(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    return 0;
 }
 
-cui8 JobCycleMemAVX2(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+cui8 JobCycleMemAVX(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    value[1][coreNum].p1[offset]     = value[0][coreNum].avx;
    value[1][coreNum].p1[offset + 1] = value[0][coreNum].avx;
    value[1][coreNum].p1[offset + 2] = value[0][coreNum].avx;
    value[1][coreNum].p1[offset + 3] = value[0][coreNum].avx;
-   JobMemAVX2(&value[1][coreNum].p1[offset]);
+   JobMemAVX(&value[1][coreNum].p1[offset]);
    if(!ResultsMatch(value[1][coreNum].p1[offset], value[2][coreNum].avx)) {
       value[3][coreNum].avx = value[1][coreNum].p1[offset];
       Failed(coreNum, threadByte, 1);
@@ -386,10 +415,10 @@ cui8 JobCycleMemAVX2(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    return 0;
 }
 
-cui8 JobCycleALU_AVX2(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+cui8 JobCycleALU_AVX(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    value[1][coreNum].avx = value[0][coreNum].avx;
    value[1][coreNum].alu = value[0][coreNum].alu;
-   JobALU_AVX2(value[1][coreNum].avx, value[1][coreNum].alu);
+   JobALU_AVX(value[1][coreNum].avx, value[1][coreNum].alu);
    if(value[1][coreNum].alu != value[2][coreNum].alu) {
       value[3][coreNum].alu = value[1][coreNum].alu;
       Failed(coreNum, threadByte, 4);
@@ -403,7 +432,7 @@ cui8 JobCycleALU_AVX2(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    return 0;
 }
 
-cui8 JobCycleMemALU_AVX2(cui64 coreNum, csi64 offset, vchptrc threadByte) {
+cui8 JobCycleMemALU_AVX(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    value[1][coreNum].p1[offset]     = value[0][coreNum].avx;
    value[1][coreNum].p1[offset + 1] = value[0][coreNum].avx;
    value[1][coreNum].p1[offset + 2] = value[0][coreNum].avx;
@@ -412,7 +441,7 @@ cui8 JobCycleMemALU_AVX2(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    value[1][coreNum].p4[offset + 1] = value[0][coreNum].alu;
    value[1][coreNum].p4[offset + 2] = value[0][coreNum].alu;
    value[1][coreNum].p4[offset + 3] = value[0][coreNum].alu;
-   JobMemALU_AVX2(&value[1][coreNum].p1[offset], &value[1][coreNum].p4[offset]);
+   JobMemALU_AVX(&value[1][coreNum].p1[offset], &value[1][coreNum].p4[offset]);
    if(!ResultsMatch(value[1][coreNum].p1[offset], value[2][coreNum].avx)) {
       value[3][coreNum].avx = value[1][coreNum].p1[offset];
       Failed(coreNum, threadByte, 1);

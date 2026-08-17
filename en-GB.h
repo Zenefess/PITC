@@ -59,7 +59,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      Utilises the ALU and largest vector unit of all (virtual) cores in the system, and 8MB memory per thread for 60 seconds."
  "\n Ix : Set instruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av"
  "\n      Caches: 1==Level 1, 2==Level 2, 3==Level 3                                                |  The highest cache level given is used"
- "\n      Processing: A==ALU, F==FPU, S==SSE4.1, V==AVX2, X==AVX512                                 |  F, S, V and X are mutually exclusive"
+ "\n      Processing: A==ALU, F==FPU, S==SSE2, V==AVX, X==AVX512                                    |  F, S, V and X are mutually exclusive"
  "\n         At least one processing unit is required; a cache level names no unit of its own and is optional"
  "\n         A cache level sizes the memory per thread to it: the blocks of every selected thread sharing one instance of that level"
  "\n         fill it, and together overflow the level below. An 'M' option overrides the derived sizes, and a level this system does"
@@ -82,14 +82,14 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      Fixed-length pulse options (in milliseconds): [x==Active duration, ]x==Inactive duration  |  Replace 'x' with a whole number; eg. [250"
  "\n      Sweeping-length pulse option (in milliseconds): [x==Cycle duration                        |  A sweep has no off-time"
  "\n         Each cycle begins idle and the duty cycle rises in a straight line to 100% at the end of the test duration"
- "\n Ux : Set core usage options. One of the first two options (C,T) can be stacked with one of the remaining (A,E,O); eg. Uc!.!!...!e"
+ "\n Ux : Set core usage options. One of the first two options (C,T) can be stacked with one of the remaining (A,E,O); eg. Uc!.!!...!a"
  "\n      C==Binary sequence map of physical cores to utilise, T==Binary sequence map of virtual cores to utilise"
  "\n         Core disabled: '.' ',' '_' '-' '0'  |  Core enabled: '!' '*' '#' '+' '1' 'x' 'X'  |  Any other character ends the map"
  "\n         The map is the whole selection: a core it does not name is not utilised, and an empty selection is refused"
  "\n         'C' numbers the physical cores in sequence, group after group. 'T' gives every processor group 64 characters"
  "\n         however many virtual cores it holds, so the characters past a group's last core are padding that must still be"
  "\n         written to reach the next group; the thread bitmap prints each group to its own width, not to 64"
- "\n      A==Forces utilisation of every virtual core of each active physical core"
+ "\n      A==Symmetric Multi-Threading; forces utilisation of every virtual core of each active physical core"
  "\n      E==Only utilise the first virtual core of each active physical core, O==Only utilise the last virtual core of each active physical core"
  "\n         Both keep one virtual core per active physical core, whatever its SMT width; a core carrying only one is kept by either"
  "\n W  : Write new \"cpu.values\" file."
@@ -125,8 +125,8 @@ cwchptrc wstrMessage_English[46] = {
    L"\nNo valid filename for the results file in the argument \"%s\"; expected 'O[name]'.\n\n",
    L"\n\nCannot create \"%s\" file.\n\n",
    L"\n\nFailed to write results to \"%s\" file.\n\n",
-   L"\nSystem processor cores do not support the SSE4.1 instruction set.\n",
-   L"\nSystem processor cores do not support the AVX2 instruction set.\n",
+   L"\nSystem processor cores do not support the SSE2 instruction set.\n",
+   L"\nSystem processor cores do not support the AVX instruction set.\n",
    L"\nSystem processor cores do not support the AVX512F instruction set.\n",
    L"\nOnly one of the 'S' options P, R and S can be active; they are mutually exclusive.\n",
    L"\nTest duration must be greater than zero.\n",

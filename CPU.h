@@ -79,8 +79,15 @@ al32 struct GLOBAL_CFG { // 113 bytes
       // -- and a single maximum described neither of them (ISSUES.MD G9)
       ui8  SMT[2]     = { 0, 0 };
       bool hybrid     = false; // Classes are efficiency/performance cores rather than non-SMT/SMT cores
-      bool cpuSSE4_1  = false; // CPU supports the SSE 1.0~4.1 instruction sets
-      bool cpuAVX2    = false; // CPU supports the AVX 1.0~2.0 instruction sets
+      // The two lower flags name the sets the vector units below them actually execute, which is not what
+      // they used to name. The SSE unit's kernels have always been SSE2 and the AVX unit's AVX1: only the
+      // comparison in each reached higher -- PTEST for one, VPXOR ymm for the other -- so an SSE4.1-less or
+      // AVX2-less CPU was refused a unit it could have run in full, and the run-time gate said more about the
+      // verdict than about the arithmetic under test (ISSUES.MD C1). SSE2 is architecturally guaranteed on
+      // x64, which CPU_build.h refuses to build for anything else, so the first is a formality -- but it is
+      // the formality that keeps ThreadsRunningScalar a reachable fallback rather than dead code
+      bool cpuSSE2    = false; // CPU supports the SSE 1.0~2.0 instruction sets
+      bool cpuAVX     = false; // CPU supports the AVX 1.0 instruction set
       bool cpuAVX512  = false; // CPU supports the AVX512F instruction set
       ///--- 7 bytes unused
    } sys;
@@ -95,7 +102,7 @@ al32 struct GLOBAL_CFG { // 113 bytes
    ui32 onTime      = 100;      // Computation duration (in ms)
    ui32 offTime     = 900;      // Sleep duration (in ms)
    ui32 delayTime   = 2000;     // Start-up delay duration (in ms)
-   ui8  procUnits   = 0x04;     // 0==ALU, 1==FPU, 2==SSE4.1, 3==AVX, 4==AVX512, 5==L1 cache, 6==L2 cache, 7==L3 cache
+   ui8  procUnits   = 0x04;     // 0==ALU, 1==FPU, 2==SSE2, 3==AVX, 4==AVX512, 5==L1 cache, 6==L2 cache, 7==L3 cache
    ui8  procSync    = 0x02A;    // 0==Round-robin, 1==Parallel 2==Staggered, 3==Synchronised, 4==Constant, 5==Fixed pulse, 6==Sweeping pulse, 7==Benchmark
    ui8  SMTLoad     = 0;        // Only utilise the specified virtual core(s) of each active physical core; 0=Unchanged, 1=First, 2=Last, 3=All
    ui8  memConfig   = 0;        // 0=Total equally split, 1=Per core, 2=Split per core class, 3=Derived from the requested cache level
@@ -131,7 +138,7 @@ al64 struct THREAD_CFG { // 64 bytes
    union {
       ui32 flags;
       struct {
-         ui8 procUnits;  // 0==ALU, 1==FPU, 2==SSE4.1, 3==AVX, 4==AVX512, 5==L1 cache, 6==L2 cache, 7==L3 cache
+         ui8 procUnits;  // 0==ALU, 1==FPU, 2==SSE2, 3==AVX, 4==AVX512, 5==L1 cache, 6==L2 cache, 7==L3 cache
          ui8 procSync;   // 0==Round-robin, 1==Parallel, 2==Staggered, 3==Synchronised, 4==Constant, 5==Fixed pulse, 6==Sweeping pulse, 7==Benchmark
          ui8 threadByte;
          ui8 threadBit;
@@ -246,11 +253,11 @@ extern wchar  wstrLang[6];
 
 extern void JobALU(si64&);            extern void JobFPU(fl64&);                          extern void JobALU_FPU(fl64&, si64&);
 extern void JobSSE(fl64x2&);          extern void JobALU_SSE(fl64x2&, si64&);
-extern void JobAVX2(fl64x4&);         extern void JobALU_AVX2(fl64x4&, si64&);
+extern void JobAVX(fl64x4&);          extern void JobALU_AVX(fl64x4&, si64&);
 extern void JobAVX512(fl64x8&);       extern void JobALU_AVX512(fl64x8&, si64&);
 extern void JobMemALU(si64ptrc);      extern void JobMemFPU(fl64ptrc);                    extern void JobMemALU_FPU(fl64ptrc, si64ptrc);
 extern void JobMemSSE(fl64x2ptrc);    extern void JobMemALU_SSE(fl64x2ptrc, si64ptrc);
-extern void JobMemAVX2(fl64x4ptrc);   extern void JobMemALU_AVX2(fl64x4ptrc, si64ptrc);
+extern void JobMemAVX(fl64x4ptrc);    extern void JobMemALU_AVX(fl64x4ptrc, si64ptrc);
 extern void JobMemAVX512(fl64x8ptrc); extern void JobMemALU_AVX512(fl64x8ptrc, si64ptrc);
 
 //--- Arena seeding ---//
@@ -267,7 +274,7 @@ extern void JobMemAVX512(fl64x8ptrc); extern void JobMemALU_AVX512(fl64x8ptrc, s
 extern void SeedRecordsALU   (si64ptrc   records, cui64 count, csi64    seed);
 extern void SeedRecordsFPU   (fl64ptrc   records, cui64 count, cfl64    seed);
 extern void SeedRecordsSSE   (fl64x2ptrc records, cui64 count, cfl64x2 &seed);
-extern void SeedRecordsAVX2  (fl64x4ptrc records, cui64 count, cfl64x4 &seed);
+extern void SeedRecordsAVX   (fl64x4ptrc records, cui64 count, cfl64x4 &seed);
 extern void SeedRecordsAVX512(fl64x8ptrc records, cui64 count, cfl64x8 &seed);
 //--- Arena seeding ---//
 
@@ -291,9 +298,9 @@ inline cwchar wstrKernelName[17][20] = {
    L"",
    L"JobALU_FPU",    L"JobMemALU",    L"JobMemFPU",    L"JobMemALU_FPU",
    L"JobALU_SSE",    L"JobMemSSE",    L"JobMemALU_SSE",
-   L"JobALU_AVX2",   L"JobMemAVX2",   L"JobMemALU_AVX2",
+   L"JobALU_AVX",    L"JobMemAVX",    L"JobMemALU_AVX",
    L"JobALU_AVX512", L"JobMemAVX512", L"JobMemALU_AVX512",
-   L"JobSSE",        L"JobAVX2",      L"JobAVX512"
+   L"JobSSE",        L"JobAVX",       L"JobAVX512"
 };
 
 // Where the table divides. Entries 1~13 name a memory-array or combined kernel, and the reference each of
@@ -303,7 +310,7 @@ inline cwchar wstrKernelName[17][20] = {
 constexpr cui8 KERNEL_NAME_LADDER = 14;
 
 // Lanes the cross-width ladder check runs through every vector kernel the CPU carries: one AVX-512 vector,
-// two AVX2 vectors, four SSE vectors, and eight separate JobFPU calls, all over the same eight seeds
+// two AVX vectors, four SSE vectors, and eight separate JobFPU calls, all over the same eight seeds
 constexpr cui8 LADDER_PROBE_LANES = 8;
 
 /// Runs one seed through every job kernel of one processing unit, and requires each memory-array and combined
@@ -321,7 +328,7 @@ constexpr cui8 LADDER_PROBE_LANES = 8;
 /// @return 0 if every kernel of the family agreed; otherwise the wstrKernelName index of the first that did not
 extern cui8 ValidateFamilyScalar(cRESULTS &seed); // JobALU_FPU, JobMemALU, JobMemFPU, JobMemALU_FPU
 extern cui8 ValidateFamilySSE   (cRESULTS &seed); // JobALU_SSE, JobMemSSE, JobMemALU_SSE
-extern cui8 ValidateFamilyAVX2  (cRESULTS &seed); // JobALU_AVX2, JobMemAVX2, JobMemALU_AVX2
+extern cui8 ValidateFamilyAVX   (cRESULTS &seed); // JobALU_AVX, JobMemAVX, JobMemALU_AVX
 extern cui8 ValidateFamilyAVX512(cRESULTS &seed); // JobALU_AVX512, JobMemAVX512, JobMemALU_AVX512
 
 /// Runs LADDER_PROBE_LANES seeds through one register-resident vector kernel, in vectors of that kernel's
@@ -338,7 +345,7 @@ extern cui8 ValidateFamilyAVX512(cRESULTS &seed); // JobALU_AVX512, JobMemAVX512
 /// @param reference The same lanes after JobFPU, one call per lane
 /// @return 0 if every lane agreed; otherwise the wstrKernelName index of the vector kernel that did not
 extern cui8 ValidateLadderSSE   (cfl64ptrc probe, cfl64ptrc reference); // JobSSE
-extern cui8 ValidateLadderAVX2  (cfl64ptrc probe, cfl64ptrc reference); // JobAVX2
+extern cui8 ValidateLadderAVX   (cfl64ptrc probe, cfl64ptrc reference); // JobAVX
 extern cui8 ValidateLadderAVX512(cfl64ptrc probe, cfl64ptrc reference); // JobAVX512
 
 /// Runs one seed through every job kernel the CPU can execute, one family at a time, and then holds the
@@ -358,8 +365,8 @@ static cui8 ValidateKernelFamilies(void) {
    if((badKernel = ValidateFamilyScalar(seed)) != 0) return badKernel;
    if((badKernel = ValidateFamilySSE(seed))    != 0) return badKernel;
 
-   //--- AVX2 and AVX-512: gated exactly as RunGoldenLadder gates them ---//
-   if(cfg.sys.cpuAVX2   && (badKernel = ValidateFamilyAVX2(seed))   != 0) return badKernel;
+   //--- AVX and AVX-512: gated exactly as RunGoldenLadder gates them ---//
+   if(cfg.sys.cpuAVX    && (badKernel = ValidateFamilyAVX(seed))    != 0) return badKernel;
    if(cfg.sys.cpuAVX512 && (badKernel = ValidateFamilyAVX512(seed)) != 0) return badKernel;
 
    //--- The ladder itself: every vector width against the scalar kernel it stands in for ---//
@@ -379,7 +386,7 @@ static cui8 ValidateKernelFamilies(void) {
 
    if((badKernel = ValidateLadderSSE(probe, reference)) != 0) return badKernel;
 
-   if(cfg.sys.cpuAVX2   && (badKernel = ValidateLadderAVX2(probe, reference))   != 0) return badKernel;
+   if(cfg.sys.cpuAVX    && (badKernel = ValidateLadderAVX(probe, reference))    != 0) return badKernel;
    if(cfg.sys.cpuAVX512 && (badKernel = ValidateLadderAVX512(probe, reference)) != 0) return badKernel;
 
    return 0;
@@ -433,22 +440,29 @@ static cui64 HashBytes(cptrc data, csi64 bytes, cui64 seed) {
 }
 
 /// Transforms all 16 lanes of one result set exactly once, using the widest vector unit the CPU provides.
-/// JobSSE, JobAVX2 and JobAVX512 compute the same function element-wise, so each ladder below produces the
+/// JobSSE, JobAVX and JobAVX512 compute the same function element-wise, so each ladder below produces the
 /// same 16 lanes from the same input -- which is what lets a "cpu.values" generated on one CPU be verified
 /// on another of a different vector width; the ValidateLadder* checks above are what hold the three kernels
 /// to that, and 'W' runs them before it generates anything. The generating half of GenerateValues, its
 /// self-checking half and the fingerprint stored in the file's header must all walk the same ladder, so
-/// there is only one
+/// there is only one.
+///
+/// The middle branch is entered on AVX1 rather than on AVX2 since ISSUES.MD C1, so a Sandy Bridge, Ivy Bridge
+/// or Bulldozer part now walks the 256-bit ladder where it used to walk the 128-bit one. That changes nothing
+/// this file stores: the element-wise equivalence above is exactly the property that makes the two ladders
+/// interchangeable, KernelFingerprint hashes the lanes the ladder produced rather than the route it took, and
+/// ValidateLadderAVX proves the equivalence on that machine before 'W' writes anything. A "cpu.values"
+/// generated before this change remains valid, because no kernel's arithmetic changed with it
 /// @param result The 16 lanes to transform, in place
 static void RunGoldenLadder(RESULTS &result) {
    if(cfg.sys.cpuAVX512) {
       JobAVX512(result.avx512);
-      JobAVX2(result.avx);
-   } else if(cfg.sys.cpuAVX2) {
-      JobAVX2((fl64x4&)result._fl64[0]);
-      JobAVX2((fl64x4&)result._fl64[4]);
-      JobAVX2(result.avx);
-   } else { // Lanes 0~11 are the AVX-512 and AVX2 windows; lanes 12~15 are covered by the 3 calls below
+      JobAVX(result.avx);
+   } else if(cfg.sys.cpuAVX) {
+      JobAVX((fl64x4&)result._fl64[0]);
+      JobAVX((fl64x4&)result._fl64[4]);
+      JobAVX(result.avx);
+   } else { // Lanes 0~11 are the AVX-512 and AVX windows; lanes 12~15 are covered by the 3 calls below
       JobSSE((fl64x2&)result._fl64[0]);
       JobSSE((fl64x2&)result._fl64[2]);
       JobSSE((fl64x2&)result._fl64[4]);
@@ -553,20 +567,24 @@ static inline ptr ThreadBitsView(void) {
 ///--- Expand beyond 512 cores ---///
 // threadBits is an array of ui64, so a 512-bit view of it spans 8 elements, a 256-bit view 4 and a 128-bit
 // view 2. Advancing by one element per vector step re-read bits already examined and left the tail of the
-// map unexamined altogether -- bytes 48~63 for the AVX2 poll, 40~63 for the SSE one -- and bound vector
+// map unexamined altogether -- bytes 48~63 for the AVX poll, 40~63 for the SSE one -- and bound vector
 // references to addresses their alignment does not permit. The loads are unaligned forms because the poll
 // must stay well-defined for any future change to the map's size or alignment; the addresses below are all
 // naturally aligned today, so no instruction is added on any current CPU
 //
-// The scalar poll is the baseline the other three are selected over, and it is not decoration: AllFalse of
-// two ui128 is _mm_testz_si128, an SSE4.1 instruction, so binding the SSE poll on nothing but the absence of
-// AVX2 executed an illegal instruction on a Core 2 or an early Athlon 64 X2 before any test began -- and
-// before the pre-flight check that names a missing instruction set could be reached, which an ALU-only run
-// never reaches at all (ISSUES.MD D4). Its reads keep the volatile qualifier, so it needs no barrier.
+// The scalar poll is the baseline the other three are selected over. It was once the only thing standing
+// between a CPU carrying SSE2 and no more and an illegal instruction before any test began: AllFalse of two
+// ui128 is _mm_testz_si128, an SSE4.1 instruction, so binding the SSE poll on nothing but the absence of AVX2
+// faulted on a Core 2 or an early Athlon 64 X2 -- before the pre-flight check that names a missing
+// instruction set could be reached, which an ALU-only run never reaches at all (ISSUES.MD D4). That poll now
+// folds its own zero test at SSE2 (C1), so the selection below no longer has an SSE4.1 CPU to avoid; the
+// scalar poll stays because cfg.sys.cpuSSE2 is a run-time answer and this is what it selects when it is
+// false. Its reads keep the volatile qualifier, so it needs no barrier.
 //
 // It is also the only one of the four that can be defined here: the three vector polls read the map with
-// SSE4.1, AVX and AVX-512 instructions, and this header is included by CPU.cpp, which is compiled at the
-// SSE2 baseline. Each of those therefore lives in the translation unit built for its own instruction set,
+// SSE2, AVX and AVX-512 instructions, and this header is included by CPU.cpp, which is compiled at the
+// StreamingSIMDExtensions2 baseline -- so an AVX or AVX-512 poll defined here would be emitted from it
+// whatever the run selects. Each therefore lives in the translation unit built for its own instruction set,
 // beside the job kernels of the same width (ISSUES.MD H4)
 inline bool ThreadsRunningScalar(void) {
    ui64 bits = 0;
@@ -1624,12 +1642,12 @@ static void ParseCoreMap(cwchptrc str, ui32 &j, cbool physical) {
 /// every caller is a job cycle, and those now live in the four CPU_jobs_*.cpp units (ISSUES.MD H4, H9)
 /// @param coreNum Index of the thread that found the mismatch
 /// @param threadByte Byte of the completion bitmap holding that thread's bit
-/// @param unit Unit whose value[3] member the caller has just written; 0=AVX-512, 1=AVX2, 2=SSE, 3=FPU, 4=ALU
+/// @param unit Unit whose value[3] member the caller has just written; 0=AVX-512, 1=AVX, 2=SSE, 3=FPU, 4=ALU
 extern void Failed(cui64 coreNum, vchptrc threadByte, cui8 unit);
 
 ///--- Add vector versions ---///
 // Evaluate integrity of results.
-// unit==Processing unit (0=AVX512, 1=AVX2, 2=SSE4.1, 3=FPU, 4=ALU, -1=All)
+// unit==Processing unit (0=AVX512, 1=AVX, 2=SSE, 3=FPU, 4=ALU, -1=All)
 static inline cui8 Evaluate(csi16 thread, csi8 unit) {
    ui8  index = unit == -1 ? 0  : 16 - (1 << (4 - unit));
    cui8 end   = unit == -1 ? 16 : (1 << max(0, 3 - unit)) + index;
