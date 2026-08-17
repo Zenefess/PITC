@@ -3,13 +3,12 @@
  * Version: v1.0.2
  * Owner: David William Bull
  * Created: 2025-01-25
- * Last Modified: 2026-08-16
+ * Last Modified: 2026-08-17
  * Description: Core types, global declarations and scalar helpers: values-file format, completion bitmap, pulse timing, topology, parsing.
  * To Do: 1) Drop GLOBAL_CFG's in-class procUnits and procSync defaults; wmain overwrites both before an argument is read (ISSUES.MD K9)
  *        2) Remove THREAD_CFG's packetSizeRAM, maxTics, inactiveTime and records32, written by the spawn loop and read by nothing (K9)
  *        3) Raise MAX_THREADS past 512, widening every thread-indexed table with it
  *        4) Add vector forms of Evaluate
- *        5) Move wstrPass into the translation tables, with the results-table labels beside it (ISSUES.MD K5)
  * Dependencies: iostream, atomic, stdlib.h, string.h, locale.h, windows.h, process.h, memory management.h, class_timers.h,
  *               CPU_build.h, translations.h
  * ISA: Scalar
@@ -242,12 +241,15 @@ extern vsi8 generateError;
 
 // Immutable tables, so one entity shared by every translation unit rather than a definition each of them owns
 // a private copy of. 'inline' is what makes them one entity in C++17; wstrLang below is written to by the 'L'
-// option, so it is a global like any other and is defined in CPU.cpp (ISSUES.MD H9)
-inline cwchar wstrUnitsCPU[8][4]  = { L"ALU", L"FPU", L"SSE", L"AVX", L"512", L"CL1", L"CL2", L"CL3" };
-inline cwchar wstrSyncCPU[8][4]   = { L"R-R", L"Par", L"Sta", L"T-S", L"Con", L"F-P", L"S-P", L"Ben" };
-inline cwchar wstrPass[2][8]      = { L".Pass.", L"!Fail!" }; ///--- Modify for translation ---///
-inline cwchar outUTF16header      = 0x0FEFF;
-inline cchar  outUTF8header[3]    = { char(0x0EF), char(0x0BB), char(0x0BF) };
+// option, so it is a global like any other and is defined in CPU.cpp (ISSUES.MD H9).
+// The processing-unit, synchronisation and .Pass./!Fail! labels used to sit here beside them, and being here
+// was the whole of their defect: an immutable table in a shared header is one the 'L' option cannot repoint,
+// so the labels of every banner and the verdict of every results row were fixed in English whatever language
+// was selected. They are per-language tables in en-GB.h now, reached through the pointers translations.h
+// declares (ISSUES.MD D1). What is left below is one byte-order mark in each of its two encodings, and an
+// encoding is not text: no language would want either of them spelt differently
+inline cwchar outUTF16header   = 0x0FEFF;
+inline cchar  outUTF8header[3] = { char(0x0EF), char(0x0BB), char(0x0BF) };
 extern wchar  wstrLang[6];
 //--- Global variables ---//
 

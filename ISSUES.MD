@@ -134,11 +134,39 @@ specifically remains future work — and it remains work that would change the g
 
 ## D. Documentation and localisation
 
-### D1. Failure-report and results-table strings remain outside the translation tables — **Low** — *carried forward (old K9)*
+### D1. Failure-report and results-table strings remain outside the translation tables — **Low** — *carried forward (old K9)* — **RESOLVED**
 
 Beyond the disclosed `wstrUnitsCPU`/`wstrSyncCPU`/`wstrPass`, the per-unit value formats inside `Failed()`
 (`CPU.cpp:72–91`) and the results-table row labels and separators (`CPU.cpp:1029–1051`) are literals the `L`
 mechanism cannot reach — the one output a failing CPU produces is only partly translatable.
+
+**Resolved** by moving all three of the disclosed tables and nine format strings into `en-GB.h`, and by
+measuring the one remaining hard-coded width from the translated string it belongs to. `wstrUnitsCPU`,
+`wstrSyncCPU` and `wstrPass` are per-language tables now, reached through three more pointers in
+`translations.h`; `wstrInterface` grows from 13 entries to 22, taking `Failed()`'s five per-unit value lines
+as `[13]`–`[17]` — in the order of its own `unit` argument, so `[13 + unit]` is the entry — and the four
+results-table rows as `[18]`–`[21]`, one per value width. The `L` case repoints all six pointers together.
+
+Three things this deliberately did **not** move, each because translating it would break something the
+program depends on: `wstrKernelName`, whose entries are C++ identifiers a user greps the source for; the
+`'!'`/`'.'` bitmap alphabet, which mirrors the `Uc`/`Ut` map characters the parser accepts, so that a printed
+bitmap can be pasted back into a `Ut` map; and the `"cpu.values"` filenames, which are a cross-locale file
+contract and are already interpolated into the messages that name them. The table-rule geometry
+(`"----"`, `"+--"`, the four-space pads) stays as well: each extra `ui64` lane is 16 locale-invariant hex
+characters matched by exactly four rule units, and the part of that line a language does own already sits
+inside `wstrInterface[9]`.
+
+Two couplings the move exposed are now held by the code rather than by memory. The label tables are pointed
+at by array type (`cwchar4ptr`, `cwchar8ptr`) rather than by `cwchptrcptr`, so a language whose unit label is
+four characters wide is a compile error at the line that wrote it instead of a report whose columns silently
+shift — the banner pads in whole four-column slots and the results table gives the ProcUnit column a fixed
+ten-character cell. And the thread bitmap's continuation indent, a literal 15 spaces with a matching
+`c -= 15`, is measured from `wstrInterface[7]` — the characters after its last newline — because 15 was a
+property of the English label `"Thread bitmap: "` and of nothing else; `outChars` adds the measured indent to
+its per-group term for the same reason.
+
+The en-GB report is byte-for-byte what it was: every moved literal was relocated unchanged, and the measured
+indent evaluates to the 15 it replaced.
 
 ### D2. `translations.h` cannot express a second language without code edits, and the console path would garble one — **Low** — *carried forward (old K10)*
 
