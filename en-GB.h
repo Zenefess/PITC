@@ -89,7 +89,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n         'C' numbers the physical cores in sequence, group after group. 'T' gives every processor group 64 characters"
  "\n         however many virtual cores it holds, so the characters past a group's last core are padding that must still be"
  "\n         written to reach the next group; the thread bitmap prints each group to its own width, not to 64"
- "\n      A==Forces utilisation of every virtual core of each active physical core"
+ "\n      A==Symmetric Multi-Threading; forces utilisation of every virtual core of each active physical core"
  "\n      E==Only utilise the first virtual core of each active physical core, O==Only utilise the last virtual core of each active physical core"
  "\n         Both keep one virtual core per active physical core, whatever its SMT width; a core carrying only one is kept by either"
  "\n W  : Write new \"cpu.values\" file."
