@@ -82,7 +82,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      Fixed-length pulse options (in milliseconds): [x==Active duration, ]x==Inactive duration  |  Replace 'x' with a whole number; eg. [250"
  "\n      Sweeping-length pulse option (in milliseconds): [x==Cycle duration                        |  A sweep has no off-time"
  "\n         Each cycle begins idle and the duty cycle rises in a straight line to 100% at the end of the test duration"
- "\n Ux : Set core usage options. One of the first two options (C,T) can be stacked with one of the remaining (A,E,O); eg. Uc!.!!...!e"
+ "\n Ux : Set core usage options. One of the first two options (C,T) can be stacked with one of the remaining (A,E,O); eg. Uc!.!!...!a"
  "\n      C==Binary sequence map of physical cores to utilise, T==Binary sequence map of virtual cores to utilise"
  "\n         Core disabled: '.' ',' '_' '-' '0'  |  Core enabled: '!' '*' '#' '+' '1' 'x' 'X'  |  Any other character ends the map"
  "\n         The map is the whole selection: a core it does not name is not utilised, and an empty selection is refused"
