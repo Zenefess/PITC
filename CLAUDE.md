@@ -330,7 +330,7 @@ ahead of the completion bit `wmain` is waiting on.
 
 **Every object at namespace scope is declared `extern` in a header and defined once, in `CPU.cpp`.** That is
 `timer`, `cfg`, `threadData`, `value`, `threadBits`, `wstrOut`, `resArray`, `generateError` and `wstrLang`
-from `CPU.h`, the three language pointers from `translations.h`, and the `JOB_CYCLE[2][32]` dispatch table from
+from `CPU.h`, the six language pointers from `translations.h`, and the `JOB_CYCLE[2][32]` dispatch table from
 `CPU_job_cycles.h`; `Failed` is a function definition in `CPU.cpp` for the same reason. The definitions sit
 together at the top of `CPU.cpp`, above `wmain`, and the declaration in the header names the `declare*` macro
 that defines each pointer, because the macro carries the allocation with it and the two have to be changed
@@ -340,13 +340,21 @@ They were defined in the headers, which is why the program could never grow a se
 (ISSUES.MD H9). Some of them would have been duplicate symbols; the rest — everything the `declare*` macros
 produce, being `dataType *const` and so internally linked — would have been *worse than* a link error, giving
 each unit a private copy of the result planes, the thread table and the completion bitmap that the workers and
-`wmain` compare and signal through. The `L` option's three pointers are the same hazard: they are written at
+`wmain` compare and signal through. The `L` option's six pointers are the same hazard: they are written at
 run time, and a per-unit copy is a language change one half of the program never sees.
 
-The immutable tables are the exception, and are `inline` rather than `extern`: `wstrUnitsCPU`, `wstrSyncCPU`,
-`wstrPass`, `wstrKernelName` and the two byte-order marks. `inline` makes them one entity instead of a copy
-per unit while leaving them beside what they describe. **A new mutable global goes in `CPU.cpp`; a new
-immutable table may stay in a header if it is `inline`.**
+The immutable tables are the exception, and are `inline` rather than `extern`: `wstrKernelName` and the two
+byte-order marks. `inline` makes them one entity instead of a copy per unit while leaving them beside what
+they describe. **A new mutable global goes in `CPU.cpp`; a new immutable table may stay in a header if it is
+`inline`.**
+
+`wstrUnitsCPU`, `wstrSyncCPU` and `wstrPass` were three more of them, and being immutable tables in a shared
+header was exactly their defect: an `inline` table is one the `L` option cannot repoint, so the labels of
+every banner and the `.Pass.`/`!Fail!` verdict of every results row stayed English whatever language was
+selected (ISSUES.MD D1). They are per-language tables in `en-GB.h` now and three more run-time pointers here.
+**An immutable table may stay in a header only if no language would ever want to change it** — which of what
+is left is true of `wstrKernelName`, whose entries are C++ identifiers, and of the byte-order marks, which
+are an encoding.
 
 ### Job kernels: one translation unit per ISA
 
@@ -1015,12 +1023,44 @@ manual. The rules that bite most often when editing here:
 
 ## Localisation
 
-`translations.h` selects a language by pointing three globals at one header's string tables; `en-GB.h` is the
-only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[46]`
-and `wstrInterface_*[13]`, then extending both `translations.h` and the `L` case in `CPU.cpp`. The three
+`translations.h` selects a language by pointing six globals at one header's string tables; `en-GB.h` is the
+only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[46]`,
+`wstrInterface_*[22]`, `wstrUnitsCPU_*[8][4]`, `wstrSyncCPU_*[8][4]` and `wstrPass_*[2][8]`, then extending
+both `translations.h` and the `L` case in `CPU.cpp`. **The `L` case must repoint all six**: a language that
+set some and left the rest would print a report in two languages, and the three label tables are the half
+most easily missed, carrying no prose long enough to look like text. The six
 globals are *declared* in `translations.h` and defined, pointing at English, in `CPU.cpp`: the `L` option
 writes them at run time, so a definition in the header would have given each translation unit a copy and left
 the four `CPU_jobs_*.cpp` units reading a language nobody selected (ISSUES.MD H9).
+
+**The three label tables are pointed at by array type — `cwchar4ptr`/`cwchar8ptr` in `translations.h`, not
+`cwchptrcptr` — and that is what keeps their width a contract rather than a convention.** The banner prints
+each selected label in a slot of four columns and pads the unused slots with four spaces apiece, and the
+results table gives the ProcUnit column a fixed ten-character cell, so a label of another width shifts every
+column to its right — in the saved results file as much as on the console, and with nothing in the run to
+report it. An array of pointers accepts a label of any length; "pointer to an array of N" makes an over-wide
+one a compile error at the line of the language header that wrote it. **Keep the `[4]` and `[8]` bounds when
+adding a language**, or make the banner's padding derived in the same change.
+
+The last nine entries of `wstrInterface` are numbers rather than prose and still belong to the language:
+`[13]`–`[17]` are `Failed()`'s per-unit value lines, in the order of its `unit` argument (0=AVX-512 … 4=ALU),
+and `[18]`–`[21]` are the results-table rows, one per value width. They are the language's because their
+cells line up under the column headers `[8]` and `[9]` already own, and because the three vector rows name
+their unit in the literal — a language that respells `wstrUnitsCPU[2]`–`[4]` respells those to match. Their
+conversion specifiers are fixed in count and order by the lanes of the unit each serves, the same contract
+`wstrMessage[35]`/`[36]` already impose on a translator. The numbers themselves never localise:
+`setlocale(LC_NUMERIC, "C")` is what fixes that (ISSUES.MD F3), so a translation moves separators and word
+order around the values and never the `1.234567` spelling of one.
+
+**The thread bitmap's continuation indent is measured from `wstrInterface[7]`, not written as a constant.**
+It is the characters of that entry after its last newline — 15 for `"Thread bitmap: "` — and it is both the
+indent each row after the first is given and the amount trimmed from the buffer after the last. It was a
+literal run of 15 spaces with a matching `c -= 15`, two copies of a constant that is a property of a
+*translated* string: a language whose label is not exactly that wide misaligned every row after the first,
+and nothing in the build or the run could see it. `outChars` adds the measured indent to its per-group term
+for the same reason. **A new report line that hangs under a translated label should measure it the same
+way** — and a measured label should not end in a tab, which the count reads as one column and a console
+renders as several.
 
 The `L` option's selection logic was inverted — `lstrcmpiW` returns 0 when the codes *match*, so testing it
 directly selected a language exactly when the argument did not name it, and every input resolved to English
@@ -1028,11 +1068,13 @@ directly selected a language exactly when the argument did not name it, and ever
 and stays in en-GB rather than reaching one by accident. The code itself is copied
 into `wstrLang[6]`, and the copy is clamped to that capacity — `lstrcpynW`'s third argument is the size of the
 *destination*, so passing the argument's length overran the globals that follow it (ISSUES.MD C6). A longer
-code is therefore truncated to five characters; widen `wstrLang` if a language ever needs more. Some strings
-are still
-hard-coded outside the tables — `wstrUnitsCPU`, `wstrSyncCPU` and `wstrPass` in `CPU.h` (the last is flagged
-`///--- Modify for translation ---///`). `wstrKernelName` in `CPU.h` is also outside the tables, but
-deliberately: its entries are C++ identifiers naming the job kernels, and are not translated.
+code is therefore truncated to five characters; widen `wstrLang` if a language ever needs more.
+`wstrKernelName` in `CPU.h` is outside the tables, but deliberately: its entries are C++ identifiers naming
+the job kernels, and translating them would break grepping the source for the kernel a `-22` names. So is the
+`'!'`/`'.'` alphabet of the thread bitmap, which mirrors the `Uc`/`Ut` core maps the parser reads — printing
+what the option accepts is what lets a user copy a bitmap straight back into a `Ut` map. The `"cpu.values"`
+and `"cpu.values.tmp"` filenames are a cross-locale file contract and stay literal too, which is why the
+messages that name them interpolate them with `%s` rather than spelling them per language.
 
 **The program's whole locale policy is two lines at the top of `wmain`, and `LC_NUMERIC` is not one of the
 categories the machine gets to choose.** `setlocale(LC_CTYPE, "")` installs the regional locale for character

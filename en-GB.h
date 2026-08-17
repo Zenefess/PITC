@@ -3,10 +3,9 @@
  * Version: v1.0.2
  * Owner: David William Bull
  * Created: 2025-02-10
- * Last Modified: 2026-08-16
- * Description: English (en-GB) interface text: the option reference and return-code table, the message table, and the interface fragments.
- * To Do: 1) Absorb the literals the 'L' mechanism cannot reach: Failed's value formats, wstrPass, the results-table labels (ISSUES.MD K5)
- *        2) Take the banner's version from one authoritative site rather than restating it here as prose (ISSUES.MD K3)
+ * Last Modified: 2026-08-17
+ * Description: English (en-GB) text: the option reference and return codes, the message table, the interface fragments and the label tables.
+ * To Do: 1) Take the banner's version from one authoritative site rather than restating it here as prose (ISSUES.MD K3)
  * Dependencies: None
  * ISA: Scalar
  * Thread-safety: N/A
@@ -167,7 +166,7 @@ cwchptrc wstrMessage_English[46] = {
     "  for the class-%u cores, so this run is not confined to that cache level.\n"
 };
 
-cwchptrc wstrInterface_English[13] = {
+cwchptrc wstrInterface_English[22] = {
    L"Units:",
    L"\t Memory allocated: %3lldMB\tStart-up delay: %7dms",
    L"\t Pulse on-time: %dms",
@@ -180,5 +179,41 @@ cwchptrc wstrInterface_English[13] = {
    L"| Result\n--------+----------+--",
    L"\nPITC benchmark score: %lld KUPS (Kibi-units per second)",
    L"\nERROR! Core: %2.1lld  Expected: ",
-   L"Output:"
+   L"Output:",
+   // [13]~[17]: the value line Failed() prints after [11], one per processing unit, in the order of the 'unit'
+   // argument that selects them: 0==AVX-512, 1==AVX, 2==SSE, 3==FPU, 4==ALU. Each carries the expected lanes,
+   // then [12], then the observed lanes, and the specifier count of each is fixed by the lanes of its unit --
+   // sixteen, eight, four, two and two conversions respectively, in that order and no other. This is the one
+   // output a failing CPU produces, so it was the worst of the report to have left untranslatable
+   L"%1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f  %s %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f\n",
+   L"%1.9f, %1.9f, %1.9f, %1.9f  %s %1.9f, %1.9f, %1.9f, %1.9f\n",
+   L"%1.9f, %1.9f  %s %1.9f, %1.9f\n",
+   L"%1.9f  %s %1.9f\n",
+   L"%lld  %s %lld\n",
+   // [18]~[21]: one results-table row per value width -- 64-bit, 128-bit, 256-bit and 512-bit. They sit here
+   // rather than in CPU.cpp because their cells have to line up under the column headers of [8] and [9], which
+   // a language owns: the thread number, the ProcUnit cell and the two value cells are one layout with those
+   // headers, and half of it could not previously be translated. Every row renders the ProcUnit cell 10
+   // characters wide, and the rule below [9] is drawn to that width, so a row that renders it otherwise puts
+   // the table's own separator out of true.
+   // [18] serves both units of the 64-bit width and takes their name from wstrUnitsCPU; the three vector rows
+   // name their unit in the literal, so a language that respells wstrUnitsCPU[2]~[4] respells these to match
+   L"\n  #%3.1d  |  %s 64  | %16.16llX | %16.16llX | %s",
+   L"\n  #%3.1d  | SSE  128 | %16.16llX%16.16llX | %16.16llX%16.16llX | %s",
+   L"\n  #%3.1d  | AVX  256 | %16.16llX%16.16llX%16.16llX%16.16llX | %16.16llX%16.16llX%16.16llX%16.16llX | %s",
+   // Sixteen conversions and their separators are 224 columns on one line, against the 180 GCS e2 makes a hard
+   // cap; a wide literal is the one token here that cannot be broken any other way, so the row is joined by
+   // concatenation exactly as the multi-line messages above are
+   L"\n  #%3.1d  | AVX  512 | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX"
+    " | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX | %s"
 };
+
+// The bit-indexed label tables. Both are indexed by the bit position of the property they name, so their order
+// is fixed by GLOBAL_CFG's bit-fields and not by this file, and every entry must be present in every language.
+// Their array type is what holds them to three characters: the banner prints each selected label in a slot of
+// four columns and pads the unused slots with four spaces each, and the results table gives wstrUnitsCPU a
+// fixed cell, so a wider label would silently shift every column to its right (see translations.h)
+inline cwchar wstrUnitsCPU_English[8][4] = { L"ALU", L"FPU", L"SSE", L"AVX", L"512", L"CL1", L"CL2", L"CL3" };
+inline cwchar wstrSyncCPU_English[8][4]  = { L"R-R", L"Par", L"Sta", L"T-S", L"Con", L"F-P", L"S-P", L"Ben" };
+// The verdict of one results row, indexed by Evaluate: 0==every lane matched, 1==at least one did not
+inline cwchar wstrPass_English[2][8]     = { L".Pass.", L"!Fail!" };

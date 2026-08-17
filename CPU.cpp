@@ -3,10 +3,9 @@
  * Version: v1.0.2
  * Owner: David William Bull
  * Created: 2025-01-21
- * Last Modified: 2026-08-16
+ * Last Modified: 2026-08-17
  * Description: PITC entry point: option parsing, arena allocation, thread spawn and reporting; defines every namespace-scope object.
- * To Do: 1) Move Failed's per-unit value formats and the results-table labels into the translation tables (ISSUES.MD K5)
- *        2) Add a VERSIONINFO resource, so the build states its version rather than the prose around it (ISSUES.MD K3)
+ * To Do: 1) Add a VERSIONINFO resource, so the build states its version rather than the prose around it (ISSUES.MD K3)
  * Dependencies: CPU_methods.h
  * ISA: Scalar
  * Thread-safety: MT-safe
@@ -17,7 +16,7 @@
 
 //--- Global variables ---//
 // Every object this program holds at namespace scope is defined here, and declared in CPU.h -- or, for the
-// three language tables, in translations.h. A definition in a header hands the second translation unit to
+// six language tables, in translations.h. A definition in a header hands the second translation unit to
 // include it either a duplicate symbol at link time or, where the object is const and so internally linked, a
 // private copy of it; and the storage below is precisely what the worker threads and wmain compare and signal
 // through, so a private copy of it is a program whose halves cannot see each other (ISSUES.MD H9). The
@@ -34,10 +33,13 @@ al64 CLASS_TIMER timer;
      vsi8  generateError = 0;
      wchar wstrLang[6]   = L"en-GB";
 
-// Default: English
+// Default: English. All six move together, and the 'L' case below is the only other place that writes them
 cwchptr     wstrInstructions = wstrInstructions_English;
 cwchptrcptr wstrMessage      = wstrMessage_English;
 cwchptrcptr wstrInterface    = wstrInterface_English;
+cwchar4ptr  wstrUnitsCPU     = wstrUnitsCPU_English;
+cwchar4ptr  wstrSyncCPU      = wstrSyncCPU_English;
+cwchar8ptr  wstrPass         = wstrPass_English;
 
 // Job cycle functions array. [0][]==Without memory, [1][]==With memory. Each entry is defined in the
 // translation unit of the kernel it wraps (ISSUES.MD H4); CPU_job_cycles.h declares them and states the rules
@@ -80,13 +82,18 @@ void Failed(cui64 coreNum, vchptrc threadByte, cui8 unit) {
    // the 180 GCS e2 makes a hard cap, and the AVX and SSE cases to 172 and 173 against the 150 it asks for
    // (ISSUES.MD K8). The views are per case rather than one pair before the switch, so that each names the
    // member of RESULTS its own unit writes: nothing here has to know the lane offsets that Evaluate and the
-   // results table derive from the union's widest-unit-first ordering
+   // results table derive from the union's widest-unit-first ordering.
+   // The value line of each case is wstrInterface[13 + unit] rather than a literal here: this function is the
+   // one output a failing CPU produces, and half of it -- the lane separators, and where [12] falls between
+   // the expected lanes and the observed ones -- was fixed in English however the 'L' option was set
+   // (ISSUES.MD D1). The five entries are in the order of this switch, which is the order of the 'unit'
+   // argument, so a case added here is an entry added at the end of that run and nowhere else
    switch(unit) {
    case 0: {
       cfl64ptrc expect = value[2][coreNum].avx512.m512d_f64;
       cfl64ptrc actual = value[3][coreNum].avx512.m512d_f64;
 
-      wprintf(L"%1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f  %s %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f, %1.9f\n",
+      wprintf(wstrInterface[13],
          expect[0], expect[1], expect[2], expect[3], expect[4], expect[5], expect[6], expect[7], wstrInterface[12],
          actual[0], actual[1], actual[2], actual[3], actual[4], actual[5], actual[6], actual[7]);
       break;
@@ -95,7 +102,7 @@ void Failed(cui64 coreNum, vchptrc threadByte, cui8 unit) {
       cfl64ptrc expect = value[2][coreNum].avx.m256d_f64;
       cfl64ptrc actual = value[3][coreNum].avx.m256d_f64;
 
-      wprintf(L"%1.9f, %1.9f, %1.9f, %1.9f  %s %1.9f, %1.9f, %1.9f, %1.9f\n",
+      wprintf(wstrInterface[14],
          expect[0], expect[1], expect[2], expect[3], wstrInterface[12],
          actual[0], actual[1], actual[2], actual[3]);
       break;
@@ -104,14 +111,14 @@ void Failed(cui64 coreNum, vchptrc threadByte, cui8 unit) {
       cfl64ptrc expect = value[2][coreNum].sse.m128d_f64;
       cfl64ptrc actual = value[3][coreNum].sse.m128d_f64;
 
-      wprintf(L"%1.9f, %1.9f  %s %1.9f, %1.9f\n", expect[0], expect[1], wstrInterface[12], actual[0], actual[1]);
+      wprintf(wstrInterface[15], expect[0], expect[1], wstrInterface[12], actual[0], actual[1]);
       break;
    }
    case 3:
-      wprintf(L"%1.9f  %s %1.9f\n", value[2][coreNum].fpu, wstrInterface[12], value[3][coreNum].fpu);
+      wprintf(wstrInterface[16], value[2][coreNum].fpu, wstrInterface[12], value[3][coreNum].fpu);
       break;
    case 4:
-      wprintf(L"%lld  %s %lld\n", value[2][coreNum].alu, wstrInterface[12], value[3][coreNum].alu);
+      wprintf(wstrInterface[17], value[2][coreNum].alu, wstrInterface[12], value[3][coreNum].alu);
    }
    _InterlockedAnd8(threadByte, threadMask);
    return;
@@ -285,9 +292,15 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             // every input landed there regardless (ISSUES.MD F7). A second language makes that fatal rather
             // than invisible, so the comparison is corrected before one is added
             if(!lstrcmpiW(wstrLang, L"en-GB") || !lstrcmpiW(wstrLang, L"en-US")) {
+               // Every table of the language is repointed together. A language that set some of them and left
+               // the rest at the previous selection would print a report in two languages, and the three label
+               // tables are the half most easily forgotten: they carry no prose long enough to look like text
                wstrInstructions = wstrInstructions_English;
                wstrMessage      = wstrMessage_English;
                wstrInterface    = wstrInterface_English;
+               wstrUnitsCPU     = wstrUnitsCPU_English;
+               wstrSyncCPU      = wstrSyncCPU_English;
+               wstrPass         = wstrPass_English;
             } else { // A language this build does not carry is worth saying; it is not worth stopping for
                wprintf(wstrMessage[39], wstrLang);
                lstrcpynW(wstrLang, L"en-GB", si32(_countof(wstrLang)));
@@ -1057,15 +1070,25 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          }
    }
 
+   // The thread bitmap prints one row per processor group, and every row after the first hangs under the
+   // label wstrInterface[7] ends with, so the indent is that label's own width: the characters after its last
+   // newline. It was a literal run of 15 spaces below, with a matching 'c -= 15' after the loop to trim the
+   // last of them -- two copies of a constant that is a property of a *translated* string, so a language
+   // whose label is not exactly as wide as "Thread bitmap: " misaligned every row after the first, and
+   // nothing in the build or the run could see it (ISSUES.MD D1). Measured here, both follow the label
+   si32 bitmapIndent = 0;
+
+   for(j = 0; wstrInterface[7][j]; ++j) bitmapIndent = (wstrInterface[7][j] == L'\n' ? 0 : bitmapIndent + 1);
+
    // The results table is one row per thread per selected unit, and the widest row -- AVX-512, two 512-bit
    // values printed in hexadecimal -- is a little under 300 characters. wstrOutput was a fixed 32 768 wide
    // characters however many threads were running, which the table passes at about 150 (ISSUES.MD C7); the
    // 64-virtual-core ceiling is what kept that unreachable, so lifting it is what makes the sizing necessary.
    // At most two unit rows can be selected at once -- the ALU bit plus one of FPU/SSE/AVX/AVX-512 -- so a
    // kibicharacter per thread is a little over half as much again as the widest pair of rows can need. The
-   // thread bitmap above it is one row per processor group rather than per thread, and 96 characters covers
-   // a row of 64 cores and its indent, so the two terms between them bound everything written below
-   csi32 outChars = 4096 + si32(cfg.sys.groupCount) * 96 + si32(threadCount[2]) * 1024;
+   // bitmap is one row per processor group rather than per thread, and 96 characters covers a row of 64 cores
+   // and its newline; the indent is added rather than assumed, being a translated label's width now
+   csi32 outChars = 4096 + si32(cfg.sys.groupCount) * (96 + bitmapIndent) + si32(threadCount[2]) * 1024;
 
    al64 declare1d64z(wchar, wstrOutput, outChars);
 
@@ -1126,10 +1149,12 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
 
       for(mask = 1; mask && mask <= groupMap; mask <<= 1)
          c += swprintf(&wstrOutput[c], L"%c", (mask & cfg.coreMap[i] ? '!' : '.'));
-      c += swprintf(&wstrOutput[c], L"\n               ");
+      // '%*s' over an empty string is the indent measured above, spelt once. The last group's is written and
+      // then trimmed by the same width, which leaves its newline and ends the bitmap where the banner resumes
+      c += swprintf(&wstrOutput[c], L"\n%*s", bitmapIndent, L"");
    }
 #pragma warning(pop)
-   c -= 15;
+   c -= bitmapIndent;
    // wstrOutput is built at run time, so passing it as the format string makes every '%' it ever comes to
    // hold a conversion specifier reading arguments that were never passed. Nothing can put one there today,
    // but wstrOut -- a filename straight off the command line -- is already interpolated into messages
@@ -1245,27 +1270,27 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          cui64ptrc expect = value[2][i].raw;
          cui64ptrc actual = value[3][i].raw;
 
+         // One row format per value width, wstrInterface[18]~[21]. They are the language's rather than this
+         // file's because their cells have to line up under the column headers of [8] and [9], which a
+         // language already owned: the row was half of a layout whose other half could be translated, and the
+         // three vector rows named their unit -- "SSE  128", "AVX  256", "AVX  512" -- in English besides
+         // (ISSUES.MD D1). The lane indices and the Evaluate unit numbers stay here, being properties of the
+         // RESULTS union's widest-unit-first ordering rather than of any language
          switch(cui8 bit = threadData[i].procUnits & mask) {
          default:
-            c += swprintf(&wstrOutput[c], L"\n  #%3.1d  |  %s 64  | %16.16llX | %16.16llX | %s",
+            c += swprintf(&wstrOutput[c], wstrInterface[18],
                i, wstrUnitsCPU[j], expect[16 - bit], actual[16 - bit], wstrPass[Evaluate(i, 5 - bit)]);
             break;
          case 4:
-            c += swprintf(&wstrOutput[c], L"\n  #%3.1d  | SSE  128 | %16.16llX%16.16llX | %16.16llX%16.16llX | %s",
+            c += swprintf(&wstrOutput[c], wstrInterface[19],
                i, expect[12], expect[13], actual[12], actual[13], wstrPass[Evaluate(i, 2)]);
             break;
          case 8:
-            c += swprintf(&wstrOutput[c],
-               L"\n  #%3.1d  | AVX  256 | %16.16llX%16.16llX%16.16llX%16.16llX | %16.16llX%16.16llX%16.16llX%16.16llX | %s",
+            c += swprintf(&wstrOutput[c], wstrInterface[20],
                i, expect[8], expect[9], expect[10], expect[11], actual[8], actual[9], actual[10], actual[11], wstrPass[Evaluate(i, 1)]);
             break;
          case 16:
-            // The format is one literal per plane, joined by concatenation: sixteen %16.16llX and their
-            // separators are 224 columns on one line, and a wide literal is the one token here that cannot
-            // be broken any other way. en-GB.h joins its own multi-line messages the same way
-            c += swprintf(&wstrOutput[c],
-               L"\n  #%3.1d  | AVX  512 | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX"
-                " | %16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX%16.16llX | %s",
+            c += swprintf(&wstrOutput[c], wstrInterface[21],
                i, expect[0], expect[1], expect[2], expect[3], expect[4], expect[5], expect[6], expect[7],
                actual[0], actual[1], actual[2], actual[3], actual[4], actual[5], actual[6], actual[7], wstrPass[Evaluate(i, 0)]);
          }
