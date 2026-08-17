@@ -1,6 +1,6 @@
 /************************************************************
  * File: class_timers.h                 Created: 2022/10/20 *
- *                                Last modified: 2026/08/12 *
+ *                                Last modified: 2026/08/17 *
  *                                                          *
  * Desc: Single and multi timer classes.                    *
  *                                                          *
@@ -127,6 +127,13 @@ al64 struct CLASS_TIMER {
    inline cfl64 AverageUpdatesPerSecondScaled(void) const { return fl64(siTotalUpdates) / dTotal; };
 };
 
+// Declared ahead of the definition so the deleted copy operations below can name the const alias rather than
+// spell 'const CLASS_TIMERS &' at the parameter; GCS r2/t2 put the qualifier in the typedef, and t3 forbids
+// mixing the two styles in one translation unit. CLASS_TIMER above needs no such alias -- it owns nothing,
+// and so needs neither a destructor nor copy control
+struct CLASS_TIMERS;
+typedef const CLASS_TIMERS cCLASS_TIMERS;
+
 al16 struct CLASS_TIMERS {
 #ifndef MAX_TIMERS
    #define MAX_TIMERS 16
@@ -138,6 +145,25 @@ al16 struct CLASS_TIMERS {
 
    CLASS_TIMERS(void) { ReinitialiseAll(); }
    CLASS_TIMERS(cptrptr globalPointer) { ReinitialiseAll(); if(globalPointer) *globalPointer = this; }
+
+   // The in-class initialiser above is an allocation, and it had no matching free: the 2KB table (16 slots of
+   // 128 bytes) was leaked however the object's scope ended, contrary to GCS p2 and to the destructor-owned-
+   // pointer pattern GLOBAL_CFG, RESULTS_ARRAYS and REPORT_BUFFER follow in CPU.h (ISSUES.MD B2). mdealloc
+   // ignores a null pointer, so an object whose salloc failed destructs exactly as safely as one whose salloc
+   // succeeded -- the property those three rest on as well
+   ~CLASS_TIMERS(void) { mfree1(timer); }
+
+   // The free's companions, not a change of interface. A destructor that releases an owned pointer makes the
+   // *implicit* copy constructor a double free -- it copies the address, and both objects then free it -- so
+   // adding the one without suppressing the other would trade a leak for corruption, which for a header this
+   // repository vendors rather than instantiates would be the sharper defect of the two. Copy assignment is
+   // already implicitly deleted, 'timer' being 'TIMER_VARIABLES *const', and is stated anyway so that
+   // relaxing that constness cannot reintroduce it silently; a user-declared destructor suppresses the move
+   // operations, so all four are accounted for. Nothing is lost by refusing a copy, because no copy was ever
+   // usable: before the destructor existed it duplicated a pointer to one table and leaked both objects' claim
+   // on it, and PITC itself never instantiates CLASS_TIMERS at all
+   CLASS_TIMERS(cCLASS_TIMERS &)            = delete;
+   CLASS_TIMERS &operator=(cCLASS_TIMERS &) = delete;
 
    // The same six members CLASS_TIMER::Reinitialise left unassigned (I5), and the same seeding of siTotalTics
    // with the raw counter reading that made GetTotalTimeUnscaled report the machine's uptime (I6)
