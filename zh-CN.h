@@ -30,6 +30,10 @@ static_assert(sizeof(L"中") == sizeof(cwchar[2]), "zh-CN.h must be read as UTF-
 //   wstrInterface[8] renders three cells of 8, 10 and 18 columns, because the rule under it in [9] and every
 //   results row in [18]~[21] are drawn to those widths; [9] carries that rule and may not be re-spaced
 //   [1] and [5] are the two halves of the banner and hold their fields at one width, as do [2] and [6]
+//   [0] and [4] head the two label lists at one width, and that width may not exceed seven columns: the
+//   banner pads only three of its four-column label slots, so a run selecting four -- 'Ia123', or 'B Spt'
+//   on the sync line -- reaches the prefix plus sixteen, and a prefix of eight lands that on column 24,
+//   where the tab after it steps to 32 while the other line is still stepping to 24. Six columns here
 //   [13]~[21] are pure format: their conversions are fixed by the lanes of the unit each one reports
 //   wstrUnitsCPU and wstrSyncCPU render exactly three columns per label, which one Han character cannot be
 //   and two cannot fit, so each translated label is one Han character and one narrow character: a digit for

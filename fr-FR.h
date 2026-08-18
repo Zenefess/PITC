@@ -1,6 +1,6 @@
 /*
  * File: fr-FR.h
- * Version: v1.0.1
+ * Version: v1.0.2
  * Owner: David William Bull
  * Created: 2026-08-18
  * Last Modified: 2026-08-18
@@ -26,6 +26,12 @@ static_assert(sizeof(L"é") == sizeof(cwchar[2]), "fr-FR.h must be read as UTF-8
 //   wstrInterface[8] renders three cells of 8, 10 and 18 columns, because the rule under it in [9] and every
 //   results row in [18]~[21] are drawn to those widths; [9] carries that rule and may not be re-spaced
 //   [1] and [5] are the two halves of the banner and hold their fields at one width, as do [2] and [6]
+//   [0] and [4] head the two label lists at one width, and that width may not exceed seven columns. The
+//   banner prints a four-column slot per label and pads only three of them, so a run that selects four --
+//   'Ia123', or 'B Spt' on the sync line -- reaches the prefix plus sixteen, and a prefix of eight puts
+//   that at column 24, where the tab after it steps to 32 while the other line is still stepping to 24.
+//   This language pays for those columns by writing "Unités:" and "Sync:" without the space French sets
+//   before a colon; the space costs nothing anywhere else in this file, and is kept everywhere else in it
 //   [13]~[21] are pure format: their conversions are fixed by the lanes of the unit each one reports
 
 inline al64 cwchptrc wstrInstructions_French =
@@ -191,11 +197,11 @@ inline cwchptrc wstrMessage_French[47] = {
 };
 
 inline cwchptrc wstrInterface_French[22] = {
-   L"Unités :",
+   L"Unités:",
    L"\t Mémoire allouée : %3lld Mo\tDélai de départ : %7d ms",
    L"\t  Durée active : %d ms",
    L"\tDurée de cycle : %d ms",
-   L"\nSync :  ",
+   L"\nSync:  ",
    L"\t   Nombre de fils : %-3d  \tDurée maximale : %5.1f s",
    L"\tDurée inactive : %d ms",
    // The characters of [7] after its last newline are measured at run time: they are the hanging indent every

@@ -172,7 +172,9 @@ the `LANGUAGES[]` registry in `translations.h` (currently `en-GB` and `en-US`, b
 `fr-FR` and `zh-CN`). Strings are addressed by hard positional index — all language headers must move in
 lock-step, appending only.
 Format-specifier count/order/types, embedded newlines, and layout contracts (4-column unit labels,
-10-character ProcUnit cell, no trailing tab on `wstrInterface[7]`) are part of each string's contract;
+10-character ProcUnit cell, no trailing tab on `wstrInterface[7]`, and a `wstrInterface[0]`/`[4]` heading of
+at most 7 columns — the banner pads only three of its four label slots, so a fourth label puts a wider
+heading's tab a stop ahead of the other banner line) are part of each string's contract;
 the label tables are reached through pointer-to-array typedefs precisely so a wrong width fails to
 compile. A new language = a new header defining all six tables + one `LANGUAGES[]` row + a `ClInclude`
 in `CPU.vcxproj` and `CPU.vcxproj.filters`; the code must fit `wchar[6]` (≤5 characters). `fr-FR.h` and
