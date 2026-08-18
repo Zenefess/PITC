@@ -14,7 +14,7 @@
 #pragma once
 
 inline al64 cwchptrc wstrInstructions_English =
-L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William Bull\n"
+L"\nPulsed Integrity Tests for CPUs v1.1   ---   Copyright (c) David William Bull\n"
  "\nReturn values"
  "\n-------------"
  "\n-1  : File containing correct values not found                                  0 : Successful completion of stability test"
