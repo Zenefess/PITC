@@ -3,7 +3,7 @@
  * Version: v1.0.2
  * Owner: David William Bull
  * Created: 2025-01-21
- * Last Modified: 2026-08-17
+ * Last Modified: 2026-08-18
  * Description: PITC entry point: option parsing, arena allocation, thread spawn and reporting; defines every namespace-scope object.
  * To Do: 1) Add a VERSIONINFO resource, so the build states its version rather than the prose around it (ISSUES.MD K3)
  * Dependencies: CPU_methods.h
@@ -141,20 +141,30 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    // backwards, and the option loop could then never terminate (ISSUES.MD F4)
    ui32  j;
    ui8   outUTF = 0;
+   wchar wstrLangArg[6]; // The candidate code an 'L' argument names; wstrLang records only the active language
+   CONSOLE_CODE_PAGE consoleCP; // Holds the console's output code page and restores it on every return below
 
-   // The machine's regional locale is installed for LC_CTYPE alone -- character classification, and the
-   // wide-to-byte conversion the CRT performs for a redirected stdout, which is what it was wanted for.
-   // LC_ALL installed it for LC_NUMERIC as well, and every %f conversion this program performs takes its
-   // decimal separator from that category: on a comma-decimal system the banner's "Maximum duration"
-   // (wstrInterface[5]), the range a malformed decimal option is reported against (wstrMessage[36]) and
-   // every value Failed() prints were written "1,234567" -- into the file 'O[name]' saves as much as to the
-   // console, where this program's own documentation and any consumer of that file expect "1.234567"
-   // (ISSUES.MD F3). The second call states the invariant rather than leaving it to the C startup default,
-   // so that the one place this program has a locale policy says what that policy is, and so that a category
-   // added to LC_ALL by a later CRT cannot quietly acquire a separator with it. ParseDecimal pins its own
-   // read through a locale object of its own regardless (F2): together the two make a decimal spelling mean
-   // the same thing on every machine, in and out
-   setlocale(LC_CTYPE, "");
+   // The CRT is asked for the UTF-8 LC_CTYPE locale first, and the console's output code page is moved to
+   // UTF-8 only where that grant succeeds: wprintf converts wide text through the one and the console decodes
+   // the bytes through the other, so setting either alone is the mojibake ISSUES.MD D2 names rather than the
+   // fix. Where the UCRT is too old to grant it (before Windows 10 1803) the machine's regional locale is
+   // installed exactly as before and the console is left alone -- ASCII English survives any code page, which
+   // is why this program never noticed. SetConsoleOutputCP's own failure is tolerated rather than reverted:
+   // with stdout redirected there may be no console to set, and the UTF-8 bytes the CRT now writes are
+   // exactly what the redirected file should hold. consoleCP above puts the original code page back however
+   // this function returns, the console being machine state that outlives the process.
+   // LC_CTYPE is the one category any locale is installed for. LC_ALL handed LC_NUMERIC to the machine as
+   // well, and every %f conversion this program performs takes its decimal separator from that category: on a
+   // comma-decimal system the banner's "Maximum duration" (wstrInterface[5]), the range a malformed decimal
+   // option is reported against (wstrMessage[36]) and every value Failed() prints were written "1,234567" --
+   // into the file 'O[name]' saves as much as to the console, where this program's own documentation and any
+   // consumer of that file expect "1.234567" (ISSUES.MD F3). The last call states the invariant rather than
+   // leaving it to the C startup default, so that the one place this program has a locale policy says what
+   // that policy is, and so that a category added to LC_ALL by a later CRT cannot quietly acquire a separator
+   // with it. ParseDecimal pins its own read through a locale object of its own regardless (F2): together the
+   // two make a decimal spelling mean the same thing on every machine, in and out
+   if(setlocale(LC_CTYPE, ".UTF8")) SetConsoleOutputCP(CP_UTF8);
+   else setlocale(LC_CTYPE, "");
    setlocale(LC_NUMERIC, "C");
 
    // The topology is read before anything else: nothing below can be sized, selected or pinned without it,
@@ -285,26 +295,33 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          case L'L':
             for(c = 1; argv[i][c] && argv[i][c] != L' ' && c < 1024; ++c);
             // lstrcpynW's third argument is the capacity of the destination, not the length of the source:
-            // an argument longer than wstrLang would otherwise be copied over the globals that follow it
-            lstrcpynW(wstrLang, &argv[i][1], min(c, si32(_countof(wstrLang))));
-            // lstrcmpiW returns 0 when the two codes match, so testing its result directly selected a
-            // language exactly when the argument did *not* name it -- and since both arms select English,
-            // every input landed there regardless (ISSUES.MD F7). A second language makes that fatal rather
-            // than invisible, so the comparison is corrected before one is added
-            if(!lstrcmpiW(wstrLang, L"en-GB") || !lstrcmpiW(wstrLang, L"en-US")) {
-               // Every table of the language is repointed together. A language that set some of them and left
-               // the rest at the previous selection would print a report in two languages, and the three label
-               // tables are the half most easily forgotten: they carry no prose long enough to look like text
-               wstrInstructions = wstrInstructions_English;
-               wstrMessage      = wstrMessage_English;
-               wstrInterface    = wstrInterface_English;
-               wstrUnitsCPU     = wstrUnitsCPU_English;
-               wstrSyncCPU      = wstrSyncCPU_English;
-               wstrPass         = wstrPass_English;
-            } else { // A language this build does not carry is worth saying; it is not worth stopping for
-               wprintf(wstrMessage[39], wstrLang);
-               lstrcpynW(wstrLang, L"en-GB", si32(_countof(wstrLang)));
-            }
+            // an argument longer than the buffer would otherwise be copied over whatever follows it
+            // (ISSUES.MD C6). The candidate lands in a local rather than in wstrLang, because wstrLang names
+            // the language the interface is in: a code this build does not carry must leave it untouched,
+            // where parsing into it directly left it naming a language that was never selected
+            lstrcpynW(wstrLangArg, &argv[i][1], min(c, si32(_countof(wstrLangArg))));
+            // The LANGUAGES registry in translations.h is the whole of the selection: this case names no
+            // language of its own, so adding one is a header and a registry row rather than an edit here
+            // (ISSUES.MD D2). lstrcmpiW returns 0 when the two codes match; testing its result directly
+            // selected a language exactly when the argument did *not* name it (ISSUES.MD F7)
+            for(d = 0; d < si32(_countof(LANGUAGES)); ++d)
+               if(!lstrcmpiW(wstrLangArg, LANGUAGES[d].wstrCode)) {
+                  // Every table of the language is repointed together, from the one row. A language that set
+                  // some of them and left the rest at the previous selection would print a report in two
+                  // languages, and the three label tables are the half most easily forgotten: they carry no
+                  // prose long enough to look like text
+                  wstrInstructions = LANGUAGES[d].wstrInstructions;
+                  wstrMessage      = LANGUAGES[d].wstrMessage;
+                  wstrInterface    = LANGUAGES[d].wstrInterface;
+                  wstrUnitsCPU     = LANGUAGES[d].wstrUnitsCPU;
+                  wstrSyncCPU      = LANGUAGES[d].wstrSyncCPU;
+                  wstrPass         = LANGUAGES[d].wstrPass;
+                  // The recorded code is the registry's spelling, not the argument's: 'len-us' selects en-US
+                  lstrcpynW(wstrLang, LANGUAGES[d].wstrCode, si32(_countof(wstrLang)));
+                  break;
+               }
+            // A language this build does not carry is worth saying; it is not worth stopping for
+            if(d == si32(_countof(LANGUAGES))) wprintf(wstrMessage[39], wstrLangArg);
             break;
          case L'm': // Set amount of memory (in MB) to utilise during test
          case L'M':
@@ -1362,15 +1379,24 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          // It converted through wcstombs, which uses the LC_CTYPE locale wmain installs -- on most Windows
          // installations the system ANSI code page. The '8' option therefore wrote ANSI bytes behind
          // a UTF-8 byte-order mark, and every non-ASCII character in the file was mojibake to anything that
-         // believed the mark (ISSUES.MD F6). WideCharToMultiByte names the encoding the option asked for,
-         // reports the exact byte count that encoding needs, and reports a character it cannot represent as a
-         // failure rather than as the (size_t)-1 that used to be handed to WriteFile as a length.
+         // believed the mark (ISSUES.MD F6). WideCharToMultiByte names the encoding the option asked for and
+         // reports the exact byte count that encoding needs, rather than the (size_t)-1 that used to be
+         // handed to WriteFile as a length -- and the flags make what an encoding cannot carry loud.
+         // WC_ERR_INVALID_CHARS fails the UTF-8 path on malformed UTF-16, and WC_NO_BEST_FIT_CHARS makes the
+         // ANSI path turn any character outside its code page into the default character and say so through
+         // usedDef, where its best-fit mappings substituted lookalikes in silence. That path is warned about
+         // (wstrMessage[46]) rather than failed: the report of a run of hours has already been paid for, and
+         // 'O8'/'O16' are the documented route to keeping every character of it (ISSUES.MD D2). Both calls
+         // pass the same flags, so the byte count the first reports is the count the second produces.
          // The character count c is passed rather than -1, so no terminating null reaches the file
          cui32 codePage  = (outUTF == 1 ? CP_UTF8 : CP_ACP);
-         csi32 narrowLen = WideCharToMultiByte(codePage, 0, wstrOutput, c, 0, 0, 0, 0);
+         cui32 wcFlags   = (outUTF == 1 ? WC_ERR_INVALID_CHARS : WC_NO_BEST_FIT_CHARS);
+         BOOL  usedDef   = FALSE; // BOOL, as the API's own out-parameter type; it must be null for CP_UTF8
+         csi32 narrowLen = WideCharToMultiByte(codePage, wcFlags, wstrOutput, c, 0, 0, 0, 0);
          chptr strNarrow = (narrowLen > 0 ? (chptr)zalloc64(csize_t(narrowLen)) : 0);
 
-         if(!strNarrow || WideCharToMultiByte(codePage, 0, wstrOutput, c, strNarrow, narrowLen, 0, 0) != narrowLen ||
+         if(!strNarrow || WideCharToMultiByte(codePage, wcFlags, wstrOutput, c, strNarrow, narrowLen, 0,
+                                              (outUTF == 1 ? 0 : &usedDef)) != narrowLen ||
             !WriteBlock(outFile, strNarrow, ui32(narrowLen))) {
             wprintf(wstrMessage[11], wstrOut);
             mfree1(strNarrow);
@@ -1378,6 +1404,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
             return -10;
          }
          mfree1(strNarrow);
+         if(usedDef) wprintf(wstrMessage[46], wstrOut);
       }
       wprintf(wstrMessage[0], wstrOut);
       CloseHandle(outFile);

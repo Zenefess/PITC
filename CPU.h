@@ -3,7 +3,7 @@
  * Version: v1.0.2
  * Owner: David William Bull
  * Created: 2025-01-25
- * Last Modified: 2026-08-17
+ * Last Modified: 2026-08-18
  * Description: Core types, global declarations and scalar helpers: values-file format, completion bitmap, pulse timing, topology, parsing.
  * To Do: 1) Drop GLOBAL_CFG's in-class procUnits and procSync defaults; wmain overwrites both before an argument is read (ISSUES.MD K9)
  *        2) Remove THREAD_CFG's packetSizeRAM, maxTics, inactiveTime and records32, written by the spawn loop and read by nothing (K9)
@@ -207,6 +207,18 @@ struct REPORT_BUFFER {
 
    ~REPORT_BUFFER(void) { mfree1(text); }
 }; typedef const REPORT_BUFFER cREPORT_BUFFER;
+
+// Owner of the console's output code page. Where the CRT can be given the UTF-8 LC_CTYPE locale, wmain sets
+// the console's output code page to UTF-8 beside it -- the pair must agree, because wprintf converts wide
+// text through the former and the console decodes the bytes through the latter, and it is their agreement
+// that lets a translation outside the ANSI code page reach the console intact (ISSUES.MD D2). The console
+// outlives the process, so what was changed must be put back on every one of wmain's returns: the same
+// destructor-owned shape as REPORT_BUFFER above, for the same reason (C13)
+struct CONSOLE_CODE_PAGE {
+   cui32 codePage = GetConsoleOutputCP(); // 0 where no console is attached; the destructor then restores nothing
+
+   ~CONSOLE_CODE_PAGE(void) { if(codePage) SetConsoleOutputCP(codePage); }
+}; typedef const CONSOLE_CODE_PAGE cCONSOLE_CODE_PAGE;
 
 //--- Global variables ---//
 // Declared here, defined once in CPU.cpp. A header that *defines* an object at namespace scope hands every

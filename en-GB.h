@@ -3,7 +3,7 @@
  * Version: v1.0.2
  * Owner: David William Bull
  * Created: 2025-02-10
- * Last Modified: 2026-08-17
+ * Last Modified: 2026-08-18
  * Description: English (en-GB) text: the option reference and return codes, the message table, the interface fragments and the label tables.
  * To Do: 1) Take the banner's version from one authoritative site rather than restating it here as prose (ISSUES.MD K3)
  * Dependencies: None
@@ -14,7 +14,11 @@
  */
 #pragma once
 
-al64 cwchptrc wstrInstructions_English =
+// The three prose tables are 'inline' for the reason the three label tables at the end always were: the
+// LANGUAGES registry in translations.h is an inline table that takes their addresses, and an inline
+// definition must mean one entity in every translation unit, which a const table at namespace scope -- being
+// internally linked -- is not (ISSUES.MD D2, H9)
+inline al64 cwchptrc wstrInstructions_English =
 L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William Bull\n"
  "\nReturn values"
  "\n-------------"
@@ -64,7 +68,8 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n         fill it, and together overflow the level below. An 'M' option overrides the derived sizes, and a level this system does"
  "\n         not report is refused with -27 rather than tested at some other size"
  "\n Lx : Set interface language."
- "\n      Recognises ISO 639-1 language codes; eg. Len-GB"
+ "\n      The code is matched case-insensitively against those this build carries: en-GB & en-US; eg. Len-GB"
+ "\n         An unrecognised code is warned about and leaves the language unchanged"
  "\n Mx : Set amount of memory to utilise during test. Values are in MebiBytes; eg. Mt128"
  "\n      C==Per virtual core, N==Per first-class core, S==Per second-class virtual core, T==Total split amongst all virtual cores"
  "\n         The two core classes are the CPU's non-SMT and SMT cores; on a hybrid CPU they are its efficiency and performance cores"
@@ -111,7 +116,7 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      9==Synchronised staggered fixed-width pulsed stress on all virtual cores. 4 hour duration"
  "\n      0==Synchronised fixed-width pulsed stress on all virtual cores, using ALU & SSE code-paths with 2MB memory per core. 1 hour duration\n\n";
 
-cwchptrc wstrMessage_English[46] = {
+inline cwchptrc wstrMessage_English[47] = {
    L"\nSuccessfully wrote results to \"%s\" file.\n\n",
    L"\n\nNew \"cpu.values\" file generated.\n\n",
    L"\n\n\"cpu.values\" file not found. Generate via 'W' command-line option.\n\n",
@@ -153,7 +158,7 @@ cwchptrc wstrMessage_English[46] = {
    L"\nThe '%c' option of the argument \"%s\" requires a decimal value from %.1f to %.1f.\n\n",
    L"\nUnrecognised command-line argument \"%s\". Run with no arguments for the option reference.\n\n",
    L"\nUnrecognised '%c' option in the argument \"%s\". Run with no arguments for the option reference.\n\n",
-   L"\nWARNING: The language \"%s\" is not available in this build; the interface remains in en-GB.\n",
+   L"\nWARNING: The language \"%s\" is not available in this build; the interface language is unchanged.\n",
    L"\nThe 'U' core map selected no cores; there is nothing to test.\n\n",
    L"\n\nThe %s kernel does not compute JobFPU element-wise, so a \"cpu.values\" written here would not be\n"
     "  readable on a CPU of a different vector width. \"cpu.values\" not written.\n\n",
@@ -163,10 +168,12 @@ cwchptrc wstrMessage_English[46] = {
     "  size that defeats the level below. At most %u thread(s) per level %u cache instance could have been\n"
     "  held resident, so select fewer cores to test the level itself.\n",
    L"\nWARNING: The requested memory per thread is outside the level %u residency window of %llu ~ %llu KiB\n"
-    "  for the class-%u cores, so this run is not confined to that cache level.\n"
+    "  for the class-%u cores, so this run is not confined to that cache level.\n",
+   L"\nWARNING: The ANSI encoding of the \"%s\" file cannot represent every character of this language, so\n"
+    "  those characters were written as substitutes. Request 'O8' or 'O16' to keep them.\n"
 };
 
-cwchptrc wstrInterface_English[22] = {
+inline cwchptrc wstrInterface_English[22] = {
    L"Units:",
    L"\t Memory allocated: %3lldMB\tStart-up delay: %7dms",
    L"\t Pulse on-time: %dms",
@@ -174,6 +181,10 @@ cwchptrc wstrInterface_English[22] = {
    L"\nSync: ",
    L"\t     Thread count: %-3d  \tMaximum duration: %5.1fs",
    L"\tPulse off-time: %dms",
+   // The characters of [7] after its last newline are measured at run time: they are the hanging indent every
+   // thread-bitmap row after the first is given, and the amount trimmed after the last, so the label may be
+   // translated to any width -- but it must not end in a tab, which the measure counts as one column and a
+   // console renders as several
    L"\n\nThread bitmap: ",
    L"\n Thread | ProcUnit | Correct values   ",
    L"| Result\n--------+----------+--",

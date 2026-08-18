@@ -3,10 +3,9 @@
  * Version: v1.0.2
  * Owner: David William Bull
  * Created: 2025-02-19
- * Last Modified: 2026-08-17
- * Description: Language selection: declares the six string-table pointers every message, prompt and report is read through.
- * To Do: 1) Make selection data-driven, so a language is a header and a table entry rather than an edit to the 'L' case (ISSUES.MD K6)
- *        2) Set the console output code page before the first wide write, so a translation outside it does not print mojibake (K6)
+ * Last Modified: 2026-08-18
+ * Description: Language selection: the six string-table pointers every message is read through, and the registry the 'L' option walks.
+ * To Do: 1) Add a second language -- a header and a LANGUAGES row since ISSUES.MD D2 -- which is the one full test of that entry's fix
  * Dependencies: en-GB.h
  * ISA: Scalar
  * Thread-safety: N/A
@@ -40,3 +39,31 @@ extern cwchptrcptr wstrInterface;
 extern cwchar4ptr  wstrUnitsCPU;
 extern cwchar4ptr  wstrSyncCPU;
 extern cwchar8ptr  wstrPass;
+
+//--- Language registry ---//
+// One row per language this build carries: the code the 'L' option matches a candidate against, and the six
+// tables a match repoints together. A row carries all six so that a language cannot set some and leave the
+// rest -- the two-language report the block above warns of -- and the 'L' case walks this table rather than
+// naming any language itself, so adding one is a header and a row here, not an edit to CPU.cpp (ISSUES.MD
+// D2). A code is at most five characters, the capacity of the wstrLang the active selection is recorded in;
+// widen that global together with any longer code added here. en-US is an alias: both rows name the one
+// English. A new language header must be saved as UTF-8 -- the project compiles with /utf-8, and without it
+// the wchar values of the header's L"..." literals would follow the build machine's ANSI code page
+struct LANGUAGE_TABLES {
+   cwchptrc    wstrCode;
+   cwchptrc    wstrInstructions;
+   cwchptrcptr wstrMessage;
+   cwchptrcptr wstrInterface;
+   cwchar4ptr  wstrUnitsCPU;
+   cwchar4ptr  wstrSyncCPU;
+   cwchar8ptr  wstrPass;
+}; typedef const LANGUAGE_TABLES cLANGUAGE_TABLES;
+
+// UPPER_SNAKE because it is a table at namespace scope, which GCS r12 spells that way, and 'inline' because
+// it is immutable: one entity shared by every translation unit, exactly as wstrKernelName is. Every table a
+// row points at is itself inline, which is what an inline definition here requires of them (ISSUES.MD H9)
+inline cLANGUAGE_TABLES LANGUAGES[] = {
+   { L"en-GB", wstrInstructions_English, wstrMessage_English, wstrInterface_English, wstrUnitsCPU_English, wstrSyncCPU_English, wstrPass_English },
+   { L"en-US", wstrInstructions_English, wstrMessage_English, wstrInterface_English, wstrUnitsCPU_English, wstrSyncCPU_English, wstrPass_English }
+};
+//--- Language registry ---//
