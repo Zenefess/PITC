@@ -1,6 +1,6 @@
 /*
  * File: typedefs.h
- * Version: v1.0
+ * Version: v1.0.1
  * Owner: David William Bull
  * Created: 2007-07-01
  * Last Modified: 2026-08-16
@@ -8,8 +8,6 @@
  * To Do: Add static_assert size/ISA guards for vector aliases.
  *        Publish "constness legend" and pointer-lattice table.
  *        Add examples for defpa/refpa casts.
- *        Wire CPUID dispatch and scalar fallbacks.
- *        Add microbenchmarks in docs/.
  * Dependencies: immintrin.h
  * ISA: Scalar | SSE4.2 | AVX2 | AVX512
  * Thread-safety: N/A

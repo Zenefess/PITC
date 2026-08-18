@@ -5,10 +5,8 @@
  * Created: 2008-12-08
  * Last Modified: 2026-08-16
  * Description: Aligned allocators, pattern fill, zeroing, temporal and non-temporal copies, and interlocked transfers; optional allocation tracking.
- * To Do: 1) Replace the retained #ifdef __AVX512F__ forks with run-time CPUID dispatch per GCS a8; retire the pre-AVX fallback arms per a2.
- *        2) Unit-test the salloc, mset, and mzero tail paths and the Copy and Stream families.
- *        3) Benchmark the non-temporal Stream16/32/64 against temporal copies per bd1/bd2 before asserting a performance win.
- *        4) Unify the truncation semantics of the two Copy64 overloads (const floors, volatile ceils; divergence is documented but unresolved).
+ * To Do: 1) Unit-test the salloc, mset, and mzero tail paths and the Copy and Stream families.
+ *        2) Benchmark the non-temporal Stream16/32/64 against temporal copies per bd1/bd2 before asserting a performance win.
  * Dependencies: windows.h, corecrt_malloc.h, typedefs.h, common functions.h, data tracking.h (DATA_TRACKING builds only)
  * ISA: Scalar | SSE4.2 | AVX2 | AVX-512
  * Thread-safety: Reentrant
@@ -706,7 +704,7 @@ inline void Stream64(cptrc source, ptrc dest, cui64 byteCount) {
    _mm_sfence();
 }
 
-// (Non-temporally) Copy byteCount (rounded-down to the nearest 16/32/64) bytes of 128/256/512-bit-aligned data via SIMD instruction.
+// Non-temporally Copy byteCount (rounded-down to the nearest 16/32/64) bytes of 128/256/512-bit-aligned data via SIMD instruction.
 // If either source or dest is unaligned, standard copy is used.
 inline void Stream(cptrc source, ptrc dest, cui64 byteCount) {
         if(((ui64 &)source & 0x0Fu)  || ((ui64 &)dest & 0x0Fu))  Copy(source, dest, byteCount);

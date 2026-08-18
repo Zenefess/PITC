@@ -5,10 +5,9 @@
  * Created: 2025-01-23
  * Last Modified: 2026-08-18
  * Description: AVX-512 job kernels, with their job cycles, family and ladder cross-checks, arena seeding, completion poll and comparison.
- * To Do: 1) Make ThreadsRunningAVX512 genuinely 512-bit: AllFalse(cui512&, cui512&) issues two 256-bit vptests (ISSUES.MD I10)
- *        2) Add /// API documentation with @param tags to the four kernels and four job cycles defined here (GCS d1)
+ * To Do: 1) Add /// API documentation with @param tags to the four kernels and four job cycles defined here (GCS d1)
  * Dependencies: typedefs.h, CPU_build.h, CPU_job_cycles.h
- * ISA: Scalar | AVX2 | AVX-512
+ * ISA: Scalar | AVX-512
  * Thread-safety: MT-safe
  * Reviewers: David William Bull
  * License: MIT  Copyright: David William Bull
@@ -17,39 +16,16 @@
 #include "typedefs.h"
 #include "CPU_build.h"
 
-// This unit must be compiled with /arch:AVX512, in every configuration. MSVC accepts an AVX-512 intrinsic
-// whatever /arch is set to, so a unit compiled at the SSE2 baseline still produces the right answer -- but it
-// emits ZMM-using code without having been told the target supports it, which decides register allocation and
-// vzeroupper placement, and leaves the surrounding code unable to use EVEX encoding. Both per-file overrides
-// in CPU.vcxproj used to carry Condition="...=='Release|x64'", which is exactly the Debug build this rejects
-// (ISSUES.MD H3). The complementary guard -- that the scalar unit is never raised -- is in
-// CPU_jobs_standard.cpp (H1)
+// This unit must be compiled with /arch:AVX512
 #if !defined(__AVX512F__)
    #error "CPU_jobs_AVX512.cpp must be compiled with /arch:AVX512. See CPU.vcxproj and ISSUES.MD H3."
 #endif
 
-// The AVX-512 job cycles, family cross-check, arena seeding and completion-bitmap poll live here rather than
-// in CPU.cpp, beside the kernels of their own width, so that no 512-bit instruction is emitted from a file
-// compiled at the StreamingSIMDExtensions2 baseline (ISSUES.MD H4)
 #include "CPU_job_cycles.h"
 
 #ifndef UNLOOPx4
 #define UNLOOPx4(code) code code code code
 #endif
-
-// ISSUES.MD J1/J2: the shift alternates direction across the loop -- the predicate was 'i < 32' against a
-// counter that never exceeds 15, so the right-shift arm was unreachable and an entire instruction class
-// went unexercised. The chain is also carried in ui64 rather than si64: it relies on wraparound at every
-// step, and only unsigned arithmetic is defined to wrap in every language mode. si64 and ui64 may alias
-// one another's storage, so the alias below re-types the value in place without copying it out of memory
-
-// ISSUES.MD J7: 'acc' is the running accumulator each intermediate is folded into. Every step of the value
-// chain begins by taking a fourth root, which divides a relative perturbation by four and rounds it away
-// before the cancellation further down can amplify it, so a single-ULP fault was absorbed four times in
-// five. The accumulator reaches the result without passing through a root, and its own (acc + x) over
-// |acc - x| shape is expansive rather than contracting, so a perturbation grows instead of decaying. It
-// is folded into the value once, at the end. Measured over 5,000,000 seeds it stays inside 2^11 and never
-// reaches zero or infinity, and it adds no instruction the kernels did not already issue
 
 // SIMD AVX512 operations only
 void JobAVX512(fl64x8 &x) {
@@ -254,25 +230,17 @@ void JobMemALU_AVX512(fl64x8ptrc x, si64ptrc y) {
 }
 
 //-- Bit-exact result comparison --//
-// XOR the two operands and test the difference against zero, over the integer domain: a golden value is a bit
-// pattern, and _mm512_mask_cmpneq_pd_mask -- which this replaced -- is a floating-point predicate, so it
-// answers a question about numeric values instead and errs in both directions. CPU_job_cycles.h carries the
-// whole of that reasoning (ISSUES.MD A11)
-
 /// @brief  Compare a 512-bit (AVX-512) result against its golden value
 /// @param  result:   Value produced by the job kernel
 /// @param  expected: Reference value loaded from "cpu.values"
 /// @return true if every bit of both operands is identical
 static inline cbool ResultsMatch(cfl64x8 result, cfl64x8 expected) {
-   // AVX-512 has no testz: VPTESTMQ sets one mask bit per 64-bit lane whose AND is non-zero, so testing the
-   // difference against itself yields a bit for every lane that differs, and an empty mask is the match
    csi512 delta = _mm512_xor_si512(_mm512_castpd_si512(result), _mm512_castpd_si512(expected));
 
    return !_mm512_test_epi64_mask(delta, delta);
 }
 
 //--- Thread completion bitmap ---//
-// The 512-bit view of the map: eight ui64 in one step, which is the whole of it
 bool ThreadsRunningAVX512(void) {
    cui64ptrc bits = (cui64ptrc)ThreadBitsView();
 
@@ -281,9 +249,6 @@ bool ThreadsRunningAVX512(void) {
 //--- Thread completion bitmap ---//
 
 //--- Job kernel cross-check ---//
-
-// The AVX-512 family. ValidateKernelFamilies (CPU.h) reaches this only on a CPU reporting AVX-512, exactly as
-// RunGoldenLadder gates the ladder itself
 cui8 ValidateFamilyAVX512(cRESULTS &seed) {
    fl64x8 refAVX512, memAVX512[4], regAVX512;
    si64   refALU,    memALU[4],    regALU;
@@ -306,9 +271,6 @@ cui8 ValidateFamilyAVX512(cRESULTS &seed) {
    return 0;
 }
 
-// The AVX-512 half of the golden ladder's cross-width equivalence: JobAVX512 against JobFPU, lane for lane.
-// The loads are unaligned because the probe is a scalar array of the caller's, and the comparison is one
-// memcmp over the whole set because a fl64x8 array is its lanes in memory order (ISSUES.MD B1)
 cui8 ValidateLadderAVX512(cfl64ptrc probe, cfl64ptrc reference) {
    fl64x8 lane[LADDER_PROBE_LANES / 8];
    ui8    k;
@@ -321,14 +283,12 @@ cui8 ValidateLadderAVX512(cfl64ptrc probe, cfl64ptrc reference) {
 //--- Job kernel cross-check ---//
 
 //--- Arena seeding ---//
-
 void SeedRecordsAVX512(fl64x8ptrc records, cui64 count, cfl64x8 &seed) {
    for(ui64 i = 0; i < count; ++i) records[i] = seed;
 }
 //--- Arena seeding ---//
 
 //--- Job cycles ---//
-
 cui8 JobCycleAVX512(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    value[1][coreNum].avx512 = value[0][coreNum].avx512;
    JobAVX512(value[1][coreNum].avx512);

@@ -1,6 +1,6 @@
 /*
  * File: common functions.h
- * Version: v1.1.0
+ * Version: v1.1
  * Owner: David William Bull
  * Created: 2023-02-02
  * Last Modified: 2026-08-16
@@ -102,7 +102,7 @@ inline void transrotate(VEC2Df &coord, cVEC2Df origin, cfl32 angle) {
              (temp.x * rots.x) + (temp.y * rots.y) + origin.y };
 }
 
-inline cVEC2Df sincos(cfl32 angle) {   return { sinf(angle), cosf(angle) }; }
+inline cVEC2Df sincos(cfl32 angle) { return { sinf(angle), cosf(angle) }; }
 
 inline void sincos(cfl32 angle, fl32 &sinval, fl32 &cosval) {
    sinval = sinf(angle);

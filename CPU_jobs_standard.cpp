@@ -14,41 +14,21 @@
  * License: MIT  Copyright: David William Bull
  */
 
+#define _CRT_RAND_S
+
 #include <cmath>
 #include "typedefs.h"
 #include "CPU_build.h"
 
-// This unit holds the scalar ALU and FPU kernels: the path that must run on any x64 CPU, and the only path
-// available when no vector unit is selected. A per-file /arch override here lets the compiler emit
-// EVEX-encoded scalar instructions, which fault with an illegal instruction on every CPU without AVX-512 --
-// and, below /fp:strict, lets it contract JobFPU's trailing x * (x * k + c) into an FMA that rounds once
-// where the source rounds twice, so a "cpu.values" written by one build fails under the other
 #if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
-   #error "CPU_jobs_standard.cpp must compile at the SSE2 baseline. See ISSUES.MD H1."
+   #error "CPU_jobs_standard.cpp must compile at the SSE2 baseline."
 #endif
 
-// The job cycles, the family cross-check and the arena seeding of the units below live here rather than in
-// CPU.cpp, beside the kernels they wrap (ISSUES.MD H4). Nothing in this unit is wider than a scalar, so it
-// is here for symmetry with the three vector units rather than out of necessity
 #include "CPU_job_cycles.h"
 
 #ifndef UNLOOPx4
 #define UNLOOPx4(code) code code code code
 #endif
-
-// ISSUES.MD J1/J2: the shift alternates direction across the loop -- the predicate was 'i < 32' against a
-// counter that never exceeds 15, so the right-shift arm was unreachable and an entire instruction class
-// went unexercised. The chain is also carried in ui64 rather than si64: it relies on wraparound at every
-// step, and only unsigned arithmetic is defined to wrap in every language mode. si64 and ui64 may alias
-// one another's storage, so the alias below re-types the value in place without copying it out of memory
-
-// ISSUES.MD J7: 'acc' is the running accumulator each intermediate is folded into. Every step of the value
-// chain begins by taking a fourth root, which divides a relative perturbation by four and rounds it away
-// before the cancellation further down can amplify it, so a single-ULP fault was absorbed four times in
-// five. The accumulator reaches the result without passing through a root, and its own (acc + x) over
-// |acc - x| shape is expansive rather than contracting, so a perturbation grows instead of decaying. It
-// is folded into the value once, at the end. Measured over 5,000,000 seeds it stays inside 2^11 and never
-// reaches zero or infinity, and it adds no instruction the kernels did not already issue
 
 // Non-simultaneous ALU operations only
 void JobALU(si64 &x) {
@@ -199,11 +179,6 @@ void JobMemALU_FPU(fl64ptrc x, si64ptrc y) {
 }
 
 //--- Job kernel cross-check ---//
-
-// The ALU and FPU families. ValidateKernelFamilies (CPU.h) calls this before 'W' generates anything, so that
-// no memory-backed or combined kernel can drift from the register-resident one "cpu.values" records
-// (ISSUES.MD B5). refALU and refFPU are re-derived here rather than passed in, so that this function is a
-// complete statement of the two scalar families
 cui8 ValidateFamilyScalar(cRESULTS &seed) {
    fl64 refFPU, memFPU[4], regFPU;
    si64 refALU, memALU[4], regALU;
@@ -232,7 +207,6 @@ cui8 ValidateFamilyScalar(cRESULTS &seed) {
 //--- Job kernel cross-check ---//
 
 //--- Arena seeding ---//
-
 void SeedRecordsALU(si64ptrc records, cui64 count, csi64 seed) {
    for(ui64 i = 0; i < count; ++i) records[i] = seed;
 }
@@ -243,23 +217,6 @@ void SeedRecordsFPU(fl64ptrc records, cui64 count, cfl64 seed) {
 //--- Arena seeding ---//
 
 //--- Bit-exact result comparison ---//
-// The scalar counterpart of the three units' ResultsMatch overloads, and it exists for the same reason they
-// do: a golden value is a bit pattern, and the question every unit has to answer is whether two of them are
-// identical. The FPU cycles below compared fl64 with '!=', which is a *numeric* predicate and errs in both
-// directions -- -0.0 != +0.0 is false, so a sign-bit flip in a zero lane passes, and two NaNs of identical
-// encoding compare unequal, so a fault that produced one in both planes would be reported where the bits
-// agree. That is the A11 defect class, which the AVX-512 cycles carried until this codebase settled on the
-// integer domain for every width; the FPU unit was the one place left still asking the numeric question
-// (ISSUES.MD A2). No kernel can produce a zero or a NaN as a golden value today, so nothing misfires yet --
-// this is what keeps that true of the next edit to the FP chain.
-// The comparison is a byte compare, not the '(ui64&)fpu != (ui64&)fpu' alias the entry proposes: reading a
-// fl64 object through a ui64 lvalue is exactly the aliasing a compiler is entitled to assume cannot happen,
-// and one that does assume it folds the comparison rather than performing it. Transcribed into a harness and
-// built at -O2, the alias spelling reports +0.0 and -0.0 as identical -- the defect this fix exists to
-// remove, reintroduced by the spelling meant to remove it. memcmp of a constant size states the same
-// question in the one form no compiler may reinterpret, and both configurations set IntrinsicFunctions, so
-// MSVC expands it in place rather than calling it. It is also what ValidateFamilyScalar above already uses
-// for the same operands. The ALU cycles need no equivalent: si64 '!=' already examines every bit of both
 /// @param result Value produced by the job kernel
 /// @param expected Reference value loaded from "cpu.values"
 /// @return true if every bit of both operands is identical
@@ -269,7 +226,6 @@ static inline cbool ResultsMatch(cfl64 &result, cfl64 &expected) {
 //--- Bit-exact result comparison ---//
 
 //--- Job cycles ---//
-
 cui8 JobCycleALU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    value[1][coreNum].alu = value[0][coreNum].alu;
    JobALU(value[1][coreNum].alu);
@@ -327,10 +283,6 @@ cui8 JobCycleMemFPU(cui64 coreNum, csi64 offset, vchptrc threadByte) {
    value[1][coreNum].p3[offset + 2] = value[0][coreNum].fpu;
    value[1][coreNum].p3[offset + 3] = value[0][coreNum].fpu;
    JobMemFPU(&value[1][coreNum].p3[offset]);
-   // Failed's unit argument selects the format the mismatch is printed in, and must name the unit whose
-   // value[3] member was just written -- 3 (FPU) here, as in JobCycleFPU and JobCycleMemALU_FPU. These four
-   // passed 4 (ALU), so Failed's case 4 printed value[2].alu and value[3].alu with "%lld": two integers from
-   // lanes this function never touches, in place of the two doubles that disagreed (ISSUES.MD A12)
    if(!ResultsMatch(value[1][coreNum].p3[offset], value[2][coreNum].fpu)) {
       value[3][coreNum].fpu = value[1][coreNum].p3[offset];
       Failed(coreNum, threadByte, 3);

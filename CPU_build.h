@@ -18,13 +18,6 @@
 #include "typedefs.h"
 
 //--- Target architecture ---//
-// PITC is x64 only. The kernels use _mm_set1_epi64x and the 512-bit intrinsics, none of which exist on x86,
-// and the topology, affinity and arena code is written against 64-bit masks throughout. The Win32
-// configurations that used to sit in CPU.vcxproj carried none of the settings the x64 ones do -- no
-// LanguageStandard, no per-file ISA or optimisation overrides -- so selecting one produced a cascade of
-// errors and, had it linked, an executable named CPU.exe running arithmetic the golden values do not
-// describe. They are gone (ISSUES.MD H7); this rejects a build configured for x86 by any other route
-
 #if !defined(_M_X64) && !defined(_M_AMD64) && !defined(__x86_64__)
    #error "PITC targets x64 only. See CPU.vcxproj and ISSUES.MD H7."
 #endif
@@ -38,19 +31,6 @@
 // build using one model would then be graded against silicon running another, and the difference reported
 // to the user as a CPU fault. The model is therefore pinned by every configuration in CPU.vcxproj, and
 // required here as well, so that a build made outside the project file cannot quietly inherit another one
-
-// The exemption this guard used to grant -- '&& !defined(__clang__)' -- excused the one route it exists to
-// police. clang-cl defines _MSC_VER and __clang__ alike, and a build made outside CPU.vcxproj is exactly the
-// case the guard is written for, so the toolchain most likely to reach here unconfigured was the toolchain it
-// let through. clang publishes none of the _M_FP_* macros either, so VALUES_FP_MODEL below was 0 for every
-// clang floating-point mode: two clang-cl builds made under /fp:fast and /fp:precise shared a buildID, would
-// have exchanged "cpu.values" files whose arithmetic rounds differently, and the difference would have
-// reached the user as a CPU fault -- the class of failure the buildID exists to prevent. clang-cl can model
-// /fp:strict, but it defines no macro that says it did, so there is nothing here to test against; the golden
-// values have never been generated or validated under it, and it is refused until they are. A toolchain that
-// is neither MSVC nor clang arrives at the same dead end from the other side, VALUES_FP_MODEL having no way
-// to name the model such a build was made with (ISSUES.MD H1)
-
 #if defined(__clang__)
    #error "PITC has no validated clang build: its floating-point model cannot be checked. See ISSUES.MD H1."
 #elif !defined(_MSC_VER)
@@ -63,7 +43,7 @@
 // reported as a stale file rather than as a hardware failure. /fp:except is deliberately not represented:
 // it decides whether an exception is raised, not what a result is. The guard above admits only a toolchain
 // that names its model, so the final arm is unreachable and 0 can no longer stand for "some model this
-// build cannot identify" -- which is what made it a value two different builds could share (H1)
+// build cannot identify"
 #if defined(_M_FP_STRICT)
    constexpr cui32 VALUES_FP_MODEL = 1;
 #elif defined(_M_FP_PRECISE)
