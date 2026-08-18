@@ -1,12 +1,12 @@
 /*
  * File: translations.h
- * Version: v1.0.2
+ * Version: v1.0.3
  * Owner: David William Bull
  * Created: 2025-02-19
  * Last Modified: 2026-08-18
  * Description: Language selection: the six string-table pointers every message is read through, and the registry the 'L' option walks.
  * To Do: 1) Add more languages
- * Dependencies: en-GB.h
+ * Dependencies: en-GB.h, fr-FR.h
  * ISA: Scalar
  * Thread-safety: N/A
  * Reviewers: David William Bull
@@ -15,6 +15,7 @@
 #pragma once
 
 #include "en-GB.h"
+#include "fr-FR.h"
 
 // A language's fixed-width label tables are pointed at by array type rather than by cwchptrcptr, and that is
 // the whole of how their width stays a contract instead of a convention. The banner pads the unit and sync
@@ -49,6 +50,7 @@ struct LANGUAGE_TABLES {
 
 inline cLANGUAGE_TABLES LANGUAGES[] = {
    { L"en-GB", wstrInstructions_English, wstrMessage_English, wstrInterface_English, wstrUnitsCPU_English, wstrSyncCPU_English, wstrPass_English },
-   { L"en-US", wstrInstructions_English, wstrMessage_English, wstrInterface_English, wstrUnitsCPU_English, wstrSyncCPU_English, wstrPass_English }
+   { L"en-US", wstrInstructions_English, wstrMessage_English, wstrInterface_English, wstrUnitsCPU_English, wstrSyncCPU_English, wstrPass_English },
+   { L"fr-FR", wstrInstructions_French,  wstrMessage_French,  wstrInterface_French,  wstrUnitsCPU_French,  wstrSyncCPU_French,  wstrPass_French  }
 };
 //--- Language registry ---//

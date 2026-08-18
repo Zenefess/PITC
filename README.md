@@ -48,7 +48,7 @@ Command-line options
          some other size
  Lx : Set interface language.
  
-      The code is matched case-insensitively against those this build carries: en-GB & en-US; e.g. Len-GB
+      The code is matched case-insensitively against those this build carries: en-GB, en-US & fr-FR; e.g. Len-GB
          An unrecognised code is warned about and leaves the language unchanged
  Mx : Set amount of memory to utilise during test. Values are in MebiBytes; e.g. Mt128
  
