@@ -29,9 +29,7 @@ PITC.exe W
 
 Command-line options
 --------------------
- Options are applied in the order given: where two of them set the same property, the last one wins. 'B' and the presets reset the processing units and the memory configuration, so give either of them before any 'I' or 'M' option. A sweeping-pulse run has no off-time, so ']' is ignored wherever it is given.
-
- Defaults, where no option and no preset sets otherwise: the ALU & FPU of every virtual core, parallel constant execution, no memory (the register-resident kernels), a 2000ms start-up delay and a 15 minute duration. The 100ms on-time and 900ms off-time are what a pulsed mode selected without '[' or ']' inherits.
+ Options are applied in the order given: where two of them set the same property, the last one wins. 'B' and the presets reset the processing units and the memory configuration, so give either of them before any 'I' or 'M' option. Pulsed mode (selected without '[' or ']') defaults to 100ms on-time and 900ms off-time. A sweeping-pulse run has no off-time, so ']' is ignored wherever it is given.
 
  B  : Run the benchmark. Options after 'B' override defaults; e.g. pitc.exe B Iaf mt1024
  
