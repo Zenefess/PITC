@@ -5,7 +5,7 @@
  * Created: 2026-08-15
  * Last Modified: 2026-08-16
  * Description: Build guards and the floating-point identity the golden values depend upon: x64 only, MSVC only, /fp:strict only.
- * To Do: 1) Generate and validate the golden values under clang-cl, then narrow the refusal below to a mode check (ISSUES.MD H1)
+ * To Do: 1) Generate and validate the golden values under clang-cl, then narrow the refusal below to a mode check
  *        2) State an explicit toolset floor: on a pre-VS2022 toolset an absent _M_FP_CONTRACT reads as contraction being off
  * Dependencies: typedefs.h
  * ISA: Scalar
@@ -19,7 +19,7 @@
 
 //--- Target architecture ---//
 #if !defined(_M_X64) && !defined(_M_AMD64) && !defined(__x86_64__)
-   #error "PITC targets x64 only. See CPU.vcxproj and ISSUES.MD H7."
+   #error "PITC targets x64 only."
 #endif
 //--- Target architecture ---//
 
@@ -32,11 +32,11 @@
 // to the user as a CPU fault. The model is therefore pinned by every configuration in CPU.vcxproj, and
 // required here as well, so that a build made outside the project file cannot quietly inherit another one
 #if defined(__clang__)
-   #error "PITC has no validated clang build: its floating-point model cannot be checked. See ISSUES.MD H1."
+   #error "PITC has no validated clang build: its floating-point model cannot be checked."
 #elif !defined(_MSC_VER)
-   #error "PITC builds with MSVC only: no other compiler here states its floating-point model. See ISSUES.MD H1."
+   #error "PITC builds with MSVC only: no other compiler here states its floating-point model."
 #elif !defined(_M_FP_STRICT)
-   #error "PITC must be compiled with /fp:strict. See CPU.vcxproj <FloatingPointModel> and ISSUES.MD H2."
+   #error "PITC must be compiled with /fp:strict."
 #endif
 
 // Identifies the model in the "cpu.values" header, so a file written by a build using another one is
