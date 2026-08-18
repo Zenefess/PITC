@@ -46,11 +46,11 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n-27 : Requested cache level not reported by the system\n"
  "\nCommand-line options   ---   Example: pitc.exe I3x Spt Tcd8.0t3600 Ua"
  "\n--------------------"
- "\n   Options are applied in the order given: where two of them set the same property, the last one wins."
- "\n   'B' and the presets reset the processing units and the memory configuration, so give either of them before any 'I' or 'M' option.
- "\n   A sweeping-pulse run has no off-time, so ']' is ignored wherever it is given."
- "\n   Pulsed mode (selected without '[' or ']') defaults to 100ms on-time and 900ms off-time."
- "\n   Every test is graded against the \"cpu.values\" file, so generate it with 'W' before the first test of a build.\n"
+ "\n Options are applied in the order given: where two of them set the same property, the last one wins."
+ "\n 'B' and the presets reset the processing units and the memory configuration, so give either of them before any 'I' or 'M' option.
+ "\n A sweeping-pulse run has no off-time, so ']' is ignored wherever it is given."
+ "\n Pulsed mode (selected without '[' or ']') defaults to 100ms on-time and 900ms off-time."
+ "\n Every test is graded against the \"cpu.values\" file, so generate it with 'W' before the first test of a build.\n"
  "\n B  : Run the benchmark. Options after 'B' override defaults; eg. pitc.exe B Iaf mt1024"
  "\n      Defaults utilise the ALU and largest vector unit of every virtual core, 8MB of memory per thread, parallel constant computation,"
  "\n      a 2000ms start-up delay and a 60 second duration."
