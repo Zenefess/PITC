@@ -32,6 +32,7 @@ al64 CLASS_TIMER timer;
      RESULTS_ARRAYS resArray;
      vsi8  generateError = 0;
      wchar wstrLang[6]   = L"en-GB";
+     CONSOLE_CODE_PAGE consoleCP; // Captured here, before wmain runs; restored at exit and by RestoreConsoleCP
 
 // Default: English. All six move together, and the 'L' case below is the only other place that writes them
 cwchptr     wstrInstructions = wstrInstructions_English;
@@ -124,6 +125,15 @@ void Failed(cui64 coreNum, vchptrc threadByte, cui8 unit) {
    return;
 }
 
+// Console control handler, registered by wmain beside the one write that changes the console's output code
+// page. Ctrl-C -- the way a run of hours is abandoned -- terminates through ExitProcess, which unwinds no
+// destructor, and the code page is conhost state the launching shell keeps after this process is gone
+// (ISSUES.MD D2). The handler restores it and declines the event, so default termination still proceeds
+static BOOL __stdcall RestoreConsoleCP(DWORD) {
+   if(consoleCP.codePage) SetConsoleOutputCP(consoleCP.codePage);
+   return FALSE;
+}
+
 csi32 wmain(csi32 argc, cwchptrc argv[]) {
    VALUES_HEADER header;
    // Handles of the worker threads, in thread order, so that this function can wait for them to end rather
@@ -142,7 +152,6 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    ui32  j;
    ui8   outUTF = 0;
    wchar wstrLangArg[6]; // The candidate code an 'L' argument names; wstrLang records only the active language
-   CONSOLE_CODE_PAGE consoleCP; // Holds the console's output code page and restores it on every return below
 
    // The CRT is asked for the UTF-8 LC_CTYPE locale first, and the console's output code page is moved to
    // UTF-8 only where that grant succeeds: wprintf converts wide text through the one and the console decodes
@@ -151,8 +160,10 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    // installed exactly as before and the console is left alone -- ASCII English survives any code page, which
    // is why this program never noticed. SetConsoleOutputCP's own failure is tolerated rather than reverted:
    // with stdout redirected there may be no console to set, and the UTF-8 bytes the CRT now writes are
-   // exactly what the redirected file should hold. consoleCP above puts the original code page back however
-   // this function returns, the console being machine state that outlives the process.
+   // exactly what the redirected file should hold. The console is machine state that outlives the process, so
+   // the change is put back on both of the ways out: the global consoleCP's destructor covers every return
+   // below, and RestoreConsoleCP, registered here as a console control handler, covers the Ctrl-C that
+   // terminates through ExitProcess and unwinds nothing.
    // LC_CTYPE is the one category any locale is installed for. LC_ALL handed LC_NUMERIC to the machine as
    // well, and every %f conversion this program performs takes its decimal separator from that category: on a
    // comma-decimal system the banner's "Maximum duration" (wstrInterface[5]), the range a malformed decimal
@@ -163,7 +174,7 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
    // that policy is, and so that a category added to LC_ALL by a later CRT cannot quietly acquire a separator
    // with it. ParseDecimal pins its own read through a locale object of its own regardless (F2): together the
    // two make a decimal spelling mean the same thing on every machine, in and out
-   if(setlocale(LC_CTYPE, ".UTF8")) SetConsoleOutputCP(CP_UTF8);
+   if(setlocale(LC_CTYPE, ".UTF8")) { SetConsoleOutputCP(CP_UTF8); SetConsoleCtrlHandler(RestoreConsoleCP, TRUE); }
    else setlocale(LC_CTYPE, "");
    setlocale(LC_NUMERIC, "C");
 
@@ -1388,15 +1399,23 @@ csi32 wmain(csi32 argc, cwchptrc argv[]) {
          // (wstrMessage[46]) rather than failed: the report of a run of hours has already been paid for, and
          // 'O8'/'O16' are the documented route to keeping every character of it (ISSUES.MD D2). Both calls
          // pass the same flags, so the byte count the first reports is the count the second produces.
+         // The ANSI arm asks GetACP() first, and takes the UTF-8 flags whenever the answer is UTF-8: the API
+         // validates its flags against the code page CP_ACP *resolves to*, and for code page 65001 -- which
+         // the "Use Unicode UTF-8 for worldwide language support" setting makes the machine's ANSI code
+         // page -- it refuses WC_NO_BEST_FIT_CHARS and a non-null usedDef argument outright, so keying the
+         // flags off the option letter alone failed every default-encoding write on such a machine. Nothing
+         // is lost by the substitution: UTF-8 has no best-fit mappings and can represent every character, so
+         // the wstrMessage[46] warning correctly cannot fire there.
          // The character count c is passed rather than -1, so no terminating null reaches the file
          cui32 codePage  = (outUTF == 1 ? CP_UTF8 : CP_ACP);
-         cui32 wcFlags   = (outUTF == 1 ? WC_ERR_INVALID_CHARS : WC_NO_BEST_FIT_CHARS);
-         BOOL  usedDef   = FALSE; // BOOL, as the API's own out-parameter type; it must be null for CP_UTF8
+         cbool ansiUTF8  = (outUTF != 1 && GetACP() == CP_UTF8);
+         cui32 wcFlags   = (outUTF == 1 || ansiUTF8 ? WC_ERR_INVALID_CHARS : WC_NO_BEST_FIT_CHARS);
+         BOOL  usedDef   = FALSE; // BOOL, as the API's own out-parameter type; null wherever UTF-8 resolves
          csi32 narrowLen = WideCharToMultiByte(codePage, wcFlags, wstrOutput, c, 0, 0, 0, 0);
          chptr strNarrow = (narrowLen > 0 ? (chptr)zalloc64(csize_t(narrowLen)) : 0);
 
          if(!strNarrow || WideCharToMultiByte(codePage, wcFlags, wstrOutput, c, strNarrow, narrowLen, 0,
-                                              (outUTF == 1 ? 0 : &usedDef)) != narrowLen ||
+                                              (outUTF == 1 || ansiUTF8 ? 0 : &usedDef)) != narrowLen ||
             !WriteBlock(outFile, strNarrow, ui32(narrowLen))) {
             wprintf(wstrMessage[11], wstrOut);
             mfree1(strNarrow);

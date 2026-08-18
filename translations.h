@@ -45,8 +45,9 @@ extern cwchar8ptr  wstrPass;
 // tables a match repoints together. A row carries all six so that a language cannot set some and leave the
 // rest -- the two-language report the block above warns of -- and the 'L' case walks this table rather than
 // naming any language itself, so adding one is a header and a row here, not an edit to CPU.cpp (ISSUES.MD
-// D2). A code is at most five characters, the capacity of the wstrLang the active selection is recorded in;
-// widen that global together with any longer code added here. en-US is an alias: both rows name the one
+// D2). A code is at most five characters, the capacity of the wstrLang the active selection is recorded in
+// and of the wstrLangArg local the candidate is parsed into -- widen both together with any longer code
+// added here, or the clamped candidate can never match it. en-US is an alias: both rows name the one
 // English. A new language header must be saved as UTF-8 -- the project compiles with /utf-8, and without it
 // the wchar values of the header's L"..." literals would follow the build machine's ANSI code page
 struct LANGUAGE_TABLES {

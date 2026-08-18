@@ -212,8 +212,11 @@ struct REPORT_BUFFER {
 // the console's output code page to UTF-8 beside it -- the pair must agree, because wprintf converts wide
 // text through the former and the console decodes the bytes through the latter, and it is their agreement
 // that lets a translation outside the ANSI code page reach the console intact (ISSUES.MD D2). The console
-// outlives the process, so what was changed must be put back on every one of wmain's returns: the same
-// destructor-owned shape as REPORT_BUFFER above, for the same reason (C13)
+// outlives the process, so what was changed must be put back however the process leaves. The destructor
+// covers every one of wmain's returns -- the object is a global of CPU.cpp, the destructor-owned shape of
+// GLOBAL_CFG and RESULTS_ARRAYS (GCS p2, C13) -- and RestoreConsoleCP in CPU.cpp, registered as a console
+// control handler beside the one write that changes the code page, covers the Ctrl-C a run of hours is
+// abandoned by, which terminates through ExitProcess and unwinds no destructor at all
 struct CONSOLE_CODE_PAGE {
    cui32 codePage = GetConsoleOutputCP(); // 0 where no console is attached; the destructor then restores nothing
 
@@ -248,6 +251,9 @@ extern RESULTS_ARRAYS resArray;
 // cannot be overwritten by anybody's results, and the interlocked write orders it ahead of the completion bit
 // the reader is waiting on
 extern vsi8 generateError;
+// Captures the console's output code page before wmain runs; its destructor and RestoreConsoleCP (CPU.cpp)
+// are the two paths that put the original back
+extern CONSOLE_CODE_PAGE consoleCP;
 
 #include "translations.h"
 

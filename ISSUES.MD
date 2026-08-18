@@ -191,18 +191,25 @@ internally-linked const table is not.
 The console path is UTF-8 where the CRT can match it: `wmain` asks for the `.UTF8` `LC_CTYPE` locale and,
 only where that grant succeeds, sets the console output code page to UTF-8 beside it — the two must agree,
 because `wprintf` converts wide text through the former and the console decodes the bytes through the
-latter — restoring the original code page through a destructor-owned `CONSOLE_CODE_PAGE` (`CPU.h`) on every
-return, the console being machine state that outlives the process. A UCRT too old for `.UTF8` (pre-1803)
-gets the regional locale exactly as before and an untouched console: ASCII English behaves as it always did.
+latter. The console is machine state that outlives the process, so the change is put back on both of the
+ways out: the destructor of the `CONSOLE_CODE_PAGE` global (`CPU.h`) covers every return, and
+`RestoreConsoleCP`, registered as a console control handler beside the change, covers the Ctrl-C a run of
+hours is abandoned by, which terminates through `ExitProcess` and unwinds no destructor. A UCRT too old for
+`.UTF8` (pre-1803) gets the regional locale exactly as before and an untouched console: ASCII English
+behaves as it always did.
 Two neighbouring gaps the same defect would have surfaced through are closed with it. Both configurations
 now compile with `/utf-8`, so a language header's `L"..."` literals mean the same wide characters whatever
 ANSI code page the build machine uses — every current source is pure ASCII, so today's binaries are
-unchanged. And the `Oa` results path, whose `CP_ACP` conversion silently best-fitted any character the ANSI
+unchanged. And the ANSI results path — `Oa`, and the default when `O[name]` names no encoding — whose
+`CP_ACP` conversion silently best-fitted any character the ANSI
 code page cannot carry (its comment claimed the conversion "reports a character it cannot represent as a
 failure", which is true only of `CP_UTF8` under `WC_ERR_INVALID_CHARS` — now passed on the `O8` path),
 converts under `WC_NO_BEST_FIT_CHARS` and reports a substitution through the new `wstrMessage[46]` warning
 while still writing the file: the report of a run of hours is not discarded over its prose, and `O8`/`O16`
-carry every translation intact.
+carry every translation intact. That arm asks `GetACP()` first and takes the UTF-8 flags whenever the answer
+is UTF-8: the "Use Unicode UTF-8 for worldwide language support" setting makes `CP_ACP` resolve to code page
+65001, which refuses `WC_NO_BEST_FIT_CHARS` and a non-null `usedDefaultChar` outright — and under which
+nothing is unrepresentable, so the warning correctly cannot fire there.
 
 ### D3. Dead configuration declarations misdescribe the program — **Low** — *carried forward (old K14)*
 
