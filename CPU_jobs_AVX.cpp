@@ -3,7 +3,7 @@
  * Version: v1.0.2
  * Owner: David William Bull
  * Created: 2025-01-23
- * Last Modified: 2026-08-16
+ * Last Modified: 2026-08-18
  * Description: AVX job kernels, with their job cycles, family and ladder cross-checks, arena seeding, completion poll and comparison.
  * To Do: 1) Raise with the standard's owners that r17's ISA vocabulary has no AVX token; nothing here is above that set (C1)
  *        2) Add /// API documentation with @param tags to the four kernels and four job cycles defined here (GCS d1)
@@ -21,7 +21,7 @@
 // /arch is set to, so a unit compiled at the SSE2 baseline still produces the right answer -- but it will not
 // use VEX encoding for the code around the intrinsics, which costs an AVX-to-SSE transition penalty on every
 // boundary, and it leaves the compiler allocating registers for an instruction set it has been told the
-// target does not have. Both per-file overrides in CPU.vcxproj used to carry Condition="…=='Release|x64'",
+// target does not have. Both per-file overrides in CPU.vcxproj used to carry Condition="...=='Release|x64'",
 // which is exactly the Debug build this rejects (ISSUES.MD H3). The complementary guard -- that the scalar
 // unit is never raised -- is in CPU_jobs_standard.cpp (H1)
 // RULE-DEV:a2,a3,a6,a12 GCS section 12 makes AVX2+FMA3+BMI2 the [MUST] CPU baseline, requires /arch:AVX2 with

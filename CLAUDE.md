@@ -118,6 +118,13 @@ are generated and validated under it, as is any toolchain that is neither MSVC n
 reason (ISSUES.MD H1). **`VALUES_FP_MODEL` can no longer be 0** — the constant's final arm is unreachable —
 which is what stops it being a value two differently-rounding builds could agree through.
 
+Both configurations pass **`/utf-8`** through `AdditionalOptions`, and it must stay in both: without it MSVC
+decodes a BOM-less source file under the build machine's ANSI code page, so the `wchar` values compiled from
+a language header's `L"..."` literals would depend on who built it. Every current source is pure ASCII, which
+decodes identically under any code page — the switch changes nothing today and exists for the first language
+header that is not (ISSUES.MD D2). A new language header is saved as UTF-8 accordingly, and a BOM on it is
+tolerated but not required while the switch is present.
+
 ## Running and verifying a change
 
 There is no automated test suite, no CI, and no lint/format tooling in the repo. The functional smoke test is
@@ -233,8 +240,10 @@ that a thread could not be pinned, `wstrMessage[33]` that the machine carries mo
 `MAX_THREADS`, `wstrMessage[34]` names the two core classes of a hybrid CPU, because there the split is not
 the non-SMT/SMT one the options are documented against (ISSUES.MD G9), `wstrMessage[39]` reports a
 language code this build does not carry, `wstrMessage[44]` withdraws a cache-residency claim the thread count
-makes impossible, and `wstrMessage[45]` reports an explicit `M` outside the requested level's residency
-window; none of the six stops the run.
+makes impossible, `wstrMessage[45]` reports an explicit `M` outside the requested level's residency
+window, and `wstrMessage[46]` reports characters the ANSI results file's code page could not represent —
+under `Oa`, and under the default an `O[name]` without an encoding letter selects (ISSUES.MD D2); none of the
+seven stops the run.
 
 **The help text is this program's reference manual, and three of its blocks restate code rather than describe
 it.** `wstrInstructions_English` (`en-GB.h`) states the exit codes above; the no-option defaults — every
@@ -329,8 +338,8 @@ ahead of the completion bit `wmain` is waiting on.
 ### Where the globals live
 
 **Every object at namespace scope is declared `extern` in a header and defined once, in `CPU.cpp`.** That is
-`timer`, `cfg`, `threadData`, `value`, `threadBits`, `wstrOut`, `resArray`, `generateError` and `wstrLang`
-from `CPU.h`, the six language pointers from `translations.h`, and the `JOB_CYCLE[2][32]` dispatch table from
+`timer`, `cfg`, `threadData`, `value`, `threadBits`, `wstrOut`, `resArray`, `generateError`, `wstrLang` and
+`consoleCP` from `CPU.h`, the six language pointers from `translations.h`, and the `JOB_CYCLE[2][32]` dispatch table from
 `CPU_job_cycles.h`; `Failed` is a function definition in `CPU.cpp` for the same reason. The definitions sit
 together at the top of `CPU.cpp`, above `wmain`, and the declaration in the header names the `declare*` macro
 that defines each pointer, because the macro carries the allocation with it and the two have to be changed
@@ -343,8 +352,9 @@ each unit a private copy of the result planes, the thread table and the completi
 `wmain` compare and signal through. The `L` option's six pointers are the same hazard: they are written at
 run time, and a per-unit copy is a language change one half of the program never sees.
 
-The immutable tables are the exception, and are `inline` rather than `extern`: `wstrKernelName` and the two
-byte-order marks. `inline` makes them one entity instead of a copy per unit while leaving them beside what
+The immutable tables are the exception, and are `inline` rather than `extern`: `wstrKernelName`, the two
+byte-order marks, the `LANGUAGES` registry in `translations.h` and the `_English` tables in `en-GB.h` the
+registry points at. `inline` makes them one entity instead of a copy per unit while leaving them beside what
 they describe. **A new mutable global goes in `CPU.cpp`; a new immutable table may stay in a header if it is
 `inline`.**
 
@@ -353,8 +363,10 @@ header was exactly their defect: an `inline` table is one the `L` option cannot 
 every banner and the `.Pass.`/`!Fail!` verdict of every results row stayed English whatever language was
 selected (ISSUES.MD D1). They are per-language tables in `en-GB.h` now and three more run-time pointers here.
 **An immutable table may stay in a header only if no language would ever want to change it** — which of what
-is left is true of `wstrKernelName`, whose entries are C++ identifiers, and of the byte-order marks, which
-are an encoding.
+is left is true of `wstrKernelName`, whose entries are C++ identifiers, of the byte-order marks, which
+are an encoding, and — since D2 — of the `LANGUAGES` registry and the per-language `_English` tables: the `L`
+option selects *between* those tables by repointing the six pointers, so none of them is anything a selected
+language would need to rewrite, and a new language grows the registry rather than editing what is there.
 
 ### Job kernels: one translation unit per ISA
 
@@ -1024,14 +1036,21 @@ manual. The rules that bite most often when editing here:
 ## Localisation
 
 `translations.h` selects a language by pointing six globals at one header's string tables; `en-GB.h` is the
-only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[46]`,
-`wstrInterface_*[22]`, `wstrUnitsCPU_*[8][4]`, `wstrSyncCPU_*[8][4]` and `wstrPass_*[2][8]`, then extending
-both `translations.h` and the `L` case in `CPU.cpp`. **The `L` case must repoint all six**: a language that
-set some and left the rest would print a report in two languages, and the three label tables are the half
-most easily missed, carrying no prose long enough to look like text. The six
+only implementation. Adding a language means writing `<code>.h` with `wstrInstructions_*`, `wstrMessage_*[47]`,
+`wstrInterface_*[22]`, `wstrUnitsCPU_*[8][4]`, `wstrSyncCPU_*[8][4]` and `wstrPass_*[2][8]`, saved as UTF-8,
+included from `translations.h` and given one row in the **`LANGUAGES` registry** there — the code the `L`
+option matches and the six tables of the language, together. The `L` case walks that registry and names no
+language of its own, so a language is a header and a row rather than an edit to `CPU.cpp` (ISSUES.MD D2), and
+**a row carries all six tables** because a language that set some and left the rest would print a report in
+two languages — the three label tables being the half most easily missed, carrying no prose long enough to
+look like text. The header also joins `CPU.vcxproj`'s `ClInclude` list (the PITC-proper pattern, H8), and the
+help text's and `README.md`'s list of carried codes grows with the row, per the coupling rule above. The six
 globals are *declared* in `translations.h` and defined, pointing at English, in `CPU.cpp`: the `L` option
 writes them at run time, so a definition in the header would have given each translation unit a copy and left
-the four `CPU_jobs_*.cpp` units reading a language nobody selected (ISSUES.MD H9).
+the four `CPU_jobs_*.cpp` units reading a language nobody selected (ISSUES.MD H9). The registry itself is an
+`inline` immutable table, which is why every `_English` table it points at is `inline` as well: an inline
+definition must mean one entity in every translation unit, and a const table at namespace scope without it is
+a private copy per unit.
 
 **The three label tables are pointed at by array type — `cwchar4ptr`/`cwchar8ptr` in `translations.h`, not
 `cwchptrcptr` — and that is what keeps their width a contract rather than a convention.** The banner prints
@@ -1064,11 +1083,13 @@ renders as several.
 
 The `L` option's selection logic was inverted — `lstrcmpiW` returns 0 when the codes *match*, so testing it
 directly selected a language exactly when the argument did not name it, and every input resolved to English
-(ISSUES.MD F7). It is now `!lstrcmpiW(...)`, and a code this build does not carry prints `wstrMessage[39]`
-and stays in en-GB rather than reaching one by accident. The code itself is copied
-into `wstrLang[6]`, and the copy is clamped to that capacity — `lstrcpynW`'s third argument is the size of the
-*destination*, so passing the argument's length overran the globals that follow it (ISSUES.MD C6). A longer
-code is therefore truncated to five characters; widen `wstrLang` if a language ever needs more.
+(ISSUES.MD F7). The comparison is now `!lstrcmpiW(...)` against each registry row's code, and a code no row
+carries prints `wstrMessage[39]` and changes nothing — the candidate is parsed into a local, so `wstrLang`
+keeps naming the language actually selected rather than the one that failed. On a match the *registry's*
+spelling of the code is what lands in `wstrLang[6]`, and every copy into either buffer is clamped to its
+capacity — `lstrcpynW`'s third argument is the size of the *destination*, so passing the argument's length
+overran the globals that follow it (ISSUES.MD C6). A longer code is therefore truncated to five characters;
+widen `wstrLang` (and the parse local beside it) together with any longer code added to the registry.
 `wstrKernelName` in `CPU.h` is outside the tables, but deliberately: its entries are C++ identifiers naming
 the job kernels, and translating them would break grepping the source for the kernel a `-22` names. So is the
 `'!'`/`'.'` alphabet of the thread bitmap, which mirrors the `Uc`/`Ut` core maps the parser reads — printing
@@ -1076,10 +1097,20 @@ what the option accepts is what lets a user copy a bitmap straight back into a `
 and `"cpu.values.tmp"` filenames are a cross-locale file contract and stay literal too, which is why the
 messages that name them interpolate them with `%s` rather than spelling them per language.
 
-**The program's whole locale policy is two lines at the top of `wmain`, and `LC_NUMERIC` is not one of the
-categories the machine gets to choose.** `setlocale(LC_CTYPE, "")` installs the regional locale for character
-classification and for the wide-to-byte conversion the CRT performs when `stdout` is redirected, which is
-what it was ever wanted for; `setlocale(LC_NUMERIC, "C")` states the invariant every `%f` in the program
+**The program's whole locale policy is three lines at the top of `wmain`, and `LC_NUMERIC` is not one of the
+categories the machine gets to choose.** The first line asks the CRT for the UTF-8 `LC_CTYPE` locale, and
+where the grant succeeds sets the console's output code page to UTF-8 beside it: `wprintf` converts wide text
+through the one and the console decodes the bytes through the other, so **the pair must move together** —
+setting either alone is the mojibake ISSUES.MD D2 named, not the fix. The change is what lets a translation
+outside the ANSI code page reach the console (and a redirected `stdout`, whose bytes are then UTF-8) intact;
+a UCRT too old to grant `.UTF8` (before Windows 10 1803) gets the regional locale exactly as before and the
+console is left alone, ASCII English surviving any code page. `SetConsoleOutputCP`'s own failure is
+tolerated — with `stdout` redirected there may be no console to set — and the change is put back on both of
+the ways out, the console being machine state that outlives the process: the `CONSOLE_CODE_PAGE` global
+`consoleCP` (`CPU.h`, defined in `CPU.cpp`) restores the original code page from its destructor on every
+return, and `RestoreConsoleCP`, registered as a console control handler beside the change, restores it on the
+Ctrl-C that terminates through `ExitProcess` and unwinds no destructor. A new early return needs no handling
+of its own, which is the point of the owner. `setlocale(LC_NUMERIC, "C")` states the invariant every `%f` in the program
 depends on. It was one `setlocale(LC_ALL, "")`, so on a comma-decimal system the banner's "Maximum duration",
 the range a malformed decimal option is reported against (`wstrMessage[36]`) and every value `Failed()`
 prints were written `1,234567` — into the file `O[name]` saves as much as to the console — where this
@@ -1087,15 +1118,23 @@ program's own documentation and any consumer of that file expect `1.234567` (ISS
 therefore needs no locale plumbing of its own, and `LC_ALL` must not come back**: the categories it would
 restore beyond `LC_CTYPE` have no reader here, and the one it would hand back to the machine is the one that
 decides what a decimal point looks like. The results file's *encoding* does not depend on any of this — its
-8-bit path converts through `WideCharToMultiByte` under the code page the `O` option named.
+8-bit path converts through `WideCharToMultiByte` under the code page the `O` option named, with flags that
+make what an encoding cannot carry loud: `WC_ERR_INVALID_CHARS` fails the UTF-8 path, and the ANSI path's
+`WC_NO_BEST_FIT_CHARS` turns a character outside the code page into the default character and reports it
+through `wstrMessage[46]` rather than best-fitting a lookalike in silence (D2). The ANSI arm asks `GetACP()`
+first and takes the UTF-8 flags whenever the answer is UTF-8 — the "Use Unicode UTF-8 for worldwide language
+support" setting makes `CP_ACP` resolve to code page 65001, which refuses `WC_NO_BEST_FIT_CHARS` and a
+non-null `usedDefaultChar` outright, and under which nothing is unrepresentable anyway.
 
 **Every write to `stdout` is wide, and a new one must be too.** Both languages give a stream an orientation
 at its first use and forbid byte I/O on a wide-oriented one; five writes were `printf` — `GenerateValues`'
 progress dot (`CPU.h`), `ComputationPulse`'s (`CPU_methods.h`) and three newlines in `CPU.cpp` — beside the
 `wprintf` that carries every message and the report, and worked only because the MSVC CRT deliberately
 implements no orientation at all (ISSUES.MD F4). They are `wprintf` now. `_setmode(_fileno(stdout),
-_O_U16TEXT)` is deliberately *not* set: that changes how the console renders each of these writes, where the
-defect was the mixing alone.
+_O_U16TEXT)` is deliberately *not* set, then or since: it would route console writes through `WriteConsoleW`
+and turn a redirected `stdout` into UTF-16LE, where the code-page pair above delivers the same characters
+while keeping the stream byte-oriented and a redirected file UTF-8. The defect F4 named was the mixing alone,
+and D2's console fix did not need to revisit that decision.
 
 ## Known constraints and latent issues
 

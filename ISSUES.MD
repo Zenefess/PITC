@@ -168,7 +168,7 @@ its per-group term for the same reason.
 The en-GB report is byte-for-byte what it was: every moved literal was relocated unchanged, and the measured
 indent evaluates to the 15 it replaced.
 
-### D2. `translations.h` cannot express a second language without code edits, and the console path would garble one — **Low** — *carried forward (old K10)*
+### D2. `translations.h` cannot express a second language without code edits, and the console path would garble one — **Low** — *carried forward (old K10)* — **RESOLVED**
 
 Adding a language still means writing `<code>.h`, editing `translations.h` and extending the `L` case — and
 the help text's "Recognises ISO 639-1 language codes" oversells a hard-coded en-GB/en-US comparison whose
@@ -176,6 +176,40 @@ example is a BCP-47 tag. Additionally, no `_setmode(_O_U16TEXT)`/`SetConsoleOutp
 so `wprintf` output converts through the ANSI code page: pure-ASCII English survives, but any future
 translation with characters outside the console code page will print mojibake through the very mechanism
 built to carry it.
+
+**Resolved** in both halves. Selection is data-driven: `translations.h` carries a `LANGUAGES` registry — one
+row per language, each row the code the `L` option matches and all six tables a match repoints together — and
+the `L` case walks it naming no language of its own, so a language is a header and a row rather than an edit
+to `CPU.cpp`. The candidate code is parsed into a local, so a code no row carries now leaves both the
+selection and `wstrLang` naming the language actually active (`wstrMessage[39]` reworded to match), and the
+help text and `README.md` state the real contract — a case-insensitive match against the codes the build
+carries — in place of the "ISO 639-1" claim neither the parser nor the `Len-GB` example ever honoured. The
+registry is an `inline` table, so the three prose tables in `en-GB.h` became `inline` alongside the three
+label tables that already were: an inline definition must mean one entity in every translation unit, which an
+internally-linked const table is not.
+
+The console path is UTF-8 where the CRT can match it: `wmain` asks for the `.UTF8` `LC_CTYPE` locale and,
+only where that grant succeeds, sets the console output code page to UTF-8 beside it — the two must agree,
+because `wprintf` converts wide text through the former and the console decodes the bytes through the
+latter. The console is machine state that outlives the process, so the change is put back on both of the
+ways out: the destructor of the `CONSOLE_CODE_PAGE` global (`CPU.h`) covers every return, and
+`RestoreConsoleCP`, registered as a console control handler beside the change, covers the Ctrl-C a run of
+hours is abandoned by, which terminates through `ExitProcess` and unwinds no destructor. A UCRT too old for
+`.UTF8` (pre-1803) gets the regional locale exactly as before and an untouched console: ASCII English
+behaves as it always did.
+Two neighbouring gaps the same defect would have surfaced through are closed with it. Both configurations
+now compile with `/utf-8`, so a language header's `L"..."` literals mean the same wide characters whatever
+ANSI code page the build machine uses — every current source is pure ASCII, so today's binaries are
+unchanged. And the ANSI results path — `Oa`, and the default when `O[name]` names no encoding — whose
+`CP_ACP` conversion silently best-fitted any character the ANSI
+code page cannot carry (its comment claimed the conversion "reports a character it cannot represent as a
+failure", which is true only of `CP_UTF8` under `WC_ERR_INVALID_CHARS` — now passed on the `O8` path),
+converts under `WC_NO_BEST_FIT_CHARS` and reports a substitution through the new `wstrMessage[46]` warning
+while still writing the file: the report of a run of hours is not discarded over its prose, and `O8`/`O16`
+carry every translation intact. That arm asks `GetACP()` first and takes the UTF-8 flags whenever the answer
+is UTF-8: the "Use Unicode UTF-8 for worldwide language support" setting makes `CP_ACP` resolve to code page
+65001, which refuses `WC_NO_BEST_FIT_CHARS` and a non-null `usedDefaultChar` outright — and under which
+nothing is unrepresentable, so the warning correctly cannot fire there.
 
 ### D3. Dead configuration declarations misdescribe the program — **Low** — *carried forward (old K14)*
 

@@ -3,7 +3,7 @@
  * Version: v1.0.2
  * Owner: David William Bull
  * Created: 2025-01-25
- * Last Modified: 2026-08-17
+ * Last Modified: 2026-08-18
  * Description: Core types, global declarations and scalar helpers: values-file format, completion bitmap, pulse timing, topology, parsing.
  * To Do: 1) Drop GLOBAL_CFG's in-class procUnits and procSync defaults; wmain overwrites both before an argument is read (ISSUES.MD K9)
  *        2) Remove THREAD_CFG's packetSizeRAM, maxTics, inactiveTime and records32, written by the spawn loop and read by nothing (K9)
@@ -208,6 +208,21 @@ struct REPORT_BUFFER {
    ~REPORT_BUFFER(void) { mfree1(text); }
 }; typedef const REPORT_BUFFER cREPORT_BUFFER;
 
+// Owner of the console's output code page. Where the CRT can be given the UTF-8 LC_CTYPE locale, wmain sets
+// the console's output code page to UTF-8 beside it -- the pair must agree, because wprintf converts wide
+// text through the former and the console decodes the bytes through the latter, and it is their agreement
+// that lets a translation outside the ANSI code page reach the console intact (ISSUES.MD D2). The console
+// outlives the process, so what was changed must be put back however the process leaves. The destructor
+// covers every one of wmain's returns -- the object is a global of CPU.cpp, the destructor-owned shape of
+// GLOBAL_CFG and RESULTS_ARRAYS (GCS p2, C13) -- and RestoreConsoleCP in CPU.cpp, registered as a console
+// control handler beside the one write that changes the code page, covers the Ctrl-C a run of hours is
+// abandoned by, which terminates through ExitProcess and unwinds no destructor at all
+struct CONSOLE_CODE_PAGE {
+   cui32 codePage = GetConsoleOutputCP(); // 0 where no console is attached; the destructor then restores nothing
+
+   ~CONSOLE_CODE_PAGE(void) { if(codePage) SetConsoleOutputCP(codePage); }
+}; typedef const CONSOLE_CODE_PAGE cCONSOLE_CODE_PAGE;
+
 //--- Global variables ---//
 // Declared here, defined once in CPU.cpp. A header that *defines* an object at namespace scope hands every
 // translation unit that includes it either a duplicate symbol at link time or -- for the `dataType *const`
@@ -236,6 +251,9 @@ extern RESULTS_ARRAYS resArray;
 // cannot be overwritten by anybody's results, and the interlocked write orders it ahead of the completion bit
 // the reader is waiting on
 extern vsi8 generateError;
+// Captures the console's output code page before wmain runs; its destructor and RestoreConsoleCP (CPU.cpp)
+// are the two paths that put the original back
+extern CONSOLE_CODE_PAGE consoleCP;
 
 #include "translations.h"
 

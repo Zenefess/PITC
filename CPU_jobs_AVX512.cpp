@@ -3,7 +3,7 @@
  * Version: v1.0.2
  * Owner: David William Bull
  * Created: 2025-01-23
- * Last Modified: 2026-08-16
+ * Last Modified: 2026-08-18
  * Description: AVX-512 job kernels, with their job cycles, family and ladder cross-checks, arena seeding, completion poll and comparison.
  * To Do: 1) Make ThreadsRunningAVX512 genuinely 512-bit: AllFalse(cui512&, cui512&) issues two 256-bit vptests (ISSUES.MD I10)
  *        2) Add /// API documentation with @param tags to the four kernels and four job cycles defined here (GCS d1)
@@ -21,7 +21,7 @@
 // whatever /arch is set to, so a unit compiled at the SSE2 baseline still produces the right answer -- but it
 // emits ZMM-using code without having been told the target supports it, which decides register allocation and
 // vzeroupper placement, and leaves the surrounding code unable to use EVEX encoding. Both per-file overrides
-// in CPU.vcxproj used to carry Condition="…=='Release|x64'", which is exactly the Debug build this rejects
+// in CPU.vcxproj used to carry Condition="...=='Release|x64'", which is exactly the Debug build this rejects
 // (ISSUES.MD H3). The complementary guard -- that the scalar unit is never raised -- is in
 // CPU_jobs_standard.cpp (H1)
 #if !defined(__AVX512F__)

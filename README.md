@@ -50,7 +50,8 @@ Command-line options
          not report is refused with -27 rather than tested at some other size
  Lx : Set interface language.
  
-      Recognises ISO 639-1 language codes; eg. Len-GB
+      The code is matched case-insensitively against those this build carries: en-GB & en-US; eg. Len-GB
+         An unrecognised code is warned about and leaves the language unchanged
  Mx : Set amount of memory to utilise during test. Values are in MebiBytes; eg. Mt128
  
       C==Per virtual core, N==Per first-class core, S==Per second-class virtual core, T==Total split amongst all virtual cores
