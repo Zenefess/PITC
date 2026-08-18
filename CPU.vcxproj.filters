@@ -44,6 +44,9 @@
     <ClInclude Include="fr-FR.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="zh-CN.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="CPU_methods.h">
       <Filter>Header Files</Filter>
     </ClInclude>

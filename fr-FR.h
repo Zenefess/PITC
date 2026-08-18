@@ -1,6 +1,6 @@
 /*
  * File: fr-FR.h
- * Version: v1.0.0
+ * Version: v1.0.1
  * Owner: David William Bull
  * Created: 2026-08-18
  * Last Modified: 2026-08-18
@@ -13,11 +13,11 @@
  */
 #pragma once
 
-// The one source file of PITC that is not ASCII, and so the one that can be mis-decoded: read in the system
-// ANSI code page instead of UTF-8, every accented character below arrives in these literals as the two
-// characters of its UTF-8 encoding, and the interface ships as mojibake that compiles cleanly. CPU.vcxproj
-// pins /utf-8 in both configurations; this backstops the switch the way each ISA unit backstops its /arch,
-// at the file that needs it rather than at the project setting that grants it
+// One of the two source files of PITC that are not ASCII, and so one of the two that can be mis-decoded:
+// read in the system ANSI code page instead of UTF-8, every accented character below arrives in these
+// literals as the two characters of its UTF-8 encoding, and the interface ships as mojibake that compiles
+// cleanly. CPU.vcxproj pins /utf-8 in both configurations; this backstops the switch the way each ISA unit
+// backstops its /arch, at the file that needs it rather than at the project setting that grants it
 static_assert(sizeof(L"é") == sizeof(cwchar[2]), "fr-FR.h must be read as UTF-8: /utf-8 is absent from this build.");
 
 // Translator's note on the layout contracts this file keeps, all of them measured rather than described:
@@ -77,7 +77,7 @@ L"\nPulsed Integrity Tests for CPUs v1.1   ---   Copyright (c) David William Bul
  "\n         instance de ce niveau le remplissent et, ensemble, débordent du niveau inférieur. Une option 'M' remplace les tailles"
  "\n         ainsi déduites, et un niveau que ce système ne signale pas est refusé avec -27 plutôt que testé à une autre taille"
  "\n Lx : Choisir la langue de l'interface."
- "\n      Le code est comparé sans distinction de casse à ceux que porte cette compilation : en-GB, en-US et fr-FR ; ex. Lfr-FR"
+ "\n      Le code est comparé sans distinction de casse à ceux que porte cette compilation : en-GB, en-US, fr-FR et zh-CN ; ex. Lfr-FR"
  "\n         Un code non reconnu fait l'objet d'un avertissement et laisse la langue inchangée"
  "\n Mx : Choisir la quantité de mémoire à utiliser pendant le test. Les valeurs sont en mébioctets ; ex. Mt128"
  "\n      C==Par cœur virtuel, N==Par cœur de première classe, S==Par cœur virtuel de seconde classe,"

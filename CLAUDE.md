@@ -88,7 +88,7 @@ last-wins; presets (`-0`…`-9`) and `B` (benchmark) reset units/memory, so they
 - `CPU_jobs_standard.cpp` / `CPU_jobs_SSE.cpp` / `CPU_jobs_AVX.cpp` / `CPU_jobs_AVX512.cpp` — one
   translation unit per ISA, each compiled at its own `/arch` (see above).
 - `CPU_build.h` — compile-time environment guards and the FP-model constants baked into `cpu.values`.
-- `translations.h` + `en-GB.h` + `fr-FR.h` — localization (see below).
+- `translations.h` + `en-GB.h` + `fr-FR.h` + `zh-CN.h` — localization (see below).
 - `typedefs.h`, `vector structures.h`, `memory management.h`, `common functions.h`, `class_timers.h`,
   `SIMD management.h` — vendored, header-only support library (own version numbers in their prologs).
   Layering: typedefs → {vector structures, SIMD management} → common functions → memory management →
@@ -168,15 +168,19 @@ Consequences:
 All user-facing text is reached through six global table pointers (`wstrInstructions`, `wstrMessage`,
 `wstrInterface`, `wstrUnitsCPU`, `wstrSyncCPU`, `wstrPass`), repointed together by the `L` option from
 the `LANGUAGES[]` registry in `translations.h` (currently `en-GB` and `en-US`, both English, plus
-`fr-FR`). Strings are addressed by hard positional index — all language headers must move in lock-step,
-appending only.
+`fr-FR` and `zh-CN`). Strings are addressed by hard positional index — all language headers must move in
+lock-step, appending only.
 Format-specifier count/order/types, embedded newlines, and layout contracts (4-column unit labels,
 10-character ProcUnit cell, no trailing tab on `wstrInterface[7]`) are part of each string's contract;
 the label tables are reached through pointer-to-array typedefs precisely so a wrong width fails to
 compile. A new language = a new header defining all six tables + one `LANGUAGES[]` row + a `ClInclude`
-in `CPU.vcxproj` and `CPU.vcxproj.filters`; the code must fit `wchar[6]` (≤5 characters). `fr-FR.h` is
-the only non-ASCII source file, so it carries a `static_assert` that fails the build if `/utf-8` is ever
-lost — any further accented language belongs behind the same guard.
+in `CPU.vcxproj` and `CPU.vcxproj.filters`; the code must fit `wchar[6]` (≤5 characters). `fr-FR.h` and
+`zh-CN.h` are the non-ASCII source files, and each carries a `static_assert` that fails the build if
+`/utf-8` is ever lost — any further non-ASCII language belongs behind the same guard.
+Every column contract above is counted in **rendered console columns**, which stop matching `wchar_t`
+once a language is not Latin: `zh-CN.h` writes each of its 3-column labels as one Han character plus one
+space, and gives `wstrInterface[7]` a newline of its own because the bitmap's hanging indent is measured
+in `wchar_t` and a Han label would indent the later processor groups by half its width.
 
 ## Coding conventions
 
@@ -207,6 +211,6 @@ anywhere; scalar and SSE2 paths are permanent, first-class citizens here.
 ### Documentation coupling
 
 - A changed default, preset, option letter or exit code is an edit to the instruction text of **every**
-  language header (`en-GB.h`, `fr-FR.h`) **and** `README.md` together.
+  language header (`en-GB.h`, `fr-FR.h`, `zh-CN.h`) **and** `README.md` together.
 - A version bump moves `README.md` line 1 and the banner of every language header together —
   PITC-proper files are versioned individually.

@@ -1,6 +1,6 @@
 /*
  * File: en-GB.h
- * Version: v1.0.3
+ * Version: v1.0.4
  * Owner: David William Bull
  * Created: 2025-02-10
  * Last Modified: 2026-08-18
@@ -62,7 +62,7 @@ L"\nPulsed Integrity Tests for CPUs v1.1   ---   Copyright (c) David William Bul
  "\n         fill it, and together overflow the level below. An 'M' option overrides the derived sizes, and a level this system does"
  "\n         not report is refused with -27 rather than tested at some other size"
  "\n Lx : Set interface language."
- "\n      The code is matched case-insensitively against those this build carries: en-GB, en-US & fr-FR; eg. Len-GB"
+ "\n      The code is matched case-insensitively against those this build carries: en-GB, en-US, fr-FR & zh-CN; eg. Len-GB"
  "\n         An unrecognised code is warned about and leaves the language unchanged"
  "\n Mx : Set amount of memory to utilise during test. Values are in MebiBytes; eg. Mt128"
  "\n      C==Per virtual core, N==Per first-class core, S==Per second-class virtual core, T==Total split amongst all virtual cores"

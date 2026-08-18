@@ -132,6 +132,7 @@
     <ClInclude Include="CPU.h" />
     <ClInclude Include="en-GB.h" />
     <ClInclude Include="fr-FR.h" />
+    <ClInclude Include="zh-CN.h" />
     <ClInclude Include="translations.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
