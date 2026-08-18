@@ -69,8 +69,9 @@ written on any CPU verifies on any other, whatever its vector width — that por
 invariant, not an accident.
 
 Running with no arguments prints the full option reference and returns `2`. Exit codes: `0`/`1`/`2` are
-outcomes, negatives (`-1`…`-27`) are refusals; the full table lives in `README.md` and in
-`wstrInstructions_English` in `en-GB.h` — those two must be kept in sync. Options are applied in order,
+outcomes, negatives (`-1`…`-27`) are refusals; the full table lives in `README.md` and in the
+`wstrInstructions_*` literal of **every** language header (`en-GB.h`, `fr-FR.h`, `zh-CN.h`) — all of them
+must be kept in sync. Options are applied in order,
 last-wins; presets (`-0`…`-9`) and `B` (benchmark) reset units/memory, so they go before `I`/`M` options.
 
 ## Architecture

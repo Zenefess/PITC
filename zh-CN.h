@@ -35,6 +35,16 @@ static_assert(sizeof(L"中") == sizeof(cwchar[2]), "zh-CN.h must be read as UTF-
 //   and two cannot fit, so each translated label is one Han character and one narrow character: a digit for
 //   the cache levels, a space for the sync shapes. Those spaces are the label's third column and are
 //   load-bearing (see the note above those two tables)
+// Two rules on which characters may be written here, both of them invariants a later edit can break without
+// any run reporting it:
+//   Nothing in this file may be an East-Asian Ambiguous-width character -- the curly quotes, the ellipsis,
+//   the em dash, the degree and multiplication signs. Those render one column under a Latin console and two
+//   under a CJK one, so a single one of them in a width-critical string makes the layout depend on who is
+//   reading it. Every character below is Wide or Fullwidth, which is two columns everywhere
+//   Nothing in this file may fall outside CP936. The results file is written through WideCharToMultiByte in
+//   the console code page unless 'O8' or 'O16' asks otherwise, and wstrMessage[46] warns on the first
+//   character that will not encode -- a warning that would then fire on every run, for exactly the readers
+//   this language is for
 
 inline al64 cwchptrc wstrInstructions_Chinese =
 L"\nPulsed Integrity Tests for CPUs v1.1   ---   Copyright (c) David William Bull\n"
@@ -138,12 +148,12 @@ inline cwchptrc wstrMessage_Chinese[47] = {
    L"\n\n未找到 \"cpu.values\" 文件。请用 'W' 命令行选项生成。\n\n",
    L"\n\n\"cpu.values\" 文件中的输入条目数量不足。\n\n",
    L"\n\n\"cpu.values\" 文件中的输出条目数量不足。\n\n",
-   L"\n\n检测到计算错误。结果未写入。\n\n",
+   L"\n\n检测到计算错误。\"cpu.values\" 未写入。\n\n",
    L"\n\n无法创建 \"%s\" 文件。\n\n",
    L"\n\n未能将全部输入条目写入 \"cpu.values\" 文件。\n\n",
    L"\n\n未能将全部输出条目写入 \"cpu.values\" 文件。\n\n",
    L"\n参数 \"%s\" 中没有有效的结果文件名；应为 'O[名称]'。\n\n",
-   L"\n\n无法创建 \"%s\" 文件。\n\n",
+   L"\n\n无法创建结果文件 \"%s\"。\n\n",
    L"\n\n未能将结果写入 \"%s\" 文件。\n\n",
    L"\n本系统的处理器核心不支持 SSE2 指令集。\n",
    L"\n本系统的处理器核心不支持 AVX 指令集。\n",
