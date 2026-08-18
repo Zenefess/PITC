@@ -39,7 +39,8 @@ Command-line options
       a 2000ms start-up delay and a 60 second duration.
  Ix : Set instruction usage options. Specifies which units to utilise. Options can be stacked; e.g. I2av
  
-      Caches: 1==Level 1, 2==Level 2, 3==Level 3                    |  The highest cache level given is used
+      Caches: 1==Level 1, 2==Level 2, 3==Level 3
+         The highest cache level given is used
       Processing: A==ALU, F==FPU, S==SSE2, V==AVX, X==AVX512
          'F', 'S', 'V' and 'X' are mutually exclusive
          At least one processing unit is required; a cache level names no unit of its own and is optional
