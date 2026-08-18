@@ -35,8 +35,8 @@ Command-line options
 
  B  : Run the benchmark. Options after 'B' override defaults; e.g. pitc.exe B Iaf mt1024
  
-      Defaults utilise the ALU and largest vector unit of every virtual core, parallel constant execution,
-      a 2000ms start-up delay and a 60 second duration.
+      Defaults utilise the ALU and largest vector unit of every virtual core, 8MB of memory per thread,
+      parallel constant execution, a 2000ms start-up delay and a 60 second duration.
  Ix : Set instruction usage options. Specifies which units to utilise. Options can be stacked; e.g. I2av
  
       Caches: 1==Level 1, 2==Level 2, 3==Level 3
