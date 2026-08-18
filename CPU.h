@@ -116,11 +116,9 @@ al32 struct GLOBAL_CFG { // 113 bytes
    ~GLOBAL_CFG(void) { mfree(coreMap, sys.coreMap, sys.coreSibling); }
 }; typedef GLOBAL_CFG *const GLOBAL_CFGptrc;
 
-al64 struct THREAD_CFG { // 64 bytes
-   si64 packetSizeRAM; // Amount of RAM (in bytes) to utilise per pulse
+al64 struct THREAD_CFG { // 44 bytes
    si64 startTics;     // Thread start time (in tics)
    si64 endTics;       // Thread shutdown time (in tics)
-   si64 maxTics;       // Maximum duration (in tics)
    si64 activeTics;    // Computation duration (in tics)
    si64 cycleTics;     // Cycle duration (in tics)
    union {
@@ -129,11 +127,7 @@ al64 struct THREAD_CFG { // 64 bytes
          ui16 threadCount;  // Total number of computation threads
       };
       ui64 rc_tc;
-      ui32 records32;
    };
-   // Reported rather than executed against: ComputationPulse derives its idle phase from the cycle it has
-   // stretched, in tics, because a millisecond copy of the off-time cannot follow that stretch (ISSUES.MD E6)
-   ui32 inactiveTime;  // Sleep duration (in ms)
    union {
       ui32 flags;
       struct {
