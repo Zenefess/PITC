@@ -41,10 +41,12 @@ static_assert(sizeof(L"中") == sizeof(cwchar[2]), "zh-CN.h must be read as UTF-
 //   the em dash, the degree and multiplication signs. Those render one column under a Latin console and two
 //   under a CJK one, so a single one of them in a width-critical string makes the layout depend on who is
 //   reading it. Every character below is Wide or Fullwidth, which is two columns everywhere
-//   Nothing in this file may fall outside CP936. The results file is written through WideCharToMultiByte in
-//   the console code page unless 'O8' or 'O16' asks otherwise, and wstrMessage[46] warns on the first
-//   character that will not encode -- a warning that would then fire on every run, for exactly the readers
-//   this language is for
+//   Nothing in this file may fall outside CP936. Unless 'O8' or 'O16' asks otherwise, the results file is
+//   written through WideCharToMultiByte in the system ANSI code page -- not the console's, which is forced
+//   to UTF-8 -- and wstrMessage[46] reports the characters that had to be written as substitutes. On the
+//   machines this language is meant for that code page is 936, so one character outside it makes the warning
+//   a fixture of every ANSI results file they write. Only the tables that reach wstrOutput are converted,
+//   but the rule is held over the whole file so that it needs no per-table exception
 
 inline al64 cwchptrc wstrInstructions_Chinese =
 L"\nPulsed Integrity Tests for CPUs v1.1   ---   Copyright (c) David William Bull\n"
@@ -105,7 +107,7 @@ L"\nPulsed Integrity Tests for CPUs v1.1   ---   Copyright (c) David William Bul
  "\n Ox : 结果文件的输出选项。文件名可以与其余任一选项叠加；例如 O[results.txt]16"
  "\n      []=文件名、A=非 UTF 的 ASCII、8=UTF-8、16=UTF-16"
  "\n Sx : 设置核心同步选项。前三个选项（P、R、S）之一可与最后一个（T）叠加；例如 Spt"
- "\n      P==并行、R==轮转、S==错开、T==时间同步                                                    |  P、R 与 S 互斥"
+ "\n      P==并行、R==轮转、S==交错、T==时间同步                                                    |  P、R 与 S 互斥"
  "\n         'T' 会对齐所有线程的脉冲边沿。不给出它时，并行运行会把每个线程偏移一个周期的随机比例"
  "\n Tx : 设置计时选项。前三个选项（C、F、S）之一可与其余任一个（D、T、[、]）叠加；例如 Tfd1.0t12.5[100]2400"
  "\n      C==恒定、F==定长脉冲、S==扫描长度脉冲                                                     |  取 C、F、S 中最后给出的一个"
@@ -138,8 +140,8 @@ L"\nPulsed Integrity Tests for CPUs v1.1   ---   Copyright (c) David William Bul
  "\n      5==对所有虚拟核心施加同步的定长脉冲压力。时长 30 分钟"
  "\n      6==扫描长度脉冲压力；每个物理核心一个线程。时长 30 分钟"
  "\n      7==对所有虚拟核心施加同步的扫描长度脉冲压力。时长 30 分钟"
- "\n      8==错开的定长脉冲压力；每个物理核心一个线程。时长 1 小时"
- "\n      9==对所有虚拟核心施加同步且错开的定长脉冲压力。时长 4 小时"
+ "\n      8==交错的定长脉冲压力；每个物理核心一个线程。时长 1 小时"
+ "\n      9==对所有虚拟核心施加同步且交错的定长脉冲压力。时长 4 小时"
  "\n      0==对所有虚拟核心施加同步的定长脉冲压力，使用 ALU 与 SSE 代码路径，每核心 2MB 内存。时长 1 小时\n\n";
 
 inline cwchptrc wstrMessage_Chinese[47] = {
@@ -257,9 +259,11 @@ inline cwchptrc wstrInterface_Chinese[22] = {
 // labels spend their third column on the level number, and the sync shapes below spend theirs on a space --
 // a space that is the label's third column, and that a run reports nothing about if it is deleted
 inline cwchar wstrUnitsCPU_Chinese[8][4] = { L"ALU", L"FPU", L"SSE", L"AVX", L"512", L"缓1", L"缓2", L"缓3" };
-// 轮转, 并行, 错开, 同步, 恒定, 定长脉冲, 扫描长度脉冲, 基准测试 -- one character each, and the space that
-// makes the third column
-inline cwchar wstrSyncCPU_Chinese[8][4]  = { L"轮 ", L"并 ", L"错 ", L"同 ", L"恒 ", L"定 ", L"扫 ", L"基 " };
+// 轮转, 并行, 交错, 同步, 恒定, 定长脉冲, 扫描长度脉冲, 基准测试 -- the head character of each, and the space
+// that makes its third column. Staggering is 交错 and not the equally good 错开 for one reason: this table
+// prints its labels one character wide, and a lone 错 is the head of 错误 -- the word this program opens
+// every failure with -- so a staggered run would announce itself in the vocabulary of a fault
+inline cwchar wstrSyncCPU_Chinese[8][4]  = { L"轮 ", L"并 ", L"交 ", L"同 ", L"恒 ", L"定 ", L"扫 ", L"基 " };
 // The verdict of one results row, indexed by Evaluate: 0==every lane matched, 1==at least one did not.
 // Nothing follows this cell on its row, so it is the one label table a language may render at its own width
 inline cwchar wstrPass_Chinese[2][8]     = { L".通过.", L"!失败!" };
