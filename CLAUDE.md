@@ -205,9 +205,5 @@ anywhere; scalar and SSE2 paths are permanent, first-class citizens here.
 
 - A changed default, preset, option letter or exit code is an edit to `en-GB.h`'s instruction text
   **and** `README.md` together.
-- A version bump moves every file prolog, `README.md` line 1, and the banner in `en-GB.h` together —
-  PITC-proper files are not versioned individually. (The tree currently has a known inconsistency:
-  `README.md` and `CPU.cpp` say v1.1 while the other prologs and the runtime banner still say v1.0.2.)
-- A few `#error` messages and comments still cite `ISSUES.MD` (e.g. in `CPU_build.h`,
-  `CPU_jobs_AVX512.cpp`); that file has been deleted — the references are historical, not links to
-  follow.
+- A version bump moves `README.md` line 1 and the banner in `en-GB.h` together —
+  PITC-proper files are versioned individually.
