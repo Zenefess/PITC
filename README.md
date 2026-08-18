@@ -1,4 +1,4 @@
-# Pulsed Integrity Tests for CPUs v1.0.2
+# Pulsed Integrity Tests for CPUs v1.1
 
 
 This software is primarily for testing the idle stability of CPUs, but also provides a range of options for more traditional stress testing. Run the executable without parameters to display instructions.
