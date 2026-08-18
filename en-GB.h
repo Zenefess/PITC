@@ -5,7 +5,6 @@
  * Created: 2025-02-10
  * Last Modified: 2026-08-18
  * Description: English (en-GB) text: the option reference and return codes, the message table, the interface fragments and the label tables.
- * To Do: 1) Take the banner's version from one authoritative site rather than restating it here as prose (ISSUES.MD K3)
  * Dependencies: None
  * ISA: Scalar
  * Thread-safety: N/A
@@ -14,10 +13,6 @@
  */
 #pragma once
 
-// The three prose tables are 'inline' for the reason the three label tables at the end always were: the
-// LANGUAGES registry in translations.h is an inline table that takes their addresses, and an inline
-// definition must mean one entity in every translation unit, which a const table at namespace scope -- being
-// internally linked -- is not (ISSUES.MD D2, H9)
 inline al64 cwchptrc wstrInstructions_English =
 L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William Bull\n"
  "\nReturn values"
@@ -59,7 +54,8 @@ L"\nPulsed Integrity Tests for CPUs v1.0.2   ---   Copyright (c) David William B
  "\n      execution, no memory (the register-resident kernels), a 2000ms start-up delay and a 15 minute duration. The"
  "\n      100ms on-time and 900ms off-time are what a pulsed mode selected without '[' or ']' inherits."
  "\n B  : Run the benchmark. Options after 'B' override defaults; eg. pitc.exe B Iaf mt1024"
- "\n      Utilises the ALU and largest vector unit of all (virtual) cores in the system, and 8MB memory per thread for 60 seconds."
+ "\n      Defaults utilise the ALU and largest vector unit of every virtual core, 8MB of memory per thread, parallel constant computation,"
+ "\n      a 2000ms start-up delay and a 60 second duration."
  "\n Ix : Set instruction usage options. Specifies which units to utilise. Options can be stacked; eg. I2av"
  "\n      Caches: 1==Level 1, 2==Level 2, 3==Level 3                                                |  The highest cache level given is used"
  "\n      Processing: A==ALU, F==FPU, S==SSE2, V==AVX, X==AVX512                                    |  F, S, V and X are mutually exclusive"
@@ -202,11 +198,11 @@ inline cwchptrc wstrInterface_English[22] = {
    L"%1.9f  %s %1.9f\n",
    L"%lld  %s %lld\n",
    // [18]~[21]: one results-table row per value width -- 64-bit, 128-bit, 256-bit and 512-bit. They sit here
-   // rather than in CPU.cpp because their cells have to line up under the column headers of [8] and [9], which
-   // a language owns: the thread number, the ProcUnit cell and the two value cells are one layout with those
-   // headers, and half of it could not previously be translated. Every row renders the ProcUnit cell 10
-   // characters wide, and the rule below [9] is drawn to that width, so a row that renders it otherwise puts
-   // the table's own separator out of true.
+   // because their cells have to line up under the column headers of [8] and [9], which a language owns: the
+   // thread number, the ProcUnit cell and the two value cells are one layout with those headers, and half of
+   // it could not previously be translated. Every row renders the ProcUnit cell 10 characters wide, and the
+   // rule below [9] is drawn to that width, so a row that renders it otherwise puts the table's own separator
+   // out of true.
    // [18] serves both units of the 64-bit width and takes their name from wstrUnitsCPU; the three vector rows
    // name their unit in the literal, so a language that respells wstrUnitsCPU[2]~[4] respells these to match
    L"\n  #%3.1d  |  %s 64  | %16.16llX | %16.16llX | %s",
