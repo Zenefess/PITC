@@ -18,7 +18,7 @@
 
 // This unit must be compiled with /arch:AVX512
 #if !defined(__AVX512F__)
-   #error "CPU_jobs_AVX512.cpp must be compiled with /arch:AVX512. See CPU.vcxproj and ISSUES.MD H3."
+   #error "CPU_jobs_AVX512.cpp must be compiled with /arch:AVX512."
 #endif
 
 #include "CPU_job_cycles.h"
